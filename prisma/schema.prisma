@@ -1,0 +1,836 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+enum Role {
+  SUPER_ADMIN
+  INSTRUCTOR
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+enum LedgerType {
+  OPENING_BALANCE
+  BUY
+  SELL
+  FEE
+  REFUND
+  RESERVE
+  RELEASE
+  ADMIN_ADJUSTMENT
+  RESET_OPENING
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP
+  STOP_LIMIT
+  TARGET
+}
+
+enum OrderStatus {
+  NEW
+  OPEN
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  REJECTED
+}
+
+enum DataMode {
+  REALTIME
+  DELAYED
+  HISTORICAL
+  DEMO
+  UNAVAILABLE
+}
+
+enum LearningLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum AlertStatus {
+  ACTIVE
+  TRIGGERED
+  CANCELLED
+}
+
+enum AlertCondition {
+  PRICE_ABOVE
+  PRICE_BELOW
+}
+
+enum CompetitionStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum ParticipantStatus {
+  ACTIVE
+  COMPLETED
+  DISQUALIFIED
+}
+
+model User {
+  id             String     @id @default(cuid())
+  email          String     @unique
+  name           String
+  passwordHash   String
+  role           Role
+  status         UserStatus @default(ACTIVE)
+  tradingEnabled Boolean    @default(true)
+  mfaEnabled     Boolean    @default(false)
+  mfaSecret      String?
+  tokenVersion   Int        @default(0)
+  createdById    String?
+  createdBy      User?      @relation("UserCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers   User[]     @relation("UserCreator")
+  lastLoginAt    DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  sessions             Session[]
+  passwordResets       PasswordReset[]
+  mfaChallenges        MfaChallenge[]
+  account              VirtualAccount?
+  memberships          ClassMembership[]
+  instructedClasses    Class[]             @relation("ClassInstructor")
+  watchlists           Watchlist[]
+  alerts               PriceAlert[]
+  journals             JournalEntry[]
+  journalFeedback      JournalFeedback[]
+  lessonProgress       LessonProgress[]
+  quizAttempts         QuizAttempt[]
+  submissions          Submission[]         @relation("StudentSubmissions")
+  reviewedSubmissions  Submission[]         @relation("InstructorReviews")
+  badges               UserBadge[]
+  streak               LearningStreak?
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  competitionEntries   CompetitionParticipant[]
+  createdCompetitions  Competition[]        @relation("CompetitionCreator")
+  createdLessons       Lesson[]             @relation("LessonAuthor")
+  assignmentsCreated   Assignment[]
+  closedTrades         ClosedTrade[]
+  optionPaper          OptionPaperAccount?
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  ipAddress String?
+  userAgent String?
+  revokedAt DateTime?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model MfaChallenge {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  email     String
+  ipAddress String
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ipAddress, createdAt])
+}
+
+model Class {
+  id           String    @id @default(cuid())
+  name         String
+  description  String    @default("")
+  instructorId String?
+  instructor   User?     @relation("ClassInstructor", fields: [instructorId], references: [id], onDelete: SetNull)
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  memberships ClassMembership[]
+  assignments Assignment[]
+  competitions Competition[]
+
+  @@index([instructorId])
+}
+
+model ClassMembership {
+  id        String   @id @default(cuid())
+  classId   String
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Restrict)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+
+  @@unique([classId, userId])
+  @@index([userId])
+}
+
+model VirtualAccount {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  currency         String   @default("INR")
+  cashAvailable    BigInt   @default(0)
+  cashReserved     BigInt   @default(0)
+  currentPeriodId  String?  @unique
+  currentPeriod    PracticePeriod? @relation("CurrentPeriod", fields: [currentPeriodId], references: [id], onDelete: SetNull)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  periods   PracticePeriod[] @relation("AccountPeriods")
+  ledger    LedgerEntry[]
+  orders    Order[]
+  positions Position[]
+  snapshots PortfolioSnapshot[]
+  closedTrades ClosedTrade[]
+}
+
+model PracticePeriod {
+  id               String    @id @default(cuid())
+  accountId        String
+  account          VirtualAccount @relation("AccountPeriods", fields: [accountId], references: [id], onDelete: Restrict)
+  sequence         Int
+  label            String
+  startingCapital  BigInt
+  startedAt        DateTime  @default(now())
+  endedAt          DateTime?
+  endReason        String?
+  createdById      String?
+  currentFor       VirtualAccount? @relation("CurrentPeriod")
+
+  ledger       LedgerEntry[]
+  orders       Order[]
+  positions    Position[]
+  snapshots    PortfolioSnapshot[]
+  participants CompetitionParticipant[]
+  closedTrades ClosedTrade[]
+
+  @@unique([accountId, sequence])
+  @@index([accountId])
+}
+
+model LedgerEntry {
+  id                  String     @id @default(cuid())
+  accountId           String
+  account             VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  practicePeriodId    String
+  practicePeriod      PracticePeriod @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  type                LedgerType
+  cashDelta           BigInt
+  reservedDelta       BigInt
+  cashAvailableAfter  BigInt
+  cashReservedAfter   BigInt
+  referenceType       String?
+  referenceId         String?
+  idempotencyKey      String?    @unique
+  reason              String     @default("")
+  actorId             String?
+  createdAt           DateTime   @default(now())
+
+  @@index([accountId, createdAt])
+  @@index([practicePeriodId])
+}
+
+model Instrument {
+  id        String   @id @default(cuid())
+  symbol    String   @unique
+  name      String
+  exchange  String
+  currency  String   @default("INR")
+  sector    String   @default("")
+  isin      String   @default("")
+  lotSize   Int      @default(1)
+  tickPaise Int      @default(5)
+  isActive  Boolean  @default(true)
+  dhanSecurityId String @default("")
+  basePaise Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders    Order[]
+  positions Position[]
+  watchItems WatchlistItem[]
+  alerts    PriceAlert[]
+  quote     QuoteCache?
+  closedTrades ClosedTrade[]
+}
+
+model QuoteCache {
+  instrumentId        String   @id
+  instrument          Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  lastPaise           BigInt
+  bidPaise            BigInt
+  askPaise            BigInt
+  openPaise           BigInt
+  highPaise           BigInt
+  lowPaise            BigInt
+  previousClosePaise  BigInt
+  volume              BigInt
+  asOf                DateTime
+  mode                DataMode
+  source              String
+  marketOpen          Boolean
+  message             String   @default("")
+  updatedAt           DateTime @updatedAt
+}
+
+model Order {
+  id               String      @id @default(cuid())
+  accountId        String
+  account          VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  practicePeriodId String
+  practicePeriod   PracticePeriod @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  instrumentId     String
+  instrument       Instrument  @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  side             OrderSide
+  type             OrderType
+  quantity         Int
+  limitPaise       BigInt?
+  stopPaise        BigInt?
+  filledQuantity   Int         @default(0)
+  avgFillPaise     BigInt?
+  chargesPaise     BigInt      @default(0)
+  reservedPaise    BigInt      @default(0)
+  status           OrderStatus @default(NEW)
+  rejectionReason  String?
+  idempotencyKey   String
+  triggeredAt      DateTime?
+  submittedAt      DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  filledAt         DateTime?
+  cancelledAt      DateTime?
+
+  executions Execution[]
+  journals   JournalEntry[]
+
+  @@unique([accountId, idempotencyKey])
+  @@index([status])
+  @@index([accountId, submittedAt])
+  @@index([instrumentId, status])
+}
+
+model Execution {
+  id              String   @id @default(cuid())
+  orderId         String
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  quantity        Int
+  pricePaise      BigInt
+  chargesPaise    BigInt
+  notionalPaise   BigInt
+  realizedPaise   BigInt   @default(0)
+  priceSource     String
+  priceAsOf       DateTime
+  dataMode        DataMode
+  executedAt      DateTime @default(now())
+
+  @@index([orderId])
+  @@index([executedAt])
+}
+
+model Position {
+  id               String   @id @default(cuid())
+  accountId        String
+  account          VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  practicePeriodId String
+  practicePeriod   PracticePeriod @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  instrumentId     String
+  instrument       Instrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  quantity         Int
+  avgCostPaise     BigInt
+  realizedPaise    BigInt   @default(0)
+  updatedAt        DateTime @updatedAt
+
+  @@unique([accountId, practicePeriodId, instrumentId])
+  @@index([accountId, practicePeriodId])
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   @default("Default")
+  createdAt DateTime @default(now())
+  items     WatchlistItem[]
+
+  @@unique([userId, name])
+}
+
+model WatchlistItem {
+  id           String   @id @default(cuid())
+  watchlistId  String
+  watchlist    Watchlist @relation(fields: [watchlistId], references: [id], onDelete: Cascade)
+  instrumentId String
+  instrument   Instrument @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@unique([watchlistId, instrumentId])
+}
+
+model PriceAlert {
+  id           String         @id @default(cuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  instrumentId String
+  instrument   Instrument     @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  condition    AlertCondition
+  targetPaise  BigInt
+  status       AlertStatus    @default(ACTIVE)
+  note         String         @default("")
+  triggeredAt  DateTime?
+  createdAt    DateTime       @default(now())
+
+  @@index([status])
+  @@index([userId])
+}
+
+model JournalEntry {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  orderId       String?
+  order         Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  thesis        String
+  expectedMove  String   @default("")
+  plannedExit   String   @default("")
+  riskReward    String   @default("")
+  emotion       String   @default("NEUTRAL")
+  lesson        String   @default("")
+  mistakeTag    String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  feedback      JournalFeedback[]
+
+  @@index([userId, createdAt])
+}
+
+model JournalFeedback {
+  id         String       @id @default(cuid())
+  journalId  String
+  journal    JournalEntry @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  authorId   String
+  author     User         @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  body       String
+  createdAt  DateTime     @default(now())
+}
+
+model PortfolioSnapshot {
+  id                 String   @id @default(cuid())
+  accountId          String
+  account            VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  practicePeriodId   String
+  practicePeriod     PracticePeriod @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  capturedAt         DateTime @default(now())
+  cashAvailable      BigInt
+  cashReserved       BigInt
+  holdingsValue      BigInt
+  equity             BigInt
+  realizedPaise      BigInt
+  unrealizedPaise    BigInt
+  investedCapital    BigInt
+  stale              Boolean  @default(false)
+  valuationMode      DataMode
+
+  @@index([accountId, capturedAt])
+  @@index([practicePeriodId, capturedAt])
+}
+
+model LearningPath {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  title       String
+  description String
+  level       LearningLevel
+  sortOrder   Int
+  lessons     Lesson[]
+}
+
+model Lesson {
+  id          String        @id @default(cuid())
+  pathId      String
+  path        LearningPath  @relation(fields: [pathId], references: [id], onDelete: Cascade)
+  slug        String        @unique
+  title       String
+  summary     String
+  body        String
+  level       LearningLevel
+  sortOrder   Int
+  minutes     Int           @default(8)
+  videoUrl    String        @default("")
+  published   Boolean       @default(true)
+  authorId    String?
+  author      User?         @relation("LessonAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  quiz        Quiz?
+  progress    LessonProgress[]
+  assignments Assignment[]
+}
+
+model Quiz {
+  id        String   @id @default(cuid())
+  lessonId  String   @unique
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  title     String
+  questions Question[]
+  attempts  QuizAttempt[]
+}
+
+model Question {
+  id           String @id @default(cuid())
+  quizId       String
+  quiz         Quiz   @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  prompt       String
+  options      Json
+  correctIndex Int
+  explanation  String @default("")
+  sortOrder    Int
+
+  @@index([quizId])
+}
+
+model LessonProgress {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonId    String
+  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  completedAt DateTime  @default(now())
+
+  @@unique([userId, lessonId])
+}
+
+model QuizAttempt {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizId    String
+  quiz      Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  score     Int
+  passed    Boolean
+  answers   Json
+  createdAt DateTime @default(now())
+
+  @@index([userId, quizId])
+}
+
+model Assignment {
+  id           String   @id @default(cuid())
+  classId      String?
+  class        Class?   @relation(fields: [classId], references: [id], onDelete: SetNull)
+  lessonId     String?
+  lesson       Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  title        String
+  instructions String
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  dueAt        DateTime?
+  createdAt    DateTime @default(now())
+  submissions  Submission[]
+}
+
+model Submission {
+  id           String     @id @default(cuid())
+  assignmentId String
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User       @relation("StudentSubmissions", fields: [userId], references: [id], onDelete: Restrict)
+  body         String
+  grade        String     @default("")
+  feedback     String     @default("")
+  reviewerId   String?
+  reviewer     User?      @relation("InstructorReviews", fields: [reviewerId], references: [id], onDelete: SetNull)
+  submittedAt  DateTime   @default(now())
+  reviewedAt   DateTime?
+
+  @@unique([assignmentId, userId])
+}
+
+model Challenge {
+  id          String        @id @default(cuid())
+  title       String
+  description String
+  level       LearningLevel
+  prompt      String
+  startsAt    DateTime?
+  endsAt      DateTime?
+  published   Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+}
+
+model Competition {
+  id               String            @id @default(cuid())
+  title            String
+  description      String            @default("")
+  classId          String?
+  class            Class?            @relation(fields: [classId], references: [id], onDelete: SetNull)
+  status           CompetitionStatus @default(DRAFT)
+  startsAt         DateTime
+  endsAt           DateTime
+  startingCapital  BigInt?
+  returnWeight     Int               @default(50)
+  drawdownWeight   Int               @default(30)
+  learningWeight   Int               @default(20)
+  createdById      String
+  createdBy        User              @relation("CompetitionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt        DateTime          @default(now())
+  participants     CompetitionParticipant[]
+
+  @@index([status])
+}
+
+model CompetitionParticipant {
+  id                    String            @id @default(cuid())
+  competitionId         String
+  competition           Competition       @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  userId                String
+  user                  User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  practicePeriodId      String
+  practicePeriod        PracticePeriod    @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  status                ParticipantStatus @default(ACTIVE)
+  equityAtJoin          BigInt
+  adminAdjustmentsAtJoin BigInt
+  finalReturnBps        Int?
+  finalDrawdownBps      Int?
+  learningScoreBps      Int?
+  compositeScoreBps     Int?
+  rank                  Int?
+  joinedAt              DateTime          @default(now())
+  finalizedAt           DateTime?
+
+  @@unique([competitionId, userId])
+  @@index([competitionId, compositeScoreBps])
+}
+
+model Badge {
+  id          String @id @default(cuid())
+  slug        String @unique
+  name        String
+  description String
+  awards      UserBadge[]
+}
+
+model UserBadge {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId   String
+  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  awardedAt DateTime @default(now())
+
+  @@unique([userId, badgeId])
+}
+
+model LearningStreak {
+  userId        String   @id
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentStreak Int      @default(0)
+  longestStreak Int      @default(0)
+  lastActivity  String   @default("")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  href      String    @default("")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model ClosedTrade {
+  id               String   @id @default(cuid())
+  accountId        String
+  account          VirtualAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  practicePeriodId String
+  practicePeriod   PracticePeriod @relation(fields: [practicePeriodId], references: [id], onDelete: Restrict)
+  instrumentId     String
+  instrument       Instrument @relation(fields: [instrumentId], references: [id], onDelete: Restrict)
+  symbol           String
+  name             String
+  exchange         String
+  direction        String   @default("LONG")
+  quantity         Int
+  entryAt          DateTime
+  avgEntryPaise    BigInt
+  exitAt           DateTime
+  avgExitPaise     BigInt
+  grossPaise       BigInt
+  chargesPaise     BigInt
+  netPaise         BigInt
+  returnBps        Int
+  holdingSeconds   Int
+  orderIds         Json
+  exitExecutionId  String   @unique
+  note             String   @default("")
+  receiptSvg       String   @default("") @db.Text
+  capturedAt       DateTime?
+  createdAt        DateTime @default(now())
+
+  @@index([userId, exitAt])
+  @@index([accountId, exitAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  targetType String
+  targetId   String
+  reason     String   @default("")
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([targetType, targetId])
+  @@index([actorId])
+}
+
+model AppSetting {
+  key         String   @id
+  value       Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+model OptionPaperAccount {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cashPaise        BigInt
+  dayKey           String   @default("")
+  dayEntries       Int      @default(0)
+  dayRealizedPaise BigInt   @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  orders    OptionPaperOrder[]
+  positions OptionPaperPosition[]
+  signals   OptionSignalLog[]
+}
+
+model OptionPaperOrder {
+  id               String   @id @default(cuid())
+  accountId        String
+  account          OptionPaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  idempotencyKey   String
+  action           String
+  contractKey      String
+  lots             Int
+  quantity         Int
+  status           String
+  reason           String   @default("")
+  fillPremiumPaise BigInt?
+  chargesPaise     BigInt   @default(0)
+  simulated        Boolean  @default(true)
+  createdAt        DateTime @default(now())
+
+  @@unique([accountId, idempotencyKey])
+  @@index([accountId, createdAt])
+}
+
+model OptionPaperPosition {
+  id                 String    @id @default(cuid())
+  accountId          String
+  account            OptionPaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  contractKey        String
+  side               String
+  strike             Int
+  expiry             String
+  right              String
+  lots               Int
+  lotSize            Int
+  quantity           Int
+  avgPremiumPaise    BigInt
+  stopPremiumPaise   BigInt
+  targetPremiumPaise BigInt
+  chargesPaise       BigInt    @default(0)
+  status             String
+  exitPremiumPaise   BigInt?
+  realizedPaise      BigInt    @default(0)
+  openedAt           DateTime  @default(now())
+  closedAt           DateTime?
+
+  @@index([accountId, status])
+}
+
+model OptionSignalLog {
+  id         String   @id @default(cuid())
+  accountId  String
+  account    OptionPaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  dedupeKey  String
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@unique([accountId, dedupeKey])
+  @@index([accountId, createdAt])
+}
+
+model MarketDataStatus {
+  id            String   @id @default("primary")
+  provider      String
+  mode          DataMode
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String   @default("")
+  message       String   @default("")
+  updatedAt     DateTime @updatedAt
+}
