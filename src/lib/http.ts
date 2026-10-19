@@ -1,4 +1,5 @@
 import { ZodError, type ZodType } from "zod";
+import { logEvent } from "@/lib/audit/logger";
 
 export type ErrorBody = { error: string; code: string; message: string; field?: string; details?: Record<string, unknown> };
 
@@ -45,7 +46,7 @@ export function jsonError(error: unknown): Response {
     const issue = error.issues[0];
     return Response.json(body("INVALID_INPUT", issue?.message ?? "Invalid input.", { field: issue?.path.join(".") || undefined }), { status: 400 });
   }
-  console.error(error);
+  logEvent("error", "request.failed", { error });
   const known = databaseError(error);
   if (known) return Response.json(body(known.code, known.message), { status: known.status });
   return Response.json(body("INTERNAL", "Something went wrong on the server. Nothing was charged. Please retry."), { status: 500 });

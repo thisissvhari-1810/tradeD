@@ -1,22 +1,11 @@
 import { AppError } from "@/lib/http";
+import { createDhanClient } from "@/lib/dhan/client";
 import { dhanTokenStatus, getDhanAccessToken, getDhanClientId } from "@/server/settings";
 
 async function dhanGet(path: string) {
   const clientId = await getDhanClientId();
   if (!clientId) throw new AppError("The account client id is not set, so account data cannot be read.", 503);
-  const response = await fetch(`https://api.dhan.co/v2${path}`, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "access-token": await getDhanAccessToken(),
-      "client-id": clientId,
-    },
-    signal: AbortSignal.timeout(12000),
-    cache: "no-store",
-  });
-  const payload = (await response.json().catch(() => null)) as { errorMessage?: string; remarks?: string } | null;
-  if (!response.ok) throw new AppError(payload?.errorMessage || payload?.remarks || `Dhan returned ${response.status}.`, 502);
-  return payload;
+  return createDhanClient({ clientId, accessToken: await getDhanAccessToken() }).get(path);
 }
 
 export async function brokerAccountView() {

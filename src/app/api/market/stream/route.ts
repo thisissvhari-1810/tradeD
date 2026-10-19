@@ -5,6 +5,7 @@ import { parseFeedPackets } from "@/lib/market/feed";
 import { requireUser } from "@/server/auth";
 import { feedTarget } from "@/server/dhan-market";
 import { query } from "@/server/http";
+import { marketDataEnabled } from "@/lib/security/flags";
 import { configuredProvider, getDhanAccessToken, getDhanClientId } from "@/server/settings";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,7 @@ export const maxDuration = 60;
 
 export const GET = query(async (request) => {
   await requireUser();
+  if (!marketDataEnabled()) throw new AppError("Live prices are switched off on the server.", 503, "MARKET_DATA_DISABLED");
   if (configuredProvider() !== "dhan") throw new AppError("Live prices are not configured.", 503);
   const symbol = new URL(request.url).searchParams.get("symbol")?.trim().toUpperCase() ?? "";
   if (!symbol) throw new AppError("Choose an instrument.", 400);

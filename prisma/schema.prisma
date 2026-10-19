@@ -134,6 +134,7 @@ model User {
   assignmentsCreated   Assignment[]
   closedTrades         ClosedTrade[]
   optionPaper          OptionPaperAccount?
+  brokerAccounts       BrokerAccount[]
 }
 
 model Session {
@@ -833,4 +834,138 @@ model MarketDataStatus {
   lastError     String   @default("")
   message       String   @default("")
   updatedAt     DateTime @updatedAt
+}
+
+/// Family relationship of a broker account holder to the TradeD user. SEBI's retail algo framework
+/// limits one client's API orders to self and family; friends are deliberately not representable.
+enum AccountRelationship {
+  SELF
+  SPOUSE
+  DEPENDENT_CHILD
+  DEPENDENT_PARENT
+}
+
+enum BrokerConnection {
+  NOT_CONNECTED
+  AUTH_REQUIRED
+  CONNECTED
+  EXPIRED
+  ERROR
+}
+
+enum TradingMode {
+  PAPER
+  LIVE
+}
+
+enum BrokerOrderStatus {
+  PREVIEW
+  SUBMITTING
+  PENDING
+  PARTIAL
+  FILLED
+  REJECTED
+  CANCELLED
+  EXPIRED
+  UNKNOWN
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+/// A broker account a TradeD user manages. Holds no secrets: credentials live in BrokerCredential.
+model BrokerAccount {
+  id                String              @id @default(cuid())
+  ownerId           String
+  owner             User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  broker            String              @default("DHAN")
+  slot              Int
+  nickname          String
+  relationship      AccountRelationship
+  maskedClientId    String              @default("")
+  /// HMAC of the broker client id, so one broker account cannot be linked twice. Null while disconnected.
+  clientFingerprint String?             @unique
+  connection        BrokerConnection    @default(NOT_CONNECTED)
+  authorizedAt      DateTime?
+  tokenExpiresAt    DateTime?
+  lastConnectedAt   DateTime?
+  lastSyncAt        DateTime?
+  lastError         String              @default("")
+  lastErrorAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  credential BrokerCredential?
+  orders     BrokerOrder[]
+
+  @@unique([ownerId, slot])
+  @@index([ownerId])
+  @@index([connection])
+}
+
+/// AES-256-GCM envelope of the broker client id and access token, bound to the account id.
+model BrokerCredential {
+  accountId  String        @id
+  account    BrokerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  ciphertext String        @db.Text
+  keyId      String
+  expiresAt  DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+}
+
+/// Orders prepared or sent for a broker account. Broker state is authoritative; this is a local record.
+model BrokerOrder {
+  id               String            @id @default(cuid())
+  accountId        String
+  account          BrokerAccount     @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId           String
+  mode             TradingMode
+  idempotencyKey   String
+  correlationId    String            @unique
+  brokerOrderId    String?
+  exchangeSegment  String
+  securityId       String
+  symbol           String
+  productType      String
+  side             OrderSide
+  orderType        String
+  quantity         Int
+  pricePaise       BigInt?
+  triggerPricePaise BigInt?
+  status           BrokerOrderStatus @default(PREVIEW)
+  brokerStatus     String            @default("")
+  avgPricePaise    BigInt?
+  filledQuantity   Int               @default(0)
+  remainingQuantity Int
+  rejectReason     String            @default("")
+  submittedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@unique([accountId, idempotencyKey])
+  @@index([accountId, createdAt])
+  @@index([brokerOrderId])
+  @@index([status])
+}
+
+/// Append-only security and trading audit trail. Details are redacted before they are written.
+model TradingAuditEvent {
+  id            String       @id @default(cuid())
+  userId        String?
+  accountId     String?
+  action        String
+  correlationId String
+  outcome       AuditOutcome
+  detail        Json?
+  ipAddress     String?
+  createdAt     DateTime     @default(now())
+
+  @@index([userId, createdAt])
+  @@index([accountId, createdAt])
+  @@index([correlationId])
+  @@index([createdAt])
 }
