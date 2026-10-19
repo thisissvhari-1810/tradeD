@@ -123,6 +123,15 @@ export async function setAccountEnabled(user: SessionUser, target: string, enabl
   return { target, enabled };
 }
 
+/** Renames an account as shown on its card. */
+export async function setAccountNickname(user: SessionUser, target: string, nickname: string, ctx: Ctx, env: NodeJS.ProcessEnv = process.env) {
+  const account = target === "server" ? await ensureServerAccount(user, env) : assertOwnsAccount(user, await prisma.brokerAccount.findUnique({ where: { id: target } }));
+  const name = nickname.trim();
+  await prisma.brokerAccount.update({ where: { id: account.id }, data: { nickname: name } });
+  await recordAudit({ userId: user.id, accountId: account.id, action: "broker.account.rename", correlationId: newAuditId(), outcome: "SUCCESS", detail: { nickname: name }, ip: ctx.ip });
+  return { target, nickname: name };
+}
+
 export type Target = { account: BrokerAccount; credentials: DhanCredentials; server: boolean };
 
 function isServerAccount(account: Pick<BrokerAccount, "clientFingerprint">, serverClientId: string, env: NodeJS.ProcessEnv) {

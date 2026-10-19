@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
+import { Check, CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Pencil, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
 import { api, istStamp } from "@/components/api";
 import { ACCOUNT_GRID } from "@/components/multi-account/accounts";
 import { expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
@@ -78,6 +78,40 @@ function latestOrder(account: LiveAccount): LiveOrder | null {
 
 type Manage = (account: LiveAccount | null) => void;
 type Toggle = (account: LiveAccount, enabled: boolean) => void;
+type Rename = (account: LiveAccount, nickname: string) => Promise<void>;
+
+/** Account name with an inline rename for linked accounts. */
+function AccountName({ account, onRename, className }: { account: LiveAccount; onRename: Rename; className?: string }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(account.nickname);
+  const [saving, setSaving] = useState(false);
+  if (!account.target) return <p className={cx("truncate", className)}>{account.nickname}</p>;
+  if (!editing) {
+    return (
+      <p className={cx("flex min-w-0 items-center gap-1", className)}>
+        <span className="truncate">{account.nickname}</span>
+        <button type="button" className="shrink-0 rounded-sm p-0.5 text-muted hover:bg-hover hover:text-text" aria-label={`Rename ${account.nickname}`} title="Rename" onClick={() => { setValue(account.nickname); setEditing(true); }}><Pencil className="h-3 w-3" aria-hidden /></button>
+      </p>
+    );
+  }
+  const save = async () => {
+    const name = value.trim();
+    if (!name || name === account.nickname) return setEditing(false);
+    setSaving(true);
+    try {
+      await onRename(account, name);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <form className="flex items-center gap-1" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <input autoFocus maxLength={40} className="h-6 min-w-0 flex-1 rounded-sm border border-border bg-sunken px-1.5 text-data text-text" value={value} disabled={saving} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditing(false); }} aria-label="Account name" />
+      <button type="submit" className="rounded-sm p-0.5 text-profit hover:bg-hover" disabled={saving} aria-label="Save name"><Check className="h-3.5 w-3.5" aria-hidden /></button>
+    </form>
+  );
+}
 
 /** The owner's switch for one account: included in orders or not. Saved on the server. */
 function EnableSwitch({ account, onToggle }: { account: LiveAccount; onToggle: Toggle }) {
@@ -104,7 +138,7 @@ function AccountAction({ account, owner, onManage, canConnect }: { account: Live
   return null;
 }
 
-export function LiveAccountCard({ account, owner, syncing, onManage, canConnect, onToggle }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle }) {
+export function LiveAccountCard({ account, owner, syncing, onManage, canConnect, onToggle, onRename }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle; onRename: Rename }) {
   const live = connected(account);
   const last = latestOrder(account);
   return (
@@ -112,8 +146,9 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect,
       <div className="flex items-start gap-2">
         <EnableSwitch account={account} onToggle={onToggle} />
         <div className="min-w-0 flex-1">
-          <p className={cx("truncate text-dense font-semibold", live ? "text-text" : "text-text-2")}>{account.nickname}</p>
-          <p className="num text-micro text-muted">{account.maskedId ?? "No account linked"}</p>
+          <AccountName account={account} onRename={onRename} className={cx("text-dense font-semibold", live ? "text-text" : "text-text-2")} />
+          {account.holderName ? <p className="truncate text-micro text-text-2" title="Holder name from Dhan">{account.holderName}</p> : null}
+          <p className="num text-micro text-muted">{account.clientId ? <>Client ID <span className="text-text-2">{account.clientId}</span></> : account.maskedId ?? "No account linked"}</p>
         </div>
       </div>
       <div className="flex flex-wrap gap-1">
@@ -147,7 +182,7 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect,
   );
 }
 
-function LiveAccountTable({ accounts, owner, onManage, canConnect, onToggle }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle }) {
+function LiveAccountTable({ accounts, owner, onManage, canConnect, onToggle, onRename }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle; onRename: Rename }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border-soft">
       <table className="ui-table dense w-full min-w-[900px] border-separate border-spacing-0 text-data" aria-label="Live accounts">
@@ -159,7 +194,7 @@ function LiveAccountTable({ accounts, owner, onManage, canConnect, onToggle }: {
         <tbody>
           {accounts.map((account) => (
             <tr key={account.id}>
-              <td className="border-b border-border-soft"><span className="flex items-center gap-2"><EnableSwitch account={account} onToggle={onToggle} /><span className="block font-semibold text-text">{account.nickname}</span></span><span className="num text-micro text-muted">{account.maskedId ?? "No account linked"}</span></td>
+              <td className="border-b border-border-soft"><span className="flex items-center gap-2"><EnableSwitch account={account} onToggle={onToggle} /><AccountName account={account} onRename={onRename} className="font-semibold text-text" /></span><span className="num text-micro text-muted">{account.clientId ?? account.maskedId ?? "No account linked"}{account.holderName ? ` · ${account.holderName}` : ""}</span></td>
               <td className="border-b border-border-soft"><StateChip state={account.connection} /></td>
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.funds?.availablePaise} broker /> : "—"}</td>
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.funds?.usedMarginPaise} broker /> : "—"}</td>
@@ -346,6 +381,16 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
   }, []);
   const onManage: Manage = (account) => setManage((current) => ({ open: true, account, nonce: current.nonce + 1 }));
   const [switches, setSwitches] = useState<Record<string, boolean>>({});
+  const onRename: Rename = async (account, nickname) => {
+    if (!account.target) return;
+    try {
+      await api("/api/broker-accounts/select", { target: account.target, nickname });
+      onReload();
+    } catch (caught) {
+      setBanner({ tone: "loss", text: caught instanceof Error ? caught.message : "The name was not saved." });
+      throw caught;
+    }
+  };
   const onToggle: Toggle = (account, enabled) => {
     const target = account.target;
     if (!target) return;
@@ -382,8 +427,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
             <SegmentedControl label="Account layout" size="sm" value={accountView} onChange={onAccountView} options={[{ id: "grid", label: <span className="inline-flex items-center gap-1"><LayoutGrid className="h-3.5 w-3.5" aria-hidden />Grid</span> }, { id: "table", label: <span className="inline-flex items-center gap-1"><Rows3 className="h-3.5 w-3.5" aria-hidden />Table</span> }]} />
           }>
             {accountView === "table"
-              ? <LiveAccountTable accounts={accounts} owner={view.viewerOwnsConnection} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} />
-              : <div className={ACCOUNT_GRID}>{accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} />)}</div>}
+              ? <LiveAccountTable accounts={accounts} owner={view.viewerOwnsConnection} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} onRename={onRename} />
+              : <div className={ACCOUNT_GRID}>{accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} onRename={onRename} />)}</div>}
           </Section>
           {layout === "medium" ? <div id="ma-live-order" className="scroll-mt-20"><Section title="Order entry" description={panelNote}>{panel}</Section></div> : null}
           <Section flush>

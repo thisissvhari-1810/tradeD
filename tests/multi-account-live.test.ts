@@ -15,6 +15,8 @@ function slot(partial: Partial<LiveAccount> & Pick<LiveAccount, "id" | "connecti
     target: null,
     family: null,
     enabled: true,
+    clientId: null,
+    holderName: null,
     slot: 1,
     nickname: partial.id,
     maskedId: null,
@@ -181,12 +183,15 @@ describe("live accounts view", () => {
     expect(owner.accounts[0]?.holdings?.[0]?.symbol).toBe("RELIANCE");
     expect(owner.capabilities.placeOrders).toBe(false);
     expect(owner.capabilities.connectAccounts).toBe(false);
-    expect(JSON.stringify(owner)).not.toMatch(/1234567890|access-token|accessToken/);
+    expect(owner.accounts[0]?.clientId).toBe("1234567890");
+    expect(owner.accounts[0]?.nickname).toBe("My Dhan account");
+    expect(JSON.stringify(owner)).not.toMatch(/access-token|accessToken/);
 
     const other = await live.liveAccountsView(student);
     expect(other.viewerOwnsConnection).toBe(false);
     expect(other.accounts.every((account) => account.connection === "NOT_CONNECTED")).toBe(true);
     expect(other.accounts[0]?.funds).toBeNull();
+    expect(JSON.stringify(other)).not.toContain("1234567890");
   });
 
   it("marks an expired token as expired and does not invent balances", async () => {

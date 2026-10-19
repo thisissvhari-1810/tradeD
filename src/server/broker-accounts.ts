@@ -313,8 +313,14 @@ export async function completeBrokerConsent(tokenId: string, accountHint: string
     throw new AppError("Dhan signed in a different account than the one configured here. Sign in with the right Dhan account.", 409, "CONSENT_CLIENT_MISMATCH");
   }
   await saveToken(account.ownerId, account.id, { clientId: result.clientId, accessToken: result.accessToken, expiresAt: result.expiresAt }, ctx);
+  if (result.clientName) await prisma.brokerAccount.update({ where: { id: account.id }, data: { holderName: result.clientName } });
   const view = await validateAccount(account.ownerId, account.id, ctx, { fetch: deps.fetch });
   return { nickname: account.nickname, connection: view.connection };
+}
+
+/** The configured Dhan client id of an account, for its owner's view. Callers must already have checked ownership. */
+export async function accountClientId(accountId: string): Promise<string | null> {
+  return (await readEnvelope(accountId).catch(() => null))?.clientId ?? null;
 }
 
 /** Decrypted credentials of an account with a token. Callers must already have checked ownership. */

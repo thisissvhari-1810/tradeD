@@ -11,7 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { BrokerError, createDhanClient } from "@/lib/dhan/client";
 import { readFunds, readHoldings, readOrders, readPositions } from "@/lib/dhan/funds";
 import { encryptionConfigured, fingerprint } from "@/lib/security/crypto";
-import { loadAccountCredentials, RELATIONSHIP_LABEL } from "@/server/broker-accounts";
+import { accountClientId, loadAccountCredentials, RELATIONSHIP_LABEL } from "@/server/broker-accounts";
 
 /**
  * Live account view. The broker connection TradeD has is the single server-configured account, shown
@@ -38,6 +38,8 @@ function emptySlot(slot: number, message: string): LiveAccount {
     target: null,
     family: null,
     enabled: false,
+    clientId: null,
+    holderName: null,
     slot,
     nickname: `Live slot ${slot}`,
     maskedId: null,
@@ -124,7 +126,7 @@ async function familyAccount(row: BrokerAccount, now: Date, canTrade: { globalRe
     ipConfirmed: Boolean(row.staticIp && row.ipConfirmedAt),
     callbackUrl: `${appOrigin(env)}/api/broker-accounts/callback/${row.id}`,
   };
-  const base: LiveAccount = { ...emptySlot(row.slot, ""), id: row.id, target: row.id, family: info, enabled: row.enabled, nickname: row.nickname, maskedId: row.maskedClientId || null, tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null };
+  const base: LiveAccount = { ...emptySlot(row.slot, ""), id: row.id, target: row.id, family: info, enabled: row.enabled, clientId: await accountClientId(row.id), holderName: row.holderName || null, nickname: row.nickname, maskedId: row.maskedClientId || null, tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null };
   if (!info.configured) return { ...base, tradingReason: "Not set up.", message: "Add this holder's Dhan client id, API key and static IP." };
   const credentials = await loadAccountCredentials(row.id).catch(() => null);
   if (!credentials) return { ...base, connection: "AUTH_REQUIRED", tradingReason: "Not signed in through Dhan.", message: `${row.nickname} needs to sign in through Dhan.` };
@@ -189,7 +191,8 @@ export async function liveAccountsView(user: SessionUser, now = new Date(), env:
   const { serverRow, familyRows } = await ownedRows(user, env);
   const [server, family] = await Promise.all([owner && broker ? serverAccount(now, gate, broker) : Promise.resolve(null), familyAccounts(user, familyRows, now, env)]);
   // The server account has no row until it is first used; it counts as switched on until then.
-  const first = server ? { ...server, enabled: serverRow?.enabled ?? true } : null;
+  const serverClientId = server ? await getDhanClientId().catch(() => "") : "";
+  const first = server ? { ...server, enabled: serverRow?.enabled ?? true, nickname: serverRow?.nickname || "My Dhan account", clientId: serverClientId || null, holderName: serverRow?.holderName || null } : null;
   const filled = [...(first ? [first] : []), ...family].slice(0, LIVE_SLOTS);
   const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => {
     const account = filled[index];

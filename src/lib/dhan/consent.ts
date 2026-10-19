@@ -48,5 +48,6 @@ export async function consumeConsent(app: AppCredentials, tokenId: string, fetch
   if (!accessToken.includes(".") || !/^\d{4,20}$/.test(clientId)) throw new AppError("Dhan did not return a usable access token.", 502, "DHAN_AUTH_REFUSED");
   const fromJwt = tokenExpiry(accessToken);
   const fromField = typeof payload.expiryTime === "string" && !Number.isNaN(Date.parse(payload.expiryTime)) ? new Date(payload.expiryTime) : null;
-  return { accessToken, clientId, expiresAt: fromJwt ?? fromField ?? new Date(Date.now() + 23 * 60 * 60 * 1000) };
+  const clientName = typeof payload.dhanClientName === "string" ? payload.dhanClientName.trim().slice(0, 80) : "";
+  return { accessToken, clientId, clientName, expiresAt: fromJwt ?? fromField ?? new Date(Date.now() + 23 * 60 * 60 * 1000) };
 }

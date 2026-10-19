@@ -901,6 +901,8 @@ model BrokerAccount {
   ipConfirmedAt     DateTime?
   /// Owner's switch: when false the account is excluded from orders and the server refuses them.
   enabled           Boolean             @default(true)
+  /// Holder's name as reported by Dhan at sign-in (consent flow only).
+  holderName        String              @default("")
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 

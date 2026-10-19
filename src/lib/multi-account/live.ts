@@ -83,6 +83,10 @@ export type LiveAccount = {
   family: FamilyInfo | null;
   /** Owner's switch: included in orders. */
   enabled: boolean;
+  /** Full Dhan client id, sent only to the account's owner. */
+  clientId: string | null;
+  /** Holder's name as reported by Dhan, when known. */
+  holderName: string | null;
   slot: number;
   nickname: string;
   maskedId: string | null;
