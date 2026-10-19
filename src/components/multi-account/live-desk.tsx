@@ -129,7 +129,8 @@ function AccountAction({ account, owner, onManage, canConnect }: { account: Live
   }
   if (account.family) {
     const needsSignIn = account.connection === "AUTH_REQUIRED" || account.connection === "EXPIRED" || account.connection === "ERROR";
-    const label = !account.family.configured ? "Finish setup" : needsSignIn ? "Sign in with Dhan" : "Manage";
+    const self = Boolean(account.family.self);
+    const label = !account.family.configured ? (self ? "Set up Dhan sign-in" : "Finish setup") : needsSignIn ? "Sign in with Dhan" : "Manage";
     return <Button size="sm" variant={needsSignIn || !account.family.configured ? "primary" : "secondary"} icon={needsSignIn ? <KeyRound className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />} onClick={() => onManage(account)}>{label}</Button>;
   }
   if ((account.connection === "AUTH_REQUIRED" || account.connection === "EXPIRED" || account.connection === "ERROR") && owner) {
@@ -147,7 +148,7 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect,
         <EnableSwitch account={account} onToggle={onToggle} />
         <div className="min-w-0 flex-1">
           <AccountName account={account} onRename={onRename} className={cx("text-dense font-semibold", live ? "text-text" : "text-text-2")} />
-          {account.holderName ? <p className="truncate text-micro text-text-2" title="Holder name from Dhan">{account.holderName}</p> : null}
+          {account.holderName && account.holderName !== account.nickname ? <p className="truncate text-micro text-text-2" title="Holder name from Dhan">{account.holderName}</p> : null}
           <p className="num text-micro text-muted">{account.clientId ? <>Client ID <span className="text-text-2">{account.clientId}</span></> : account.maskedId ?? "No account linked"}</p>
         </div>
       </div>

@@ -6,7 +6,7 @@ import type { SessionUser } from "../src/server/auth";
 /** In-memory stand-in for the four broker tables, enforcing the same unique constraints as Postgres. */
 const db = vi.hoisted(() => {
   type Row = Record<string, unknown> & { id: string };
-  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, consents: [] as Array<Record<string, unknown>>, seq: 0, failAudit: false };
+  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, consents: [] as Array<Record<string, unknown>>, settings: [] as Array<Record<string, unknown>>, seq: 0, failAudit: false };
   const unique = () => Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
   const withCredential = (row: Row, include?: unknown) => {
     const copy = { ...row };
@@ -55,6 +55,15 @@ const db = vi.hoisted(() => {
       deleteMany: async ({ where }: { where: { accountId: string } }) => {
         state.credentials = state.credentials.filter((item) => item.accountId !== where.accountId);
       },
+    },
+    appSetting: {
+      findUnique: async ({ where }: { where: { key: string } }) => state.settings.find((item) => item.key === where.key) ?? null,
+      upsert: async ({ where, create, update }: { where: { key: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+        const row = state.settings.find((item) => item.key === where.key);
+        if (row) Object.assign(row, update);
+        else state.settings.push({ ...create, updatedAt: new Date() });
+      },
+      deleteMany: async () => ({ count: 0 }),
     },
     brokerConsent: {
       create: async ({ data }: { data: Record<string, unknown> }) => void state.consents.push({ usedAt: null, createdAt: new Date(), ...data }),
@@ -122,6 +131,7 @@ beforeEach(() => {
   db.state.orders = [];
   db.state.audit = [];
   db.state.consents = [];
+  db.state.settings = [];
   db.state.failAudit = false;
   auth.user = null;
   resetRateLimits();
@@ -377,5 +387,30 @@ describe("family account consent flow", () => {
   it("refuses malformed callback tokens without touching the database", async () => {
     await expect(service.completeBrokerConsent("x", null, ctx)).rejects.toMatchObject({ code: "CONSENT_INVALID" });
     await expect(service.completeBrokerConsent("token-id-0004", null, ctx)).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+  });
+});
+
+describe("owner's own account through Dhan sign-in", () => {
+  it("keeps the server client id and primary IP, and refreshes the market-data token with the holder name", async () => {
+    const { fingerprint } = await import("../src/lib/security/crypto");
+    process.env.DHAN_CLIENT_ID = "1114171746";
+    const env = { ...process.env, DHAN_STATIC_IP: "13.49.97.101" };
+    const own = await service.createBrokerAccount(alice, { nickname: "My Dhan account", relationship: "SELF" }, ctx);
+    Object.assign(db.state.accounts.find((row) => row.id === own.id)!, { clientFingerprint: fingerprint("1114171746", "broker-client-id") });
+
+    const view = await service.configureBrokerAccount(alice, own.id, { clientId: "9999999999", appId: "app-key-123", appSecret: "app-secret-xyz", staticIp: "1.2.3.4", ipConfirmed: false }, ctx, env);
+    expect(view).toMatchObject({ staticIp: "13.49.97.101", ipConfirmed: true, maskedClientId: "••••••1746" });
+
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/app/generate-consent")) return new Response(JSON.stringify({ consentAppId: "consent-own-0001" }), { status: 200 });
+      if (url.includes("/app/consumeApp-consent")) return new Response(JSON.stringify({ dhanClientId: "1114171746", dhanClientName: "HARIHARAN S V", accessToken: FUTURE }), { status: 200 });
+      return new Response(JSON.stringify({ dhanClientId: "1114171746" }), { status: 200 });
+    });
+    await service.startBrokerConsent(alice, own.id, ctx, { fetch });
+    await expect(service.completeBrokerConsent("token-own-0001", own.id, ctx, { fetch })).resolves.toEqual({ nickname: "My Dhan account", connection: "CONNECTED" });
+    expect(db.state.accounts.find((row) => row.id === own.id)?.holderName).toBe("HARIHARAN S V");
+    expect(db.state.settings.find((row) => row.key === "market.dhanAccessToken")?.value).toBe(FUTURE);
+    delete process.env.DHAN_CLIENT_ID;
   });
 });

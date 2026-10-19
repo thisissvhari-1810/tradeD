@@ -9,6 +9,7 @@ import { decryptSecret, encryptSecret, fingerprint } from "@/lib/security/crypto
 import { assertMayManageBrokerAccounts, assertOwnsAccount } from "@/lib/security/authorization";
 import { maskTail } from "@/lib/security/redact";
 import type { SessionUser } from "@/server/auth";
+import { getDhanClientId, saveMarketConnection } from "@/server/settings";
 
 /**
  * Broker accounts owned by a TradeD user. Every function takes the session user and checks ownership
@@ -220,6 +221,12 @@ async function saveToken(ownerId: string, accountId: string, credentials: DhanCr
   await recordAudit({ userId: ownerId, accountId, action: "broker.credential.store", correlationId, outcome: "SUCCESS", detail: { keyId, expiresAt }, ip: ctx.ip }, { required: true });
 }
 
+/** True when this row is the server-configured account (the owner's own Dhan account that also feeds market data). */
+export async function isServerRow(account: Pick<BrokerAccount, "clientFingerprint">, env: NodeJS.ProcessEnv = process.env) {
+  const serverClient = await getDhanClientId().catch(() => "");
+  return Boolean(serverClient && account.clientFingerprint && account.clientFingerprint === fingerprint(serverClient, "broker-client-id", env));
+}
+
 const IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
 export type ConfigureInput = { clientId: string; appId: string; appSecret?: string; staticIp: string; ipConfirmed: boolean };
@@ -231,15 +238,20 @@ export type ConfigureInput = { clientId: string; appId: string; appSecret?: stri
 export async function configureBrokerAccount(user: SessionUser, accountId: string, input: ConfigureInput, ctx: Ctx, env: NodeJS.ProcessEnv = process.env) {
   assertMayManageBrokerAccounts(user);
   const account = await ownedAccount(user, accountId);
-  const clientId = input.clientId.trim();
+  // The owner's own server account keeps its client id and the execution server's primary IP.
+  const self = await isServerRow(account, env);
+  const clientId = self ? await getDhanClientId() : input.clientId.trim();
   const appId = input.appId.trim();
-  const staticIp = input.staticIp.trim();
+  const staticIp = self ? (env.DHAN_STATIC_IP ?? "").trim() : input.staticIp.trim();
   if (!/^\d{4,20}$/.test(clientId)) throw new AppError("Dhan client id must be 4 to 20 digits.", 400, "INVALID_INPUT", { field: "clientId" });
   if (!/^[\x21-\x7e]{4,200}$/.test(appId)) throw new AppError("Paste the API key exactly as Dhan shows it.", 400, "INVALID_INPUT", { field: "appId" });
   if (!IPV4.test(staticIp)) throw new AppError("Enter the public static IP (for example 13.49.97.101).", 400, "INVALID_INPUT", { field: "staticIp" });
-  if (staticIp === (env.DHAN_STATIC_IP ?? "").trim()) throw new AppError("That IP is registered for the primary account. Dhan needs a different static IP for each person.", 409, "STATIC_IP_IN_USE", { field: "staticIp" });
-  const others = await prisma.brokerAccount.findMany({ where: { ownerId: user.id }, select: { id: true, staticIp: true } });
-  if (others.some((item) => item.id !== accountId && item.staticIp === staticIp)) throw new AppError("Another account already uses that IP. Dhan needs a different static IP for each person.", 409, "STATIC_IP_IN_USE", { field: "staticIp" });
+  if (!self) {
+    if (staticIp === (env.DHAN_STATIC_IP ?? "").trim()) throw new AppError("That IP is registered for the primary account. Dhan needs a different static IP for each person.", 409, "STATIC_IP_IN_USE", { field: "staticIp" });
+    const others = await prisma.brokerAccount.findMany({ where: { ownerId: user.id }, select: { id: true, staticIp: true } });
+    if (others.some((item) => item.id !== accountId && item.staticIp === staticIp)) throw new AppError("Another account already uses that IP. Dhan needs a different static IP for each person.", 409, "STATIC_IP_IN_USE", { field: "staticIp" });
+  }
+  if (self) input = { ...input, ipConfirmed: true };
 
   const previous = await readEnvelope(accountId).catch(() => null);
   const appSecret = input.appSecret?.trim() || (previous && previous.appId === appId ? previous.appSecret : undefined);
@@ -314,8 +326,16 @@ export async function completeBrokerConsent(tokenId: string, accountHint: string
   }
   await saveToken(account.ownerId, account.id, { clientId: result.clientId, accessToken: result.accessToken, expiresAt: result.expiresAt }, ctx);
   if (result.clientName) await prisma.brokerAccount.update({ where: { id: account.id }, data: { holderName: result.clientName } });
+  // The owner's own account also feeds market data: the fresh token replaces the one pasted in Admin.
+  if (await isServerRow(account)) await saveMarketConnection(account.ownerId, { clientId: result.clientId, accessToken: result.accessToken });
   const view = await validateAccount(account.ownerId, account.id, ctx, { fetch: deps.fetch });
   return { nickname: account.nickname, connection: view.connection };
+}
+
+/** Whether the account has a Dhan API key saved (so "Sign in with Dhan" can start). */
+export async function hasAppKey(accountId: string) {
+  const envelope = await readEnvelope(accountId).catch(() => null);
+  return Boolean(envelope?.appId && envelope.appSecret);
 }
 
 /** The configured Dhan client id of an account, for its owner's view. Callers must already have checked ownership. */

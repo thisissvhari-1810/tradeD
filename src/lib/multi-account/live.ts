@@ -74,6 +74,8 @@ export type FamilyInfo = {
   ipConfirmed: boolean;
   /** Redirect URL to enter when the holder creates their Dhan API key. */
   callbackUrl: string;
+  /** The owner's own server account: client id and static IP are fixed; only the API key is entered. */
+  self?: boolean;
 };
 
 export type LiveAccount = {

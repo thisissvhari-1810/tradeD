@@ -11,7 +11,8 @@ import { prisma } from "@/lib/prisma";
 import { BrokerError, createDhanClient } from "@/lib/dhan/client";
 import { readFunds, readHoldings, readOrders, readPositions } from "@/lib/dhan/funds";
 import { encryptionConfigured, fingerprint } from "@/lib/security/crypto";
-import { accountClientId, loadAccountCredentials, RELATIONSHIP_LABEL } from "@/server/broker-accounts";
+import { accountClientId, hasAppKey, loadAccountCredentials, RELATIONSHIP_LABEL } from "@/server/broker-accounts";
+import { ensureServerAccount } from "@/server/live-orders";
 
 /**
  * Live account view. The broker connection TradeD has is the single server-configured account, shown
@@ -188,11 +189,26 @@ export async function liveAccountsView(user: SessionUser, now = new Date(), env:
     authorized: Boolean(broker && broker.clientConfigured && broker.token.source !== "missing" && !broker.token.expired),
     switchedOn: liveSwitchOn(),
   });
-  const { serverRow, familyRows } = await ownedRows(user, env);
+  const rows = await ownedRows(user, env);
+  const { familyRows } = rows;
+  // The owner's row is created on first view so their account can be set up for Dhan sign-in.
+  const serverRow = rows.serverRow ?? (owner && broker?.clientConfigured && tradesServerAccount(user, env) && encryptionConfigured(env) ? await ensureServerAccount(user, env).catch(() => null) : null);
   const [server, family] = await Promise.all([owner && broker ? serverAccount(now, gate, broker) : Promise.resolve(null), familyAccounts(user, familyRows, now, env)]);
   // The server account has no row until it is first used; it counts as switched on until then.
   const serverClientId = server ? await getDhanClientId().catch(() => "") : "";
-  const first = server ? { ...server, enabled: serverRow?.enabled ?? true, nickname: serverRow?.nickname || "My Dhan account", clientId: serverClientId || null, holderName: serverRow?.holderName || null } : null;
+  const selfInfo = serverRow
+    ? {
+        brokerAccountId: serverRow.id,
+        relationship: "SELF" as const,
+        relationshipLabel: RELATIONSHIP_LABEL.SELF,
+        configured: await hasAppKey(serverRow.id),
+        staticIp: env.DHAN_STATIC_IP?.trim() || null,
+        ipConfirmed: true,
+        callbackUrl: `${appOrigin(env)}/api/broker-accounts/callback/${serverRow.id}`,
+        self: true,
+      }
+    : null;
+  const first = server ? { ...server, family: selfInfo, enabled: serverRow?.enabled ?? true, nickname: (serverRow?.nickname && serverRow.nickname !== "My Dhan account" ? serverRow.nickname : serverRow?.holderName) || "My Dhan account", clientId: serverClientId || null, holderName: serverRow?.holderName || null } : null;
   const filled = [...(first ? [first] : []), ...family].slice(0, LIVE_SLOTS);
   const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => {
     const account = filled[index];
