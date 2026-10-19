@@ -1,0 +1,174 @@
+/*
+  Obsidian Pulse design tokens.
+  Colour values must stay in sync with LIGHT_TOKENS and DARK_TOKENS
+  in src/lib/color/appearance.ts, which writes the user's active theme inline at runtime.
+*/
+
+/* Scales. Spacing uses Tailwind's 4px step (p-1 = 4px, p-2 = 8px). */
+@theme static {
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-input: 8px;
+  --radius-md: 10px;
+  --radius-card: 12px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-sheet: 18px;
+  --radius-2xl: 24px;
+  --radius-pill: 999px;
+
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+  --text-data: 12px;
+  --text-data--line-height: 16px;
+  --text-dense: 13px;
+  --text-dense--line-height: 18px;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-title: 16px;
+  --text-title--line-height: 22px;
+  --text-section: 19px;
+  --text-section--line-height: 26px;
+  --text-hero: 26px;
+  --text-hero--line-height: 32px;
+  --text-page: 26px;
+  --text-page--line-height: 32px;
+  --text-display: 44px;
+  --text-display--line-height: 50px;
+
+  --shadow-e1: var(--shadow-1);
+  --shadow-e2: var(--shadow-2);
+  --shadow-e3: var(--shadow-3);
+  --shadow-overlay: var(--shadow-4);
+
+  --ease-ui: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root {
+  --control-sm: 28px;
+  --control-md: 34px;
+  --control-lg: 40px;
+  --dur-press: 90ms;
+  --dur-fast: 140ms;
+  --dur-base: 170ms;
+  --dur-slow: 200ms;
+  --topbar: 56px;
+  --tabbar: 60px;
+  --rail: 84px;
+}
+
+:root,
+[data-theme="light"] {
+  --background: #f3f6fa;
+  --panel: #ffffff;
+  --elevated: #ffffff;
+  --overlay: #ffffff;
+  --sunken: #eef2f7;
+  --hover: #f1f4f9;
+  --primary: #315fde;
+  --primary-hover: #254cc0;
+  --primary-soft: #e8eeff;
+  --on-primary: #ffffff;
+  --on-signal: #ffffff;
+  --profit: #087f5b;
+  --profit-soft: #e1f7ed;
+  --loss: #c73750;
+  --loss-soft: #fce8ec;
+  --warning: #9a6500;
+  --warning-soft: #fef6e6;
+  --info: #1769aa;
+  --info-soft: #e3f0fb;
+  --star: #b7791f;
+  --demo: #7047c8;
+  --demo-soft: #efe8fc;
+  --text: #172033;
+  --text-2: #46546a;
+  --muted: #66758a;
+  --disabled: #a3aebd;
+  --border: #e0e6ef;
+  --border-soft: #e9edf3;
+  --border-strong: #c5cfdd;
+  --grid: #eef1f6;
+  --cream: #f6f8fb;
+  --focus: #315fde;
+  --focus-ring: #315fde;
+  --scrim: rgba(15, 23, 42, 0.36);
+  --highlight: rgba(255, 255, 255, 0.9);
+  --hero-glow: rgba(49, 95, 222, 0.1);
+  --hero-glow-2: rgba(112, 71, 200, 0.07);
+  --shadow-1: 0 1px 2px rgba(23, 32, 51, 0.05), 0 0 0 1px rgba(23, 32, 51, 0.02);
+  --shadow-2: 0 4px 14px rgba(23, 32, 51, 0.07);
+  --shadow-3: 0 12px 32px rgba(23, 32, 51, 0.1);
+  --shadow-4: 0 24px 60px rgba(23, 32, 51, 0.16);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
+  --chart-up: #089981;
+  --chart-down: #f23645;
+  --chart-grid: #eef1f6;
+  --chart-axis: #46546a;
+  --chart-crosshair: #8593a8;
+  --chart-price-line: #315fde;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --background: #090c12;
+  --panel: #101620;
+  --elevated: #18212d;
+  --overlay: #202b39;
+  --sunken: #0c1119;
+  --hover: #161e29;
+  --primary: #648cff;
+  --primary-hover: #82a3ff;
+  --primary-soft: #19294a;
+  --on-primary: #0a1020;
+  --on-signal: #05110c;
+  --profit: #35d39a;
+  --profit-soft: #12382f;
+  --loss: #ff7185;
+  --loss-soft: #411f2a;
+  --warning: #f4be5e;
+  --warning-soft: #3a2e14;
+  --info: #67b7ff;
+  --info-soft: #132c45;
+  --star: #e8b34a;
+  --demo: #b89aff;
+  --demo-soft: #2a2148;
+  --text: #f1f5fb;
+  --text-2: #b4c0d0;
+  --muted: #8492a6;
+  --disabled: #4f5c6e;
+  --border: #283444;
+  --border-soft: #1d2735;
+  --border-strong: #3a4a5f;
+  --grid: #18202b;
+  --cream: #141c27;
+  --focus: #8ba8ff;
+  --focus-ring: #8ba8ff;
+  --scrim: rgba(3, 6, 12, 0.62);
+  --highlight: rgba(255, 255, 255, 0.045);
+  --hero-glow: rgba(100, 140, 255, 0.16);
+  --hero-glow-2: rgba(184, 154, 255, 0.09);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.24);
+  --shadow-3: 0 14px 40px rgba(0, 0, 0, 0.32);
+  --shadow-4: 0 24px 64px rgba(0, 0, 0, 0.44);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+
+  --chart-up: #089981;
+  --chart-down: #f23645;
+  --chart-grid: #161e29;
+  --chart-axis: #b4c0d0;
+  --chart-crosshair: #5d6b80;
+  --chart-price-line: #648cff;
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 0ms;
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+  }
+}

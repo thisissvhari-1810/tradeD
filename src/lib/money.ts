@@ -37,6 +37,20 @@ export function formatSignedInr(paise: bigint): string {
   return formatInr(paise);
 }
 
+/** Signed P&L for display: `+₹1,087.18`, `−₹1,087.18` (true minus sign), or `₹0.00`. */
+export function formatPnl(paise: bigint): string {
+  if (paise === 0n) return formatInr(0n);
+  return `${paise > 0n ? "+" : "−"}${formatInr(paise < 0n ? -paise : paise)}`;
+}
+
+/** Signed basis points as a percentage: `+11.80%`, `−4.25%`, `0.00%`. */
+export function formatSignedBps(bps: number): string {
+  if (!Number.isFinite(bps)) return "";
+  const abs = Math.abs(bps) / 100;
+  const sign = bps > 0 ? "+" : bps < 0 ? "−" : "";
+  return `${sign}${abs.toFixed(2)}%`;
+}
+
 export function formatPercent(part: bigint, whole: bigint): string {
   if (whole === 0n) return "—";
   const scaled = (part * 10000n) / whole;

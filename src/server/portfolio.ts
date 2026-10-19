@@ -3,7 +3,12 @@ import { AppError } from "@/lib/http";
 import { formatInr, formatSignedInr, formatSignedPercent, paiseToRupees } from "@/lib/money";
 import { holdingsValue, maxDrawdownBps, performancePnl, portfolioEquity, tradeStats, unrealizedPnl } from "@/lib/trading/accounting";
 import { kolkataParts } from "@/lib/market/clock";
+import { realizedInScope } from "@/lib/trading/replay-summary";
 import { getQuote } from "@/server/market";
+import { loadOptionChain } from "@/server/option-chain";
+import { parseOptionLedgerSymbol } from "@/lib/options/contract";
+import { replaySessionOf } from "@/lib/options/replay-premium";
+import { rupeesToPaise } from "@/lib/money";
 import { evaluateOpenOrders } from "@/server/trading";
 import type { DataMode } from "@prisma/client";
 
@@ -22,18 +27,21 @@ export async function getStudentBundle(userId: string) {
   });
   const quotes = new Map<string, Awaited<ReturnType<typeof getQuote>> | null>();
   for (const position of positions) {
+    if (position.instrument.sector === "Option") continue;
     try {
       quotes.set(position.instrument.symbol, await getQuote(position.instrument.symbol));
     } catch {
       quotes.set(position.instrument.symbol, null);
     }
   }
+  const optionMarks = await markOptionPositions(positions);
+  const openedAt = await optionEntryTimes(refreshed.id, periodId, positions.map((position) => position.instrumentId));
   let holdings = 0n;
   let unrealized = 0n;
   let stale = false;
   let mode: DataMode = "DEMO";
   const rows = positions.map((position) => {
-    const quote = quotes.get(position.instrument.symbol);
+    const quote = quotes.get(position.instrument.symbol) ?? optionMarks.get(position.instrument.symbol) ?? null;
     const mark = quote?.lastPaise ?? null;
     if (!quote || quote.mode === "UNAVAILABLE") stale = true;
     if (quote) mode = quote.mode;
@@ -41,10 +49,17 @@ export async function getStudentBundle(userId: string) {
     if (market != null) holdings += market;
     const pnl = mark == null ? null : unrealizedPnl(position.quantity, position.avgCostPaise, mark);
     if (pnl != null) unrealized += pnl;
+    const contract = position.instrument.sector === "Option" ? parseOptionLedgerSymbol(position.instrument.symbol) : null;
+    const lotSize = position.instrument.lotSize;
+    const lots = contract && lotSize > 1 && position.quantity % lotSize === 0 ? position.quantity / lotSize : null;
     return {
       symbol: position.instrument.symbol,
       name: position.instrument.name,
       quantity: position.quantity,
+      lotSize: contract ? lotSize : null,
+      lots,
+      contract,
+      replaySession: replaySessionOf(position.instrument.symbol),
       averageCost: paiseToRupees(position.avgCostPaise),
       mark: mark == null ? null : paiseToRupees(mark),
       marketValue: market == null ? null : paiseToRupees(market),
@@ -52,6 +67,9 @@ export async function getStudentBundle(userId: string) {
       realized: paiseToRupees(position.realizedPaise),
       mode: quote?.mode ?? "UNAVAILABLE",
       asOf: quote?.asOf.toISOString() ?? null,
+      status: "OPEN",
+      openedAt: openedAt.get(position.instrumentId)?.toISOString() ?? null,
+      updatedAt: position.updatedAt.toISOString(),
     };
   });
   const realizedAgg = await prisma.position.aggregate({
@@ -59,6 +77,13 @@ export async function getStudentBundle(userId: string) {
     _sum: { realizedPaise: true },
   });
   const realized = realizedAgg._sum.realizedPaise ?? 0n;
+  const todayKey = kolkataParts(new Date()).dateKey;
+  const realizedFills = await prisma.execution.findMany({
+    where: { order: { accountId: refreshed.id, practicePeriodId: periodId }, realizedPaise: { not: 0 } },
+    select: { realizedPaise: true, executedAt: true },
+  });
+  // Real calendar day in IST. Replay fills carry their simulated time, so replay P&L is reported per session instead.
+  const realizedToday = realizedInScope(realizedFills, { kind: "day", dateKey: todayKey, dayOf: (at) => kolkataParts(at).dateKey });
   const equity = portfolioEquity(refreshed.cashAvailable, refreshed.cashReserved, holdings);
   const fees = await prisma.ledgerEntry.aggregate({
     where: { accountId: refreshed.id, practicePeriodId: periodId, type: "FEE" },
@@ -72,6 +97,20 @@ export async function getStudentBundle(userId: string) {
   const starting = refreshed.currentPeriod?.startingCapital ?? 0n;
   const perf = performancePnl(equity, starting, adminNet);
   const invested = starting + adminNet;
+  const closedRows = await prisma.closedTrade.findMany({
+    where: { accountId: refreshed.id, practicePeriodId: periodId },
+    select: { netPaise: true, exitAt: true },
+    orderBy: { exitAt: "asc" },
+  });
+  const stats = tradeStats(closedRows.map((row) => ({ realizedPaise: row.netPaise })));
+  const snaps = await prisma.portfolioSnapshot.findMany({
+    where: { accountId: refreshed.id, practicePeriodId: periodId },
+    orderBy: { capturedAt: "asc" },
+    take: 80,
+    select: { capturedAt: true, equity: true, realizedPaise: true, unrealizedPaise: true },
+  });
+  const largestWin = closedRows.reduce((best, row) => row.netPaise > best ? row.netPaise : best, 0n);
+  const largestLoss = closedRows.reduce((worst, row) => row.netPaise < worst ? row.netPaise : worst, 0n);
   await captureSnapshot(refreshed.id, periodId, {
     cashAvailable: refreshed.cashAvailable,
     cashReserved: refreshed.cashReserved,
@@ -92,11 +131,24 @@ export async function getStudentBundle(userId: string) {
     currency: "INR",
     periodLabel: refreshed.currentPeriod?.label ?? "",
     startingCapital: formatInr(starting),
+    allocatedCapital: formatInr(invested),
+    netPnl: formatSignedInr(perf),
+    completedTrades: closedRows.length,
+    winningTrades: stats.wins,
+    losingTrades: stats.losses,
+    winRate: stats.wins + stats.losses === 0 ? "—" : `${(stats.winRateBps / 100).toFixed(1)}%`,
+    averageWin: formatSignedInr(stats.averageWin),
+    averageLoss: formatSignedInr(-stats.averageLoss),
+    largestWin: formatSignedInr(largestWin),
+    largestLoss: formatSignedInr(largestLoss),
+    maxDrawdown: snaps.length < 2 ? "—" : `${(maxDrawdownBps(snaps.map((row) => ({ equity: row.equity }))) / 100).toFixed(2)}%`,
+    equityCurve: snaps.map((row) => ({ at: row.capturedAt.toISOString(), equity: formatInr(row.equity), realized: formatSignedInr(row.realizedPaise), unrealized: formatSignedInr(row.unrealizedPaise) })),
     cashAvailable: formatInr(refreshed.cashAvailable),
     cashReserved: formatInr(refreshed.cashReserved),
     holdingsValue: formatInr(holdings),
     equity: formatInr(equity),
     realized: formatSignedInr(realized),
+    realizedToday: formatSignedInr(realizedToday),
     unrealized: formatSignedInr(unrealized),
     charges: formatInr(-(fees._sum.cashDelta ?? 0n)),
     dailyReturn: returns.daily,
@@ -114,6 +166,56 @@ export async function getStudentBundle(userId: string) {
       })),
     ],
   };
+}
+
+async function optionEntryTimes(accountId: string, practicePeriodId: string, instrumentIds: string[]) {
+  const opened = new Map<string, Date>();
+  if (!instrumentIds.length) return opened;
+  const fills = await prisma.execution.findMany({
+    where: { order: { accountId, practicePeriodId, side: "BUY", instrumentId: { in: instrumentIds } } },
+    orderBy: { executedAt: "asc" },
+    select: { executedAt: true, order: { select: { instrumentId: true } } },
+  });
+  for (const fill of fills) {
+    if (!opened.has(fill.order.instrumentId)) opened.set(fill.order.instrumentId, fill.executedAt);
+  }
+  return opened;
+}
+
+async function markOptionPositions(positions: Array<{ instrumentId: string; instrument: { symbol: string; sector: string } }>) {
+  const marks = new Map<string, { lastPaise: bigint; mode: DataMode; asOf: Date }>();
+  const groups = new Map<string, { underlying: string; expiry: string }>();
+  const replayed = positions.filter((position) => position.instrument.sector === "Option" && replaySessionOf(position.instrument.symbol));
+  if (replayed.length) {
+    // Replay positions are valued only by the last mark taken at the replay clock, never by the live chain.
+    const cached = await prisma.quoteCache.findMany({ where: { instrumentId: { in: replayed.map((position) => position.instrumentId) }, mode: "HISTORICAL" } });
+    const byId = new Map(cached.map((row) => [row.instrumentId, row]));
+    for (const position of replayed) {
+      const row = byId.get(position.instrumentId);
+      if (row) marks.set(position.instrument.symbol, { lastPaise: row.lastPaise, mode: "HISTORICAL", asOf: row.asOf });
+    }
+  }
+  for (const position of positions) {
+    if (replaySessionOf(position.instrument.symbol)) continue;
+    const parsed = position.instrument.sector === "Option" ? parseOptionLedgerSymbol(position.instrument.symbol) : null;
+    if (parsed) groups.set(`${parsed.underlying}|${parsed.expiry}`, parsed);
+  }
+  for (const group of groups.values()) {
+    try {
+      const chain = await loadOptionChain(group.underlying, group.expiry);
+      for (const position of positions) {
+        const parsed = replaySessionOf(position.instrument.symbol) ? null : parseOptionLedgerSymbol(position.instrument.symbol);
+        if (!parsed || parsed.underlying !== group.underlying || parsed.expiry !== group.expiry) continue;
+        const row = chain.strikes.find((item) => item.strike === parsed.strike);
+        const premium = parsed.right === "CE" ? row?.ce?.ltp : row?.pe?.ltp;
+        if (premium == null || premium <= 0) continue;
+        marks.set(position.instrument.symbol, { lastPaise: rupeesToPaise(premium.toFixed(2)), mode: "DELAYED", asOf: new Date(chain.asOf) });
+      }
+    } catch {
+      continue;
+    }
+  }
+  return marks;
 }
 
 async function captureSnapshot(
@@ -204,7 +306,7 @@ export async function recentActivity(userId: string) {
   const [orders, ledger, executions] = await Promise.all([
     prisma.order.findMany({
       where: { accountId: account.id, practicePeriodId: account.currentPeriodId },
-      include: { instrument: true },
+      include: { instrument: true, executions: { orderBy: { executedAt: "asc" }, take: 1, select: { executedAt: true, priceAsOf: true, priceSource: true, dataMode: true } } },
       orderBy: { submittedAt: "desc" },
       take: 50,
     }),
@@ -235,6 +337,11 @@ export async function recentActivity(userId: string) {
       charges: paiseToRupees(order.chargesPaise),
       reason: order.rejectionReason,
       submittedAt: order.submittedAt.toISOString(),
+      filledAt: order.filledAt?.toISOString() ?? null,
+      executedAt: order.executions[0]?.executedAt.toISOString() ?? null,
+      priceAsOf: order.executions[0]?.priceAsOf.toISOString() ?? null,
+      priceSource: order.executions[0]?.priceSource ?? null,
+      dataMode: order.executions[0]?.dataMode ?? null,
     })),
     ledger: ledger.map((entry) => ({
       id: entry.id,

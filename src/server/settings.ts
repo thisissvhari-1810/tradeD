@@ -36,6 +36,7 @@ export function configuredProvider(): "demo" | "twelvedata" | "alphavantage" | "
 }
 
 const DHAN_TOKEN_KEY = "market.dhanAccessToken";
+const DHAN_CLIENT_KEY = "market.dhanClientId";
 
 function jwtExpiryMs(token: string) {
   const part = token.split(".")[1];
@@ -53,37 +54,89 @@ function serverDhanToken() {
   return token.includes(".") ? token : "";
 }
 
-export async function getDhanAccessToken() {
-  const fromServer = serverDhanToken();
-  if (fromServer) return fromServer;
+async function savedDhanToken() {
   const row = await prisma.appSetting.findUnique({ where: { key: DHAN_TOKEN_KEY } });
   const saved = typeof row?.value === "string" ? row.value.trim() : "";
-  const token = saved.includes(".") ? saved : (process.env.MARKET_DATA_API_KEY?.trim() ?? "");
-  if (!token) throw new AppError("The market-data access token is not set.", 503);
-  if (!token.includes(".")) throw new AppError("Charts need the market-data access token. The API key cannot request prices by itself.", 503);
-  return token;
+  return saved.includes(".") ? { token: saved, updatedAt: row?.updatedAt.toISOString() ?? null } : null;
+}
+
+export async function getDhanClientId() {
+  const row = await prisma.appSetting.findUnique({ where: { key: DHAN_CLIENT_KEY } });
+  const saved = typeof row?.value === "string" ? row.value.trim() : "";
+  if (/^\d{4,20}$/.test(saved)) return saved;
+  return process.env.DHAN_CLIENT_ID?.trim() ?? "";
+}
+
+export async function getDhanAccessToken() {
+  const saved = await savedDhanToken();
+  if (saved) return saved.token;
+  const fromServer = serverDhanToken();
+  if (fromServer) return fromServer;
+  const fallback = process.env.MARKET_DATA_API_KEY?.trim() ?? "";
+  if (!fallback) throw new AppError("The market-data access token is not set.", 503);
+  if (!fallback.includes(".")) throw new AppError("Charts need the market-data access token. The API key cannot request prices by itself.", 503);
+  return fallback;
 }
 
 export async function dhanTokenStatus() {
-  const fromServer = serverDhanToken();
-  if (fromServer) {
-    const expiresAt = jwtExpiryMs(fromServer);
+  const saved = await savedDhanToken();
+  if (saved) {
+    const expiresAt = jwtExpiryMs(saved.token);
     return {
-      source: "server",
+      source: "saved" as const,
       expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       expired: expiresAt != null && expiresAt <= Date.now(),
-      updatedAt: null,
+      updatedAt: saved.updatedAt,
     };
   }
-  const row = await prisma.appSetting.findUnique({ where: { key: DHAN_TOKEN_KEY } });
-  const saved = typeof row?.value === "string" ? row.value.trim() : "";
-  const usingSaved = saved.includes(".");
-  const token = usingSaved ? saved : (process.env.MARKET_DATA_API_KEY?.trim() ?? "");
-  const expiresAt = token.includes(".") ? jwtExpiryMs(token) : null;
+  const fromServer = serverDhanToken() || (process.env.MARKET_DATA_API_KEY?.trim() ?? "");
+  const expiresAt = fromServer.includes(".") ? jwtExpiryMs(fromServer) : null;
   return {
-    source: usingSaved ? "saved" : token ? "server" : "missing",
+    source: fromServer ? "server" as const : "missing" as const,
     expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
     expired: expiresAt != null && expiresAt <= Date.now(),
-    updatedAt: usingSaved ? row?.updatedAt.toISOString() ?? null : null,
+    updatedAt: null,
   };
+}
+
+export async function marketConnectionStatus() {
+  const token = await dhanTokenStatus();
+  const row = await prisma.appSetting.findUnique({ where: { key: DHAN_CLIENT_KEY } });
+  const savedClient = typeof row?.value === "string" ? row.value.trim() : "";
+  const clientId = /^\d{4,20}$/.test(savedClient) ? savedClient : (process.env.DHAN_CLIENT_ID?.trim() ?? "");
+  return {
+    clientSource: /^\d{4,20}$/.test(savedClient) ? "saved" : clientId ? "server" : "missing",
+    clientTail: clientId ? clientId.slice(-4) : "",
+    tokenSource: token.source,
+    expiresAt: token.expiresAt,
+    expired: token.expired,
+    updatedAt: token.updatedAt,
+  };
+}
+
+export async function saveMarketConnection(actorId: string, input: { clientId?: string; accessToken?: string; clearToken?: boolean }) {
+  const clientId = input.clientId?.trim() ?? "";
+  const accessToken = input.accessToken?.trim() ?? "";
+  if (!clientId && !accessToken && !input.clearToken) throw new AppError("Enter a client id or an access token.");
+  if (clientId && !/^\d{4,20}$/.test(clientId)) throw new AppError("Client id must be 4 to 20 digits.");
+  if (accessToken && (!accessToken.includes(".") || accessToken.length < 20 || accessToken.length > 4000)) {
+    throw new AppError("Paste the full access token.");
+  }
+  if (clientId) {
+    await prisma.appSetting.upsert({
+      where: { key: DHAN_CLIENT_KEY },
+      create: { key: DHAN_CLIENT_KEY, value: clientId, updatedById: actorId },
+      update: { value: clientId, updatedById: actorId },
+    });
+  }
+  if (input.clearToken) {
+    await prisma.appSetting.deleteMany({ where: { key: DHAN_TOKEN_KEY } });
+  } else if (accessToken) {
+    await prisma.appSetting.upsert({
+      where: { key: DHAN_TOKEN_KEY },
+      create: { key: DHAN_TOKEN_KEY, value: accessToken, updatedById: actorId },
+      update: { value: accessToken, updatedById: actorId },
+    });
+  }
+  return marketConnectionStatus();
 }

@@ -1,62 +1,68 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
+import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
+import { ChartHeaderTools } from "@/components/chart-header-tools";
+import { ChartToolbar, FavouritesBar, type RemoveScope, type VisibilityAction } from "@/components/chart-toolbar";
+import { useDrawingPrefs } from "@/components/drawing-prefs";
+import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
 import { IconButton } from "@/components/icon-button";
-import { DemoModeBadge, OrderStatus, StockLogo, StockSearchField, SymbolTitle, WatchStar } from "@/components/stock-identity";
-import { api, freshness, istTime, money, moveOf, tone, type Quote } from "@/components/api";
+import { OptionChainPanel, type OptionChartRequest } from "@/components/option-chain-panel";
+import { OptionBook, type BookPosition, type BookTrade } from "@/components/option-book";
+import { newReplaySession, REPLAY_SESSION_PATTERN } from "@/lib/options/replay-premium";
+import { draftKey, OptionOrderTicket, type OptionOrderDraft } from "@/components/option-order-ticket";
+import { cx, EmptyState, Table, type Column } from "@/components/ui";
+import { parseOptionLedgerSymbol } from "@/lib/options/contract";
+import { type LedgerSnapshot } from "@/components/paper-panel";
+import { findIndex } from "@/lib/market/indices";
+import { ReplayBar } from "@/components/replay-bar";
+import { OrderStatus, StockLogo, StockSearchField, SymbolTitle, WatchStar } from "@/components/stock-identity";
+import { api, istTime, money, moveOf, tone, type Quote } from "@/components/api";
 import { useDesk } from "@/components/shell";
-import { applyLiveTick, CHART_SPANS, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
+import { feedStatusLabel, useMarketStream } from "@/components/market-stream";
+import { kolkataParts } from "@/lib/market/clock";
+import { applyLiveTick, CHART_SPANS, mergeLiveHistory, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
 import {
+  buyingPower,
   cancelDemoOrder,
   demoUnrealized,
   emptyDemoBook,
-  firstCandleOn,
   formatDemoRupees,
   formatIst,
   loadDemoBook,
-  placeDemoOrder,
-  sessionDays,
   settleDemoOrders,
-  sliceTo,
-  stepPlayhead,
   type DemoBook,
 } from "@/lib/trading/demo-replay";
-import { rupeesToPaise } from "@/lib/money";
-import { calculateCharges } from "@/lib/trading/fees";
-import { DEFAULT_CHARGES } from "@/lib/trading/settings";
 import {
-  Activity,
-  AreaChart,
-  BarChart3,
-  CandlestickChart,
-  LineChart,
-  Maximize2,
-  Minimize2,
-  Minus,
-  MousePointer2,
-  Pause,
-  Pencil,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Square,
-  Star,
-  TrendingUp,
-  Type,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+  advanceCursor,
+  completedMinutes,
+  isReplaySpeed,
+  normalizeTape,
+  previousWeekday,
+  projectReplay,
+  REPLAY_STATUS_LABEL,
+  simulatedBar,
+  stepCursor,
+  type PreviousSession,
+  type ReplaySpeed,
+  type ReplayStatus,
+} from "@/lib/trading/replay-engine";
+import { formatPnl, formatSignedBps, rupeesToPaise } from "@/lib/money";
+import { fromSummaryWire, newlyClosed, type ReplaySessionSummary, type ReplaySummaryWire } from "@/lib/trading/replay-summary";
+import { replayChipLabel } from "@/lib/trading/position-view";
+import { ReplaySummaryDialog } from "@/components/replay-summary-dialog";
+import { Star } from "lucide-react";
 
 type Hit = { symbol: string; name: string; exchange: string };
 type PracticePosition = {
   symbol: string;
   name: string;
   quantity: number;
+  lotSize?: number | null;
+  lots?: number | null;
+  contract?: { underlying: string; expiry: string; strike: number; right: "CE" | "PE" } | null;
   averageCost: string;
   mark: string | null;
   marketValue: string | null;
@@ -64,30 +70,75 @@ type PracticePosition = {
   realized: string;
   mode?: string;
   asOf?: string | null;
+  status?: string;
+  openedAt?: string | null;
+  updatedAt?: string | null;
+  replaySession?: string | null;
 };
+type ReplayMarkRow = { symbol: string; cursor: number; mark: string | null; marketValue: string | null; unrealized: string | null; asOf: string | null; stale: boolean; beforeEntry: boolean; openedAt: string | null; message: string };
+
+function optionSessionKey(email: string) {
+  return `td-option-replay-sessions:${email}`;
+}
+function readOptionSessions(email: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(optionSessionKey(email)) || "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string" && REPLAY_SESSION_PATTERN.test(entry[1]) && entry[1].startsWith(`${entry[0]}.`)));
+  } catch {
+    return {};
+  }
+}
+function signedRupees(value: number) {
+  if (!Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : value < 0 ? "-" : ""}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
 type PracticeBook = {
-  orders: Array<{ id: string; symbol: string; side: string; type: string; quantity: number; filledQuantity: number; status: string; avgFill: string | null; reason: string | null; submittedAt: string }>;
+  orders: Array<{ id: string; symbol: string; side: string; type: string; quantity: number; filledQuantity: number; status: string; avgFill: string | null; reason: string | null; submittedAt: string; filledAt?: string | null }>;
   executions: Array<{ id: string; symbol: string; side: string; quantity: number; price: string; charges: string; realized: string; mode: string; executedAt: string }>;
 };
 type Flags = { sma: boolean; ema: boolean; bands: boolean; vwap: boolean; volume: boolean; supertrend: boolean; oscillator: "none" | "rsi" | "macd" };
-type Replay = { active: boolean; day: string; playhead: number | null; playing: boolean; speed: 1 | 2 | 4 | 8 };
+type Replay = {
+  active: boolean;
+  date: string;
+  cursor: number | null;
+  speed: ReplaySpeed;
+  status: ReplayStatus;
+  message: string;
+  sessionOpen: number | null;
+  sessionClose: number | null;
+};
 
-const SPEEDS = [1, 2, 4, 8] as const;
-const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: true, supertrend: false, oscillator: "none" };
-const DRAW_TOOLS: Array<{ id: DrawTool; label: string; icon: typeof MousePointer2 }> = [
-  { id: "cursor", label: "Pointer", icon: MousePointer2 },
-  { id: "trend", label: "Trend line", icon: TrendingUp },
-  { id: "ray", label: "Ray", icon: Pencil },
-  { id: "hline", label: "Horizontal line", icon: Minus },
-  { id: "rect", label: "Rectangle", icon: Square },
-  { id: "text", label: "Text", icon: Type },
-];
-const CHART_TYPES: Array<{ id: ChartType; label: string; icon: typeof CandlestickChart }> = [
-  { id: "candle", label: "Candles", icon: CandlestickChart },
-  { id: "line", label: "Line", icon: LineChart },
-  { id: "bar", label: "Bars", icon: BarChart3 },
-  { id: "area", label: "Area", icon: AreaChart },
-];
+type ReplayPayload = {
+  tape: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>;
+  prior: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>;
+  context?: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>;
+  previous?: PreviousSession | null;
+  sessionOpen: number | null;
+  sessionClose: number | null;
+  message: string;
+  unavailable: string | null;
+};
+function PreviousSessionStrip({ session }: { session: PreviousSession | null }) {
+  if (!session) {
+    return <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-warning">Previous session open and close were not returned.</p>;
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">
+      <span className="font-semibold text-info">Prev session {session.date}</span>
+      <span>Open <span className="num text-text">{session.open.toFixed(2)}</span></span>
+      <span>Close <span className="num text-text">{session.close.toFixed(2)}</span></span>
+      <span>High {session.high.toFixed(2)}</span>
+      <span>Low {session.low.toFixed(2)}</span>
+    </div>
+  );
+}
+
+function bookStorageKey(email: string) {
+  return email ? `td-replay-book:${email}` : "td-replay-book";
+}
+
+const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: false, supertrend: false, oscillator: "none" };
+const LABEL_TOOLS = new Set<DrawTool>(["text", "note", "price", "callout", "marker"]);
 
 function brokerRows(payload: unknown): Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null {
   if (payload && typeof payload === "object" && "error" in payload) return null;
@@ -115,6 +166,7 @@ function brokerRows(payload: unknown): Array<{ symbol: string; qty: string; side
 
 export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const desk = useDesk();
+  const notify = desk.toast;
   const params = useSearchParams();
   const rootRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<ChartHandle | null>(null);
@@ -129,6 +181,18 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [indicators] = useState<IndicatorSettings>(DEFAULT_INDICATORS);
   const [tool, setTool] = useState<DrawTool>("cursor");
   const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const drawPrefs = useDrawingPrefs();
+  const [drawingsHidden, setDrawingsHidden] = useState(false);
+  const [indicatorsHidden, setIndicatorsHidden] = useState(false);
+  const [lockAll, setLockAll] = useState(false);
+  const [objectsOpen, setObjectsOpen] = useState(false);
+  const [selectedDrawing, setSelectedDrawing] = useState<string | null>(null);
+  const [annotation, setAnnotation] = useState("");
+  const [historyTick, setHistoryTick] = useState(0);
+  const drawingsRef = useRef(drawings);
+  const pastRef = useRef<Drawing[][]>([]);
+  const futureRef = useRef<Drawing[][]>([]);
+  drawingsRef.current = drawings;
   const [settings, setSettings] = useState(false);
   const [reload, setReload] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -141,15 +205,42 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [quoteError, setQuoteError] = useState("");
   const [lists, setLists] = useState<Array<{ id: string; name: string; items: Array<{ symbol: string; name: string; exchange: string }> }>>([]);
   const [sideQuotes, setSideQuotes] = useState<Record<string, Quote>>({});
-  const [replay, setReplay] = useState<Replay>({ active: false, day: "", playhead: null, playing: false, speed: 1 });
+  const [replay, setReplay] = useState<Replay>({ active: false, date: "", cursor: null, speed: 1, status: "idle", message: "", sessionOpen: null, sessionClose: null });
+  const replayRef = useRef(replay);
+  const tapeRef = useRef<Candle[]>([]);
+  const priorRef = useRef<Candle[]>([]);
+  const contextRef = useRef<Candle[]>([]);
+  const [priorSession, setPriorSession] = useState<PreviousSession | null>(null);
+  const replayFetch = useRef(0);
+  const settledThrough = useRef(0);
+  const bookEmail = useRef("");
+  replayRef.current = replay;
   const [book, setBook] = useState<DemoBook>(emptyDemoBook());
-  const [tradeOpen, setTradeOpen] = useState(false);
-  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
-  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
-  const [quantity, setQuantity] = useState("1");
-  const [limitPrice, setLimitPrice] = useState("");
-  const [tradeError, setTradeError] = useState("");
+  const [chainOpen, setChainOpen] = useState(false);
+  const [orderDraft, setOrderDraft] = useState<OptionOrderDraft | null>(null);
+  const [ledgerTick, setLedgerTick] = useState(0);
+  const [optionSessions, setOptionSessions] = useState<Record<string, string>>({});
+  const [replayMarks, setReplayMarks] = useState<Record<string, ReplayMarkRow>>({});
+  const [sessionSummary, setSessionSummary] = useState<ReplaySessionSummary | null>(null);
+  const announcedTrades = useRef(new Map<string, Set<string>>());
+  const [closedHighlight, setClosedHighlight] = useState<string | null>(null);
+  const [summaryRequested, setSummaryRequested] = useState(false);
+  const [summaryShownFor, setSummaryShownFor] = useState<string | null>(null);
+  const closeTicket = useCallback(() => setOrderDraft(null), []);
+  const [sideRail, setSideRail] = useState<"watch" | "positions">("positions");
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [closedTrades, setClosedTrades] = useState<BookTrade[]>([]);
+  const refreshPractice = useRef<() => void>(() => undefined);
+  const [optionView, setOptionView] = useState<OptionChartRequest | null>(null);
+  const optionViewRef = useRef<OptionChartRequest | null>(null);
+  optionViewRef.current = optionView;
+  const [ledger, setLedger] = useState<(LedgerSnapshot & { realizedToday?: string }) | null>(null);
+  const settledMinute = useRef(-1);
+  const roleRef = useRef(desk.user?.role);
+  roleRef.current = desk.user?.role;
   const [restart, setRestart] = useState(false);
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
+  const [startRupees, setStartRupees] = useState("1000000");
   const [dock, setDock] = useState<"open" | "closed" | "orders" | "history" | "replay">("open");
   const [dockOpen, setDockOpen] = useState(true);
   const [practice, setPractice] = useState<PracticePosition[] | null>(null);
@@ -159,21 +250,55 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [brokerPositions, setBrokerPositions] = useState<Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null>(null);
   const [exitSymbol, setExitSymbol] = useState<PracticePosition | null>(null);
   const symbol = desk.symbol;
+  const timeframeRef = useRef(timeframe);
+  const marketOpenRef = useRef(true);
+  const lastTradeRef = useRef(0);
+  const candleModeRef = useRef("");
+  timeframeRef.current = timeframe;
+  marketOpenRef.current = quote ? quote.marketOpen : true;
+  candleModeRef.current = candleMeta.mode;
+  const stream = useMarketStream(symbol, !replay.active && !optionView, (tick) => {
+    if (candleModeRef.current === "DEMO") return;
+    setCandles((current) => {
+      const next = applyLiveTick(current, timeframeRef.current, tick.price, tick.time, marketOpenRef.current, tick.volumeDelta, lastTradeRef.current);
+      if (tick.time >= lastTradeRef.current) lastTradeRef.current = tick.time;
+      return next;
+    });
+    setQuote((current) => {
+      if (!current || current.symbol !== symbol) return current;
+      if (Date.parse(current.asOf) > tick.time * 1000) return current;
+      return {
+        ...current,
+        last: tick.price.toFixed(2),
+        asOf: new Date(tick.time * 1000).toISOString(),
+        volume: tick.dayVolume != null ? String(Math.round(tick.dayVolume)) : current.volume,
+      };
+    });
+  });
+
+  useEffect(() => {
+    lastTradeRef.current = 0;
+  }, [symbol]);
 
   useEffect(() => {
     const fromUrl = params.get("symbol");
     if (fromUrl) desk.chooseSymbol(fromUrl);
     const saved = localStorage.getItem("td-replay-session");
-    const storedBook = localStorage.getItem("td-replay-book");
+    const storedBook = localStorage.getItem(bookStorageKey(desk.user?.email ?? ""));
     if (saved) {
-      const parsed = JSON.parse(saved) as Partial<Replay>;
+      const parsed = JSON.parse(saved) as Partial<Replay> & { day?: string; speed?: number };
+      const speed = typeof parsed.speed === "number" && isReplaySpeed(parsed.speed) ? parsed.speed : 1;
+      const date = typeof parsed.date === "string" ? parsed.date : typeof parsed.day === "string" ? parsed.day : "";
       setReplay((current) => ({
         ...current,
         active: Boolean(parsed.active),
-        day: typeof parsed.day === "string" ? parsed.day : "",
-        playhead: typeof parsed.playhead === "number" ? parsed.playhead : null,
-        playing: false,
-        speed: parsed.speed === 2 || parsed.speed === 4 || parsed.speed === 8 ? parsed.speed : 1,
+        date,
+        cursor: null,
+        speed,
+        status: parsed.active ? "loading" : "idle",
+        message: "",
+        sessionOpen: null,
+        sessionClose: null,
       }));
     }
     setBook(loadDemoBook(storedBook));
@@ -182,20 +307,52 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem("td-replay-session", JSON.stringify(replay));
-  }, [replay]);
+    localStorage.setItem("td-replay-session", JSON.stringify({ active: replay.active, date: replay.date, speed: replay.speed }));
+  }, [replay.active, replay.date, replay.speed]);
 
   useEffect(() => {
-    localStorage.setItem("td-replay-book", JSON.stringify(book));
-  }, [book]);
+    const email = desk.user?.email ?? "";
+    if (bookEmail.current !== email) {
+      bookEmail.current = email;
+      setOptionSessions(readOptionSessions(email));
+      const key = bookStorageKey(email);
+      const saved = localStorage.getItem(key) ?? (email ? localStorage.getItem("td-replay-book") : null);
+      if (saved) setBook(loadDemoBook(saved));
+      if (email && saved && !localStorage.getItem(key)) localStorage.setItem(key, saved);
+      return;
+    }
+    localStorage.setItem(bookStorageKey(email), JSON.stringify(book));
+  }, [book, desk.user?.email]);
 
   useEffect(() => {
+    pastRef.current = [];
+    futureRef.current = [];
+    setHistoryTick((value) => value + 1);
     setDrawings(loadDrawings(symbol));
-    api<Quote>(`/api/market/quote?symbol=${encodeURIComponent(symbol)}`).then((row) => { setQuote(row); setQuoteError(""); }).catch((error: unknown) => {
-      setQuote(null);
-      setQuoteError(error instanceof Error ? error.message : "Quote unavailable.");
-    });
-  }, [symbol]);
+    if (replay.active) return;
+    let stop = false;
+    const load = () => {
+      api<Quote>(`/api/market/quote?symbol=${encodeURIComponent(symbol)}`).then((row) => {
+        if (stop) return;
+        setQuote((current) => {
+          if (current && current.symbol === row.symbol && Date.parse(current.asOf) > Date.parse(row.asOf)) {
+            return { ...row, last: current.last, asOf: current.asOf, volume: current.volume || row.volume };
+          }
+          return row;
+        });
+        setQuoteError("");
+      }).catch((error: unknown) => {
+        if (stop) return;
+        setQuoteError(error instanceof Error ? error.message : "Quote unavailable.");
+      });
+    };
+    load();
+    const timer = window.setInterval(load, 3000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [symbol, replay.active]);
 
   useEffect(() => {
     if (query.trim().length < 1) {
@@ -229,13 +386,24 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     return () => window.clearInterval(timer);
   }, [lists]);
 
+  const seriesKey = useRef("");
+  function candlePath(span: ChartSpan, contract: OptionChartRequest | null) {
+    if (!contract) return `/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${span}`;
+    if (contract.securityId) return `/api/options/candles?securityId=${encodeURIComponent(contract.securityId)}&kind=${contract.kind}&timeframe=${span}`;
+    const ledger = `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}`;
+    return `/api/options/candles?symbol=${encodeURIComponent(ledger)}&timeframe=${span}`;
+  }
   useEffect(() => {
     const id = ++requestId.current;
+    const contract = optionView;
+    const key = contract ? `opt:${contract.securityId}:${contract.underlying}:${contract.expiry}:${contract.strike}:${contract.right}:${timeframe}` : `${symbol}:${timeframe}`;
+    const merge = seriesKey.current === key;
+    seriesKey.current = key;
     setLoading(true);
-    api<{ candles: Candle[]; mode: string; source: string; message: string }>(`/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`)
+    api<{ candles: Candle[]; mode: string; source: string; message: string }>(candlePath(timeframe, contract))
       .then((data) => {
         if (id !== requestId.current) return;
-        setCandles(data.candles);
+        setCandles((current) => merge ? mergeLiveHistory(current, data.candles) : data.candles);
         setCandleMeta({ mode: data.mode, source: data.source, message: data.message });
         setChartError("");
         setLoading(false);
@@ -243,12 +411,48 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       })
       .catch((error: unknown) => {
         if (id !== requestId.current) return;
-        setCandles([]);
-        setChartError(error instanceof Error ? error.message : "Chart data unavailable.");
         setLoading(false);
         setRefreshing(false);
+        if (replayRef.current.active && !optionViewRef.current) return;
+        setCandles([]);
+        setChartError(error instanceof Error ? error.message : "Chart data unavailable.");
       });
-  }, [symbol, timeframe, reload]);
+  }, [symbol, timeframe, reload, optionView]);
+
+  useEffect(() => {
+    if (replay.active && !optionView) return;
+    const timer = window.setInterval(() => {
+      const id = requestId.current;
+      api<{ candles: Candle[]; mode: string; source: string; message: string }>(candlePath(timeframe, optionView))
+        .then((data) => {
+          if (id !== requestId.current) return;
+          setCandles((current) => mergeLiveHistory(current, data.candles));
+          setCandleMeta({ mode: data.mode, source: data.source, message: data.message });
+        })
+        .catch(() => undefined);
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [symbol, timeframe, replay.active, optionView]);
+
+  useEffect(() => {
+    if (desk.user?.role !== "STUDENT") return;
+    const load = () => {
+      api<LedgerSnapshot & { positions: PracticePosition[]; realizedToday?: string }>("/api/portfolio").then((data) => { setLedger(data); setPractice(data.positions); setPracticeError(""); }).catch((error: unknown) => {
+        setPracticeError(error instanceof Error ? error.message : "Practice positions unavailable.");
+      });
+      api<PracticeBook>("/api/orders").then(setActivity).catch(() => undefined);
+      api<{ trades: BookTrade[] }>("/api/trades").then((data) => setClosedTrades(data.trades)).catch(() => undefined);
+    };
+    refreshPractice.current = load;
+    load();
+    const timer = window.setInterval(load, 20000);
+    window.addEventListener("td-ledger", load);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("td-ledger", load);
+      refreshPractice.current = () => undefined;
+    };
+  }, [desk.user?.role]);
 
   useEffect(() => {
     if (variant !== "positions") return;
@@ -273,10 +477,72 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     return () => window.clearInterval(timer);
   }, [variant, desk.mode]);
 
+  function rememberDrawings(next: Drawing[], record?: boolean) {
+    if (record) {
+      pastRef.current = [...pastRef.current, drawingsRef.current].slice(-40);
+      futureRef.current = [];
+      setHistoryTick((value) => value + 1);
+    }
+    setDrawings(next);
+    saveDrawings(symbol, next);
+  }
+
+  function applyVisibility(action: VisibilityAction) {
+    setDrawingsHidden(action === "drawings" || action === "all");
+    setIndicatorsHidden(action === "indicators" || action === "all");
+  }
+
+  function removeObjects(scope: RemoveScope) {
+    const lockedCount = drawingsRef.current.filter((drawing) => drawing.locked).length;
+    const kept = lockedCount ? ` ${lockedCount} locked drawing${lockedCount === 1 ? "" : "s"} will stay.` : "";
+    const message = scope === "drawings"
+      ? `Remove all drawings on ${symbol}?${kept}`
+      : scope === "indicators"
+        ? "Turn off every indicator on this chart?"
+        : `Remove all drawings on ${symbol} and turn off every indicator?${kept}`;
+    if (scope !== "indicators" && lockAll) {
+      desk.toast("Drawings are locked. Unlock all drawings to remove them.");
+      if (scope === "drawings") return;
+    }
+    if (!window.confirm(message)) return;
+    if (scope !== "indicators" && !lockAll) rememberDrawings(drawingsRef.current.filter((drawing) => drawing.locked), true);
+    if (scope !== "drawings") setFlags((current) => ({ ...current, sma: false, ema: false, bands: false, vwap: false, supertrend: false, oscillator: "none" }));
+  }
+
+  function toggleFullScreen() {
+    const node = rootRef.current;
+    if (!node) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      setFull(false);
+    } else {
+      void node.requestFullscreen();
+      setFull(true);
+    }
+  }
+
+  function undoDrawings() {
+    const previous = pastRef.current.pop();
+    if (!previous) return;
+    futureRef.current.push(drawingsRef.current);
+    setHistoryTick((value) => value + 1);
+    setDrawings(previous);
+    saveDrawings(symbol, previous);
+  }
+
+  function redoDrawings() {
+    const next = futureRef.current.pop();
+    if (!next) return;
+    pastRef.current.push(drawingsRef.current);
+    setHistoryTick((value) => value + 1);
+    setDrawings(next);
+    saveDrawings(symbol, next);
+  }
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setTradeOpen(false);
+      setOrderDraft(null);
       setSettings(false);
       setRestart(false);
       setExitSymbol(null);
@@ -286,44 +552,90 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const days = useMemo(() => sessionDays(candles), [candles]);
-
   useEffect(() => {
-    if (!replay.active || !candles.length) return;
-    const day = days.includes(replay.day) ? replay.day : days[days.length - 1] ?? "";
-    const start = day ? firstCandleOn(candles, day) : null;
-    const known = replay.playhead != null && candles.some((candle) => candle.time === replay.playhead);
-    if (day === replay.day && (known || start == null)) return;
-    setReplay((current) => ({ ...current, day, playhead: known ? current.playhead : start, playing: false }));
-  }, [candles, days, replay.active, replay.day, replay.playhead]);
-
-  useEffect(() => {
-    if (!replay.active || !replay.playing || replay.playhead == null) return;
-    const candle = candles.find((item) => item.time === replay.playhead);
-    if (!candle) return;
-    setBook((current) => settleDemoOrders(current, symbol, candle, replay.playhead as number, replay.playhead as number));
-  }, [replay.active, replay.playing, replay.playhead, candles, symbol]);
-
-  useEffect(() => {
-    if (!replay.playing) return;
-    const timer = window.setInterval(() => {
-      setReplay((current) => {
-        const limit = candles.at(-1)?.time ?? null;
-        const next = stepPlayhead(candles, current.playhead, 1, limit);
-        if (next == null || next === current.playhead) return { ...current, playing: false };
-        return { ...current, playhead: next, day: formatDay(next) };
+    if (!replay.active || !replay.date) return;
+    const id = ++replayFetch.current;
+    const requested = replay.date;
+    tapeRef.current = [];
+    priorRef.current = [];
+    contextRef.current = [];
+    setPriorSession(null);
+    setReplay((current) => ({ ...current, status: "loading", message: "Loading the session…", cursor: null }));
+    api<ReplayPayload>(`/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=1m&date=${encodeURIComponent(requested)}`)
+      .then((data) => {
+        if (id !== replayFetch.current) return;
+        tapeRef.current = normalizeTape(data.tape ?? []);
+        priorRef.current = normalizeTape(data.prior ?? []);
+        contextRef.current = normalizeTape(data.context ?? []);
+        if (data.unavailable || data.sessionOpen == null || data.sessionClose == null) {
+          tapeRef.current = [];
+          priorRef.current = [];
+          contextRef.current = [];
+          setPriorSession(null);
+          setReplay((current) => current.date === requested ? { ...current, status: "error", cursor: null, sessionOpen: data.sessionOpen, sessionClose: data.sessionClose, message: data.message || "This session is not available." } : current);
+          return;
+        }
+        settledThrough.current = data.sessionOpen;
+        setPriorSession(data.previous ?? null);
+        setReplay((current) => current.date === requested ? {
+          ...current,
+          status: "ready",
+          cursor: data.sessionOpen,
+          sessionOpen: data.sessionOpen,
+          sessionClose: data.sessionClose,
+          message: data.message,
+        } : current);
+      })
+      .catch((error: unknown) => {
+        if (id !== replayFetch.current) return;
+        tapeRef.current = [];
+        priorRef.current = [];
+        contextRef.current = [];
+        setPriorSession(null);
+        setReplay((current) => current.date === requested ? { ...current, status: "error", cursor: null, message: error instanceof Error ? error.message : "This session could not be loaded." } : current);
       });
-    }, 1000 / replay.speed);
+  }, [replay.active, replay.date, symbol]);
+
+  useEffect(() => {
+    if (replay.status !== "playing") return;
+    let last = performance.now();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = now - last;
+      last = now;
+      const current = replayRef.current;
+      if (current.cursor == null || current.sessionOpen == null || current.sessionClose == null) return;
+      const moved = advanceCursor(current.cursor, current.sessionOpen, current.sessionClose, elapsed, current.speed);
+      setBook((bookNow) => settleReplayBook(bookNow, moved.cursor, current.date));
+      const minute = Math.floor(moved.cursor / 60);
+      if (minute !== settledMinute.current && roleRef.current === "STUDENT") {
+        settledMinute.current = minute;
+        void api<{ filled: number }>("/api/demo/replay", { action: "settle", symbol, date: current.date, cursor: moved.cursor, timeframe: SPAN_LABEL[timeframeRef.current] })
+          .then((data) => (data.filled > 0 ? api<LedgerSnapshot>("/api/portfolio").then(setLedger) : undefined))
+          .catch(() => undefined);
+      }
+      setReplay((state) => state.status === "playing" ? { ...state, cursor: moved.cursor, status: moved.completed ? "completed" : "playing", message: moved.completed ? "Replay completed at the session close." : state.message } : state);
+    }, 100);
     return () => window.clearInterval(timer);
-  }, [replay.playing, replay.speed, candles]);
+  }, [replay.status, symbol]);
+
+  const held = book.positions.find((item) => item.symbol === symbol) ?? null;
+  const sessionLevels = useMemo<ChartReference[]>(() => {
+    const levels: ChartReference[] = [];
+    if (replay.active && held?.stopPaise) levels.push({ price: held.stopPaise / 100, title: "Stop", color: desk.appearance.tokens.loss, style: "dashed" });
+    if (replay.active && held?.targetPaise) levels.push({ price: held.targetPaise / 100, title: "Target", color: desk.appearance.tokens.profit, style: "dotted" });
+    return levels;
+  }, [desk.appearance.tokens.loss, desk.appearance.tokens.profit, held, replay.active]);
 
   const shown = useMemo(() => {
-    if (!replay.active) {
-      const last = Number(quote?.last);
-      return applyLiveTick(candles, timeframe, last, Math.floor(Date.now() / 1000), Boolean(quote?.marketOpen));
+    if (optionView) return candles;
+    if (replay.active) return replay.cursor == null ? [] : projectReplay(tapeRef.current, priorRef.current, timeframe, replay.cursor, replay.date, contextRef.current);
+    if (quote?.mode === "DEMO") {
+      const last = Number(quote.last);
+      return applyLiveTick(candles, timeframe, last, Math.floor(Date.now() / 1000), Boolean(quote.marketOpen));
     }
-    return sliceTo(candles, replay.playhead);
-  }, [candles, replay.active, replay.playhead, quote, timeframe]);
+    return candles;
+  }, [candles, optionView, replay.active, replay.cursor, replay.date, quote, timeframe]);
 
   const playCandle = shown.at(-1) ?? null;
   const previous = shown.length > 1 ? shown[shown.length - 2].close : null;
@@ -333,11 +645,137 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const rail = lists.find((item) => item.items.some((row) => row.symbol === symbol)) ?? lists[0];
   const practiceRow = practice?.find((row) => row.symbol === symbol) ?? null;
   const replayMark = replay.active && playCandle ? Number(rupeesToPaise(playCandle.close.toFixed(2))) : null;
+  const paperPnl = held && replayMark != null ? demoUnrealized(book, { [symbol]: replayMark }) : null;
   const openPositions = desk.mode === "live" ? brokerPositions : practice;
+
+  // Replay option positions belong to one replay session per date. A session missing from this browser is adopted from the ledger.
+  const adoptedSession = replay.active && replay.date ? practice?.find((row) => row.replaySession?.startsWith(`${replay.date}.`))?.replaySession ?? null : null;
+  const optionSession = replay.active && replay.date ? optionSessions[replay.date] ?? adoptedSession : null;
+  const sessionOpenCount = optionSession ? (practice ?? []).filter((row) => row.replaySession === optionSession).length : 0;
+  const markMinute = replay.active && replay.cursor != null ? Math.floor(replay.cursor / 60) : null;
+
+  useEffect(() => {
+    const cursor = replayRef.current.cursor;
+    if (!optionSession || markMinute == null || cursor == null || roleRef.current !== "STUDENT") return;
+    let stop = false;
+    api<{ marks: ReplayMarkRow[]; summary: ReplaySummaryWire | null }>("/api/demo/option-replay", { action: "marks", session: optionSession, cursor })
+      .then((data) => {
+        if (stop) return;
+        setReplayMarks(Object.fromEntries(data.marks.map((row) => [row.symbol, row])));
+        if (!data.summary) return;
+        const summary = fromSummaryWire(data.summary);
+        setSessionSummary(summary);
+        const seen = announcedTrades.current.get(summary.session);
+        if (!seen) {
+          announcedTrades.current.set(summary.session, new Set(summary.trades.map((trade) => trade.id)));
+          return;
+        }
+        const fresh = newlyClosed(seen, summary);
+        fresh.forEach((trade) => {
+          seen.add(trade.id);
+          notify(`Trade closed: ${formatPnl(trade.netPaise)} (${formatSignedBps(trade.returnBps)})`, { tone: trade.netPaise > 0n ? "success" : trade.netPaise < 0n ? "warning" : "info" });
+        });
+        const last = fresh[fresh.length - 1];
+        if (last) setClosedHighlight(last.id);
+      })
+      .catch(() => undefined);
+    return () => { stop = true; };
+  }, [optionSession, markMinute, sessionOpenCount, ledgerTick, notify]);
+
+  const bookRows = useMemo<BookPosition[]>(() => {
+    const rows = practice ?? [];
+    if (!replay.active) return rows;
+    const cursor = replay.cursor;
+    return rows.filter((row) => row.contract && row.replaySession && row.replaySession === optionSession).map((row) => {
+      const beforeEntry = cursor != null && row.openedAt != null && cursor * 1000 < Date.parse(row.openedAt);
+      const live = replayMarks[row.symbol];
+      // A mark taken later than the replay clock (after seeking back) is never shown.
+      const usable = live && cursor != null && Math.floor(live.cursor / 60) <= Math.floor(cursor / 60) ? live : null;
+      if (beforeEntry) return { ...row, beforeEntry: true, mark: null, marketValue: null, unrealized: null, note: "Replay time is before this position's entry fill." };
+      if (usable) return { ...row, mark: usable.mark, marketValue: usable.marketValue, unrealized: usable.unrealized, asOf: usable.asOf, mode: usable.mark == null ? "UNAVAILABLE" : "HISTORICAL", stale: usable.stale, note: usable.mark == null ? usable.message : "" };
+      const serverUsable = row.asOf != null && cursor != null && Date.parse(row.asOf) <= cursor * 1000;
+      return serverUsable ? row : { ...row, mark: null, marketValue: null, unrealized: null, mode: "UNAVAILABLE", pending: true, note: "Loading the replay premium…" };
+    });
+  }, [practice, replay.active, replay.cursor, optionSession, replayMarks]);
+  const currentSummary = replay.active && sessionSummary && sessionSummary.session === optionSession ? sessionSummary : null;
+  const summaryHasActivity = Boolean(currentSummary && (currentSummary.trades.length > 0 || currentSummary.openCount > 0 || currentSummary.waitingCount > 0));
+  const completionKey = replay.active && replay.status === "completed" && summaryHasActivity ? optionSession : null;
+  const summaryOpen = Boolean(currentSummary) && (summaryRequested || (completionKey != null && completionKey !== summaryShownFor));
+  const closeSummary = useCallback(() => {
+    setSummaryRequested(false);
+    if (completionKey) setSummaryShownFor(completionKey);
+  }, [completionKey]);
+
+  function leaveReplay() {
+    setReplay((current) => ({ ...current, active: false, status: "idle" }));
+  }
+
+  function requestExitReplay() {
+    if (summaryHasActivity) setSummaryRequested(true);
+    else leaveReplay();
+  }
+
+  function returnToStart() {
+    settledThrough.current = replay.sessionOpen ?? 0;
+    if (!sessionOpenCount && replay.date) ensureOptionSession(replay.date, true);
+    setReplay((current) => ({ ...current, cursor: current.sessionOpen, status: "ready" }));
+  }
+  const hiddenBookRows = (practice ?? []).filter((row) => row.contract).length - bookRows.filter((row) => row.contract).length;
+  const replayTotals = useMemo(() => {
+    if (!replay.active) return null;
+    let unrealized = 0;
+    let value = 0;
+    for (const row of bookRows) {
+      if (row.unrealized != null) unrealized += Number(row.unrealized) || 0;
+      if (row.marketValue != null) value += Number(row.marketValue) || 0;
+    }
+    return { unrealized: signedRupees(unrealized), holdings: `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` };
+  }, [bookRows, replay.active]);
+
+  function ensureOptionSession(date: string, rotate = false) {
+    const existing = rotate ? null : optionSessions[date] ?? (date === replay.date ? adoptedSession : null);
+    if (existing) return existing;
+    const created = newReplaySession(date);
+    const next = { ...optionSessions, [date]: created };
+    setOptionSessions(next);
+    setReplayMarks({});
+    localStorage.setItem(optionSessionKey(desk.user?.email ?? ""), JSON.stringify(next));
+    return created;
+  }
+
+  function orderFromChain(draft: OptionOrderDraft) {
+    if (!draft.replay) return setOrderDraft(draft);
+    setOrderDraft({ ...draft, replay: { date: draft.replay.date, session: draft.replay.session || ensureOptionSession(draft.replay.date) } });
+  }
+
+  function exitBlock(row: BookPosition) {
+    if (!row.replaySession) return replay.active ? "Exit replay to close a live-snapshot position." : null;
+    if (!replay.active || row.replaySession !== optionSession) return `Open replay ${row.replaySession.slice(0, 10)} to close this position at its replay price.`;
+    if (row.beforeEntry) return "Move the replay past this position's entry time to trade it.";
+    return null;
+  }
+
+  const ticketDraft = orderDraft && (orderDraft.replay ? replay.active && orderDraft.replay.date === replay.date : !replay.active) ? orderDraft : null;
 
   function selectSymbol(next: string) {
     setQuery("");
     setHits([]);
+    const contract = parseOptionLedgerSymbol(next);
+    if (contract) {
+      setOptionView({
+        securityId: "",
+        kind: findIndex(contract.underlying) ? "index" : "equity",
+        underlying: contract.underlying,
+        name: contract.underlying,
+        expiry: contract.expiry,
+        strike: contract.strike,
+        right: contract.right,
+        ltp: null,
+      });
+      setChainOpen(true);
+      return;
+    }
+    setOptionView(null);
     desk.chooseSymbol(next);
   }
 
@@ -360,41 +798,48 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     toggleSymbol(symbol, named?.name ?? symbol, named?.exchange ?? "NSE");
   }
 
-  function submitDemo() {
-    if (!replay.active || replay.playhead == null) {
-      setTradeError("Turn Demo on and choose a historical date before submitting a demo order.");
-      return;
-    }
-    const qty = Number(quantity);
-    const limit = orderType === "LIMIT" ? Number(limitPrice) : null;
-    const candle = replay.playhead == null ? null : candles.find((item) => item.time === replay.playhead) ?? null;
-    const result = placeDemoOrder(book, {
-      id: crypto.randomUUID(),
-      symbol,
-      side,
-      type: orderType,
-      quantity: qty,
-      limitPrice: limit,
-      candle,
-      playheadTime: replay.playhead,
-      revealTime: replay.playhead,
-      paused: replay.active ? !replay.playing : true,
-    });
-    if (!result.ok) {
-      setTradeError(result.error);
-      return;
-    }
-    setBook(result.book);
-    setTradeError("");
-    desk.toast("Demo order updated the replay book only.");
+  function settleReplayBook(currentBook: DemoBook, cursor: number, date: string): DemoBook {
+    const freshly = completedMinutes(tapeRef.current, cursor).filter((bar) => bar.time + 60 > settledThrough.current && bar.time + 60 <= cursor);
+    let next = currentBook;
+    for (const bar of freshly) next = settleDemoOrders(next, symbol, bar, bar.time + 60, bar.time + 60, date);
+    if (freshly.length) settledThrough.current = cursor;
+    const forming = simulatedBar(tapeRef.current, cursor);
+    if (forming && cursor < forming.time + 60) next = settleDemoOrders(next, symbol, forming, cursor, cursor, date);
+    return next === currentBook ? currentBook : next;
   }
 
-  const priceLabel = replay.active && playCandle ? money(playCandle.close) : quote ? money(quote.last) : "—";
-  const changeLabel = replay.active
+  function openExit(row: BookPosition) {
+    const contract = row.contract;
+    if (!contract) return;
+    setOrderDraft({
+      underlying: contract.underlying,
+      name: row.name,
+      expiry: contract.expiry,
+      strike: contract.strike,
+      right: contract.right,
+      action: "SELL",
+      ltp: row.replaySession || row.mark == null ? null : Number(row.mark),
+      asOf: row.replaySession ? null : row.asOf ?? null,
+      lotSize: row.lotSize ?? null,
+      heldLots: row.lots ?? null,
+      avgCost: Number.isFinite(Number(row.averageCost)) ? Number(row.averageCost) : null,
+      replay: row.replaySession ? { session: row.replaySession, date: row.replaySession.slice(0, 10) } : null,
+    });
+  }
+
+  const priceLabel = optionView && playCandle ? money(playCandle.close) : replay.active && playCandle ? money(playCandle.close) : quote ? money(quote.last) : "—";
+  const changeLabel = optionView || replay.active
     ? replayMove == null ? "" : `${replayMove >= 0 ? "+" : ""}${replayMove.toFixed(2)}`
     : liveMove ? `${liveMove.abs >= 0 ? "+" : ""}${liveMove.abs.toFixed(2)} (${liveMove.pct.toFixed(2)}%)` : "";
-  const changeTone = replay.active ? tone(replayMove) : tone(liveMove?.abs);
-  const stamp = replay.active && playCandle ? `${formatIst(playCandle.time)} · simulated` : quote ? `${freshness(quote, desk.online)} · ${istTime(quote.asOf)}` : quoteError || "Quote unavailable";
+  const changeTone = optionView || replay.active ? tone(replayMove) : tone(liveMove?.abs);
+  const marketClosed = !replay.active && quote != null && !quote.marketOpen && quote.mode !== "DEMO";
+  const feedLabel = optionView ? "Contract history" : replay.active ? "Simulated" : marketClosed ? "Market closed" : feedStatusLabel(stream.status);
+  const feedStamp = stream.updatedAt ? istTime(new Date(stream.updatedAt * 1000).toISOString()) : quote ? istTime(quote.asOf) : "";
+  const stamp = optionView
+    ? ["Contract history", optionView.expiry, candleMeta.message].filter(Boolean).join(" · ")
+    : replay.active
+    ? [REPLAY_STATUS_LABEL[replay.status], replay.cursor != null ? formatIst(replay.cursor) : replay.date, "simulated"].filter(Boolean).join(" · ")
+    : [feedLabel, feedStamp, stream.detail].filter(Boolean).join(" · ") || quoteError || "Quote unavailable";
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -402,12 +847,13 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={36} />
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <span>{symbol}</span>
-            <span className="text-[11px] font-normal text-muted">NSE</span>
-            {replay.active ? <DemoModeBadge>SIMULATED</DemoModeBadge> : <span className="text-[10px] font-normal text-muted">{quote?.marketOpen ? "Live session" : "Latest available"}</span>}
+            <span>{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
+            <span className="text-[11px] font-normal text-muted">{optionView ? optionView.expiry : "NSE"}</span>
+            {optionView ? <button type="button" className="rounded-full border border-border px-2 py-0.5 text-[10px] font-normal text-muted" onClick={() => setOptionView(null)}>Back to {optionView.underlying}</button> : null}
+            {replay.active ? <span className="text-[11px] font-semibold uppercase tracking-wide text-info">Historical replay</span> : <span className={`text-[11px] font-normal ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stream.detail || undefined}>{feedLabel}</span>}
           </div>
           <div className="flex items-baseline gap-2 whitespace-nowrap">
-            <span className="num text-xs">{priceLabel}</span>
+            <span className="num text-sm font-semibold">{priceLabel}</span>
             {changeLabel ? <span className={`num text-xs ${changeTone}`}>{changeLabel}</span> : null}
           </div>
           <div className="text-[10px] text-muted">{stamp}</div>
@@ -415,16 +861,40 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         <IconButton label={watched ? "Remove from watchlist" : "Add to watchlist"} active={watched} onClick={toggleWatch}>
           <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
         </IconButton>
-        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto" role="toolbar" aria-label="Timeframe">
+        <div className="flex shrink-0 gap-0.5 rounded-input border border-border bg-elevated p-0.5" role="toolbar" aria-label="Timeframe">
           {CHART_SPANS.map((span) => (
-            <button key={span} type="button" className={`shrink-0 rounded-lg px-2 py-1 text-[11px] ${timeframe === span ? "bg-elevated font-semibold text-text" : "text-muted hover:bg-elevated"}`} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
+            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2.5 text-data", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
         </div>
-        <button type="button" className={`rounded-full px-3 py-1 text-xs font-semibold ${replay.active ? "bg-demo text-white" : "border border-demo text-demo"}`} onClick={() => setReplay((current) => ({ ...current, active: !current.active, playing: false }))}>{replay.active ? "Exit demo" : "Demo"}</button>
-        <button type="button" className="rounded-full border border-primary px-3 py-1 text-xs font-semibold text-primary" onClick={() => { setTradeOpen(true); setTradeError(""); }}>Demo Trade</button>
-        {desk.mode === "live" ? null : <Link className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-white" href={`/terminal?symbol=${symbol}&side=BUY`}>Practice trade</Link>}
-        <Link href={`/options?symbol=${encodeURIComponent(symbol)}`} title="Option chain" aria-label="Option chain" className="rounded-full border border-border px-3 py-1 text-xs font-semibold">Option chain</Link>
+        <ChartHeaderTools
+          chartType={chartType}
+          onChartType={setChartType}
+          indicatorsOpen={settings}
+          onIndicators={() => setSettings((value) => !value)}
+          canUndo={historyTick >= 0 && pastRef.current.length > 0}
+          canRedo={futureRef.current.length > 0}
+          onUndo={undoDrawings}
+          onRedo={redoDrawings}
+          volumeVisible={flags.volume}
+          onToggleVolume={() => setFlags((current) => ({ ...current, volume: !current.volume }))}
+          onZoom={(direction) => handleRef.current?.zoom(direction)}
+          onReset={() => handleRef.current?.reset()}
+          refreshing={refreshing}
+          onRefresh={() => { setRefreshing(true); setReload((value) => value + 1); }}
+          full={full}
+          onFull={toggleFullScreen}
+        >
+          <button type="button" aria-pressed={replay.active} className={cx("h-10 shrink-0 rounded-input px-3 text-[13px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>
+          {replay.active && replay.date ? <span className="num shrink-0 whitespace-nowrap rounded-full border border-demo/30 px-2.5 py-1 text-[11px] font-medium text-demo" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
+          <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-10 shrink-0 rounded-input px-3 text-[13px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
+        </ChartHeaderTools>
       </div>
+      {LABEL_TOOLS.has(tool) ? (
+        <label className="flex items-center gap-2 border-b border-border bg-panel px-3 py-1.5 text-xs text-muted">
+          Label
+          <input className="min-w-0 flex-1 bg-transparent text-text" value={annotation} placeholder={tool === "price" ? "Uses the clicked price when empty" : "Note"} onChange={(event) => setAnnotation(event.target.value)} />
+        </label>
+      ) : null}
       {settings ? (
         <div className="flex flex-wrap gap-3 border-b border-border bg-panel px-3 py-2 text-xs">
           {(["sma", "ema", "vwap", "volume", "supertrend"] as const).map((flag) => (
@@ -434,90 +904,132 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         </div>
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <nav className="flex h-12 shrink-0 gap-1 overflow-x-auto border-b border-border bg-panel p-1 lg:h-auto lg:w-12 lg:flex-col lg:items-center lg:overflow-y-auto lg:border-b-0 lg:border-r lg:py-2" aria-label="Chart tools">
-          {DRAW_TOOLS.map(({ id, label, icon: Icon }) => (
-            <IconButton key={id} label={label} active={tool === id} onClick={() => setTool(id)}><Icon className="h-4 w-4" aria-hidden /></IconButton>
-          ))}
-          <span className="mx-1 h-5 w-px shrink-0 bg-border lg:mx-0 lg:my-1 lg:h-px lg:w-5" />
-          {CHART_TYPES.map(({ id, label, icon: Icon }) => (
-            <IconButton key={id} label={label} active={chartType === id} onClick={() => setChartType(id)}><Icon className="h-4 w-4" aria-hidden /></IconButton>
-          ))}
-          <IconButton label={flags.volume ? "Hide volume" : "Show volume"} active={flags.volume} onClick={() => setFlags((current) => ({ ...current, volume: !current.volume }))}><BarChart3 className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label="Indicators" active={settings} onClick={() => setSettings((value) => !value)}><Activity className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label="Zoom in" onClick={() => handleRef.current?.zoom(1)}><ZoomIn className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label="Zoom out" onClick={() => handleRef.current?.zoom(-1)}><ZoomOut className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label="Reset chart view" onClick={() => handleRef.current?.reset()}><RotateCcw className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label={refreshing ? "Refreshing chart" : "Refresh chart"} disabled={refreshing} onClick={() => { setRefreshing(true); setReload((value) => value + 1); }}><RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} aria-hidden /></IconButton>
-          <IconButton label={full ? "Exit full screen" : "Full screen"} onClick={() => {
-            const node = rootRef.current;
-            if (!node) return;
-            if (document.fullscreenElement) {
-              void document.exitFullscreen();
-              setFull(false);
-            } else {
-              void node.requestFullscreen();
-              setFull(true);
-            }
-          }}>
-            {full ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />}
-          </IconButton>
-        </nav>
+        <ChartToolbar
+          tool={tool}
+          onTool={setTool}
+          lockAll={lockAll}
+          onLockAll={() => setLockAll((value) => !value)}
+          drawingsHidden={drawingsHidden}
+          indicatorsHidden={indicatorsHidden}
+          onVisibility={applyVisibility}
+          onRemove={removeObjects}
+          objectsOpen={objectsOpen}
+          onObjects={() => setObjectsOpen((value) => !value)}
+        />
+        {objectsOpen ? (
+          <aside className="max-h-48 shrink-0 overflow-auto border-b border-border bg-panel lg:max-h-none lg:w-52 lg:border-b-0 lg:border-r">
+            <p className="px-3 pt-2 text-[11px] font-semibold text-muted">Drawings</p>
+            <DrawingList drawings={drawings} selectedId={selectedDrawing} onSelect={setSelectedDrawing} onChange={rememberDrawings} />
+          </aside>
+        ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      {replay.active ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-primary/30 bg-cream px-3 py-2 text-xs">
-          <DemoModeBadge>DEMO MODE</DemoModeBadge>
-          <label>Date <select aria-label="Replay date" className="ml-1 bg-panel py-1" value={replay.day} onChange={(event) => {
-            const day = event.target.value;
-            setReplay((current) => ({ ...current, day, playhead: firstCandleOn(candles, day), playing: false }));
-          }}>{days.map((day) => <option key={day} value={day}>{day}</option>)}</select></label>
-          <span className="text-muted">{playCandle ? formatIst(playCandle.time) : "No bar on this date."}</span>
-          <IconButton label={replay.playing ? "Pause replay" : "Play replay"} disabled={!playCandle} onClick={() => setReplay((current) => ({ ...current, playing: !current.playing }))}>{replay.playing ? <Pause className="h-4 w-4" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}</IconButton>
-          <IconButton label="Resume replay" disabled={replay.playing || !playCandle} onClick={() => setReplay((current) => ({ ...current, playing: true }))}><Play className="h-4 w-4" aria-hidden /></IconButton>
-          <IconButton label="Restart replay" onClick={() => setRestart(true)}><RotateCcw className="h-4 w-4" aria-hidden /></IconButton>
-          <label>Speed <select aria-label="Replay speed" className="ml-1 bg-panel py-1" value={replay.speed} onChange={(event) => setReplay((current) => ({ ...current, speed: Number(event.target.value) as Replay["speed"] }))}>{SPEEDS.map((speed) => <option key={speed} value={speed}>{speed}x</option>)}</select></label>
-          <span className="text-muted">Replay starts at the first bar of the chosen date. The candle size stays {SPAN_LABEL[timeframe]}.</span>
-        </div>
-      ) : null}
+      {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={priorSession} /> : null}
+      {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="relative flex min-h-0 flex-1 flex-col">
-            {loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
-            {chartError ? <p className="p-4 text-sm text-loss">{chartError}</p> : null}
-            {!loading && !chartError && shown.length === 0 ? <p className="p-4 text-sm text-muted">{replay.active ? "No candle is visible at this replay time." : "No candles were returned for this symbol and interval."}</p> : null}
+            {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
+            {replay.active && replay.status === "loading" ? <p className="p-4 text-sm text-info">Loading the selected session…</p> : null}
+            {(!replay.active || optionView) && chartError ? <p className="p-4 text-sm text-loss">{chartError}</p> : null}
+            {((!optionView && replay.active && replay.status !== "loading") || ((!replay.active || optionView) && !loading && !chartError)) && shown.length === 0 ? <p className="p-4 text-sm text-muted">{optionView ? "Historical candles were not returned for this option contract." : replay.active ? replay.message || "No candle is visible at this replay time." : "No candles were returned for this symbol and interval."}</p> : null}
             {shown.length > 0 ? (
               <ChartPanel
                 candles={shown}
                 compare={[]}
                 chartType={chartType}
-                showSma={flags.sma}
-                showEma={flags.ema}
-                showBands={flags.bands}
-                showVwap={flags.vwap}
+                showSma={flags.sma && !indicatorsHidden}
+                showEma={flags.ema && !indicatorsHidden}
+                showBands={flags.bands && !indicatorsHidden}
+                showVwap={flags.vwap && !indicatorsHidden}
                 showVolume={flags.volume}
-                showSupertrend={flags.supertrend}
+                showSupertrend={flags.supertrend && !indicatorsHidden}
                 indicators={indicators}
-                oscillator={flags.oscillator}
+                oscillator={indicatorsHidden ? "none" : flags.oscillator}
                 tool={tool}
-                annotation=""
+                annotation={annotation}
+                magnet={drawPrefs.magnet}
+                stay={drawPrefs.stay}
+                lockAll={lockAll}
+                cursorStyle={drawPrefs.cursor}
+                hidden={drawingsHidden}
+                onTool={setTool}
+                onSelect={setSelectedDrawing}
+                span={timeframe}
+                focusId={selectedDrawing}
                 drawings={drawings}
-                onDrawings={(next) => { setDrawings(next); saveDrawings(symbol, next); }}
+                onDrawings={rememberDrawings}
                 handleRef={handleRef}
                 scheme={desk.theme}
-                streamKey={`${symbol}-${timeframe}-${replay.active ? "replay" : "live"}`}
+                paint={desk.appearance.chart}
+                streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
+                references={sessionLevels}
+              />
+            ) : null}
+            {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
+            {chainOpen ? (
+              <OptionChainPanel
+                symbol={symbol}
+                replay={replay.active ? { date: replay.date, session: optionSession, cursor: replay.cursor, spot: playCandle?.close ?? null, spotSymbol: symbol } : null}
+                onClose={() => setChainOpen(false)}
+                onOpenChart={(contract) => setOptionView(contract)}
+                onOrder={orderFromChain}
+                ledgerTick={ledgerTick}
               />
             ) : null}
           </div>
-          <p className="border-t border-border px-3 py-1 text-[11px] text-muted">{stamp}{candleMeta.mode ? ` · ${candleMeta.mode}` : ""} {candleMeta.message}</p>
+      {replay.active ? (
+        <ReplayBar
+          date={replay.date}
+          today={kolkataParts(new Date()).dateKey}
+          cursor={replay.cursor}
+          sessionOpen={replay.sessionOpen}
+          sessionClose={replay.sessionClose}
+          status={replay.status}
+          speed={replay.speed}
+          timeframe={timeframe}
+          message={replay.message}
+          onDate={(date) => {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date === replay.date) return;
+            const dirty = sessionOpenCount > 0 || book.positions.length > 0 || book.fills.length > 0 || book.trades.length > 0 || book.orders.some((order) => order.status === "OPEN");
+            if (dirty) {
+              setPendingDate(date);
+              return;
+            }
+            setReplay((current) => ({ ...current, date, status: "loading", cursor: null }));
+          }}
+          onToggle={() => setReplay((current) => {
+            if (current.status === "playing") return { ...current, status: "paused" };
+            if (current.status === "ready" || current.status === "paused") return { ...current, status: "playing" };
+            return current;
+          })}
+          onStep={(direction) => setReplay((current) => {
+            if (current.cursor == null || current.sessionOpen == null || current.sessionClose == null) return current;
+            const cursor = stepCursor(current.cursor, current.sessionOpen, current.sessionClose, direction);
+            setBook((bookNow) => settleReplayBook(bookNow, cursor, current.date));
+            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" ? "playing" : "paused" };
+          })}
+          onSeek={(next) => setReplay((current) => {
+            if (current.sessionOpen == null || current.sessionClose == null || !Number.isFinite(next)) return current;
+            const cursor = Math.min(current.sessionClose, Math.max(current.sessionOpen, next));
+            if (cursor < settledThrough.current) settledThrough.current = cursor;
+            setBook((bookNow) => settleReplayBook(bookNow, cursor, current.date));
+            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" ? "playing" : "paused" };
+          })}
+          onReset={() => setRestart(true)}
+          onSpeed={(speed) => setReplay((current) => ({ ...current, speed }))}
+        />
+      ) : null}
+          <p className="border-t border-border px-3 py-1 text-[11px] text-muted">{replay.active ? stamp : `${stamp}${candleMeta.mode ? ` · ${candleMeta.mode}` : ""} ${candleMeta.message}`}</p>
           {variant === "positions" ? (
             <section className="border-t border-border bg-panel">
-              <div className="flex items-center gap-2 px-3 py-1 text-xs">
+              <div className="flex h-10 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Positions and orders">
                 {(["open", "closed", "orders", "history", "replay"] as const).map((tab) => (
-                  <button key={tab} className={dock === tab ? "font-semibold text-text" : "text-muted"} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
+                  <button key={tab} type="button" role="tab" aria-selected={dock === tab} className={cx("relative h-10 px-3 text-[13px] font-medium", dock === tab ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
                 ))}
-                <button className="ml-auto text-muted" onClick={() => setDockOpen((value) => !value)}>{dockOpen ? "Collapse" : "Expand"}</button>
+                <button type="button" className="ml-auto h-7 rounded-input px-2 text-data text-muted hover:bg-elevated hover:text-text" onClick={() => setDockOpen((value) => !value)}>{dockOpen ? "Collapse" : "Expand"}</button>
               </div>
               {dockOpen ? (
-                <div className="max-h-52 overflow-auto px-3 pb-2">
-                  {dock === "open" ? <OpenTable mode={desk.mode} practice={practice} practiceError={practiceError} broker={brokerPositions} brokerNote={brokerNote} onPick={selectSymbol} selected={symbol} /> : null}
+                <div className="flex max-h-60 min-h-0 flex-col">
+                  {dock === "open" ? <OpenTable mode={desk.mode} practice={practice} practiceError={practiceError} broker={brokerPositions} brokerNote={brokerNote} onPick={selectSymbol} /> : null}
                   {dock === "closed" ? <ClosedTable rows={(activity?.executions ?? []).filter((row) => Number(row.realized) !== 0)} onPick={selectSymbol} /> : null}
                   {dock === "orders" ? <OrderTable mode={desk.mode} rows={activity?.orders ?? []} note={brokerNote} onPick={selectSymbol} /> : null}
                   {dock === "history" ? <HistoryTable rows={activity?.executions ?? []} onPick={selectSymbol} /> : null}
@@ -528,7 +1040,54 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           ) : null}
         </div>
         </div>
-        <aside className="flex h-64 w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:w-72 lg:border-l lg:border-t-0">
+        {ticketDraft ? (
+          <OptionOrderTicket
+            key={draftKey(ticketDraft)}
+            draft={ticketDraft}
+            replayCursor={replay.active ? replay.cursor : null}
+            onClose={closeTicket}
+            onFilled={() => {
+              setSideRail("positions");
+              setRailCollapsed(false);
+              setLedgerTick((value) => value + 1);
+              refreshPractice.current();
+              window.dispatchEvent(new Event("td-ledger"));
+            }}
+          />
+        ) : null}
+        <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "h-12 lg:w-12" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[22rem]" : "h-64 lg:w-72"}`}>
+          <div className="flex items-center gap-1 border-b border-border px-2 py-1">
+            {railCollapsed ? null : (
+              <>
+                <button type="button" className={`rounded-full px-2 py-1 text-xs ${sideRail === "watch" ? "bg-primary font-semibold text-on-primary" : "text-muted"}`} onClick={() => setSideRail("watch")}>Watchlist</button>
+                <button type="button" className={`rounded-full px-2 py-1 text-xs ${sideRail === "positions" ? "bg-primary font-semibold text-on-primary" : "text-muted"}`} onClick={() => setSideRail("positions")}>Positions{practice ? ` ${bookRows.filter((row) => row.contract).length}` : ""}</button>
+              </>
+            )}
+            <button type="button" className="ml-auto rounded px-2 py-1 text-[11px] text-muted" title={railCollapsed ? "Expand side panel" : "Minimize side panel"} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? "Open" : "Min"}</button>
+          </div>
+          {railCollapsed ? null : sideRail === "positions" ? (
+            <OptionBook
+              buyingPower={ledger?.cashAvailable ?? "—"}
+              reserved={ledger?.cashReserved ?? "—"}
+              holdings={replayTotals?.holdings ?? ledger?.holdingsValue ?? "—"}
+              unrealized={replayTotals?.unrealized ?? ledger?.unrealized ?? "—"}
+              realized={ledger?.realized ?? "—"}
+              realizedToday={ledger?.realizedToday ?? "—"}
+              positions={bookRows}
+              summary={currentSummary}
+              highlightTradeId={replay.active ? closedHighlight : null}
+              onDismissHighlight={() => setClosedHighlight(null)}
+              context={replay.active ? { mode: "replay", date: replay.date, cursor: replay.cursor, sessionOpen: replay.sessionOpen } : { mode: desk.mode === "live" ? "live" : "demo" }}
+              exitBlock={exitBlock}
+              hiddenCount={hiddenBookRows}
+              orders={activity?.orders ?? []}
+              trades={closedTrades}
+              error={practiceError}
+              onOpenChain={() => setChainOpen(true)}
+              onViewChart={selectSymbol}
+              onExit={openExit}
+            />
+          ) : <>
           <div className="border-b border-border p-2">
             <StockSearchField
               query={query}
@@ -565,7 +1124,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               <h2 className="text-sm font-semibold">Position</h2>
               <p className="mt-1 text-[11px] text-muted">{desk.mode === "live" ? "Read-only broker snapshot." : "Practice ledger. Long only. This is not a broker position."}</p>
               {desk.mode === "live" ? (
-                openPositions && openPositions.length === 0 ? <EmptyPositions onTrade={() => setTradeOpen(true)} symbol={symbol} live /> : <BrokerDetail rows={brokerPositions} symbol={symbol} note={brokerNote} />
+                openPositions && openPositions.length === 0 ? <EmptyPositions symbol={symbol} live /> : <BrokerDetail rows={brokerPositions} symbol={symbol} note={brokerNote} />
               ) : practiceRow ? <PracticeDetail row={practiceRow} onExit={() => setExitSymbol(practiceRow)} /> : (
                 <div className="mt-3 text-sm">
                   <p>No open practice position for {symbol}.</p>
@@ -574,30 +1133,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               )}
             </div>
           ) : null}
+          </>}
         </aside>
       </div>
-      {tradeOpen ? (
-        <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-panel p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-sm font-semibold"><StockLogo symbol={symbol} size={28} /> DEMO TRADE · {symbol}</h2>
-              <button type="button" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-elevated" aria-label="Close demo trade" title="Close" onClick={() => setTradeOpen(false)}><X className="h-4 w-4" aria-hidden /></button>
-            </div>
-            <p className="mt-1 text-xs text-muted">This order stays in the browser replay book. It is not sent to the practice ledger or to a broker.</p>
-            {!replay.active ? <p className="mt-2 text-xs text-loss">Turn Demo on and choose a historical date before a market order can fill.</p> : null}
-            <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-              <button className={`rounded-full py-1 ${side === "BUY" ? "bg-profit text-white" : "border border-border"}`} onClick={() => setSide("BUY")}>Buy</button>
-              <button className={`rounded-full py-1 ${side === "SELL" ? "bg-loss text-white" : "border border-border"}`} onClick={() => setSide("SELL")}>Sell</button>
-              <label className="text-xs text-muted">Quantity<input className="mt-1 w-full" value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" /></label>
-              <label className="text-xs text-muted">Type<select className="mt-1 w-full" value={orderType} onChange={(event) => setOrderType(event.target.value as "MARKET" | "LIMIT")}><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></label>
-              {orderType === "LIMIT" ? <label className="col-span-2 text-xs text-muted">Limit price<input className="mt-1 w-full" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal" /></label> : null}
-            </div>
-            <p className="mt-3 text-xs text-muted">Available ₹{formatDemoRupees(book.cashPaise)}. {estimate(orderType, side, quantity, limitPrice, playCandle?.close ?? null, book.cashPaise)} A market fill uses the replay candle close. A limit fill uses the limit only after that price trades on the revealed candle. Playback is {replay.playing ? "running" : "paused"}.</p>
-            {tradeError ? <p className="mt-2 text-xs text-loss">{tradeError}</p> : null}
-            <button className="mt-3 w-full rounded-full bg-demo py-2 text-sm font-semibold text-white" onClick={submitDemo}>Submit demo order</button>
-          </div>
-        </div>
-      ) : null}
       {exitSymbol ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-sm rounded-2xl border border-border bg-panel p-4 text-sm">
@@ -605,7 +1143,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <p className="mt-2 text-xs text-muted">Places a practice market sell for {exitSymbol.quantity} shares. This uses the practice ledger, not the replay book, and it is not sent to a broker.</p>
             <div className="mt-4 flex justify-end gap-2">
               <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => setExitSymbol(null)}>Back</button>
-              <button className="rounded-full bg-loss px-3 py-1 text-xs text-white" onClick={() => {
+              <button className="rounded-full bg-loss px-3 py-1 text-xs text-on-signal" onClick={() => {
                 void api<{ status?: string; message?: string }>("/api/orders", { symbol: exitSymbol.symbol, side: "SELL", type: "MARKET", quantity: exitSymbol.quantity, idempotencyKey: crypto.randomUUID().replace(/-/g, "").slice(0, 20) })
                   .then((result) => { desk.toast(`${exitSymbol.symbol} ${result.status ?? "sent"}. ${result.message ?? ""}`); setExitSymbol(null); })
                   .catch((error: unknown) => desk.toast(error instanceof Error ? error.message : "Exit failed."));
@@ -614,36 +1152,59 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </div>
         </div>
       ) : null}
+      {currentSummary ? (
+        <ReplaySummaryDialog
+          open={summaryOpen}
+          reason={summaryRequested ? "exit" : "completed"}
+          date={replay.date}
+          summary={currentSummary}
+          onKeepReviewing={closeSummary}
+          onRestart={() => { closeSummary(); returnToStart(); }}
+          onBackToLive={() => { closeSummary(); leaveReplay(); }}
+        />
+      ) : null}
+      {pendingDate ? (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-panel p-4 text-sm">
+            <h2 className="font-semibold">Change the replay date?</h2>
+            <p className="mt-2 text-xs text-muted">The paper book already has trades. Continue keeps this virtual account and its history. A fresh book starts again at the chosen balance and removes the current paper trades from this browser.</p>
+            {sessionOpenCount ? <p className="mt-2 text-xs text-warning">You hold {sessionOpenCount} replay option position{sessionOpenCount === 1 ? "" : "s"} from {replay.date}. They stay open on the practice ledger at their last replay mark. Come back to {replay.date} to close them.</p> : null}
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => setPendingDate(null)}>Cancel</button>
+              <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => { const date = pendingDate; setPendingDate(null); setReplay((current) => ({ ...current, date, status: "loading", cursor: null })); }}>Continue this account</button>
+              <button className="rounded-full bg-loss px-3 py-1 text-xs text-on-signal" onClick={() => { const date = pendingDate; setPendingDate(null); setBook(emptyDemoBook(book.startPaise)); setReplay((current) => ({ ...current, date, status: "loading", cursor: null })); }}>Fresh paper book</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {restart ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-panel p-4 text-sm">
             <h2 className="font-semibold">Restart this replay?</h2>
-            <p className="mt-2 text-xs text-muted">Returning to the session open keeps the demo book. Resetting the book clears this browser’s replay cash, positions, and orders. Neither action changes the practice ledger.</p>
+            <p className="mt-2 text-xs text-muted">Returning to the session open keeps the paper book. Resetting the book starts a new practice balance and keeps this browser’s previous trades only until you confirm the reset. Neither action changes the practice ledger.</p>
+            <p className="mt-2 text-xs text-muted">{sessionOpenCount
+              ? `You hold ${sessionOpenCount} replay option position${sessionOpenCount === 1 ? "" : "s"} in this session. They stay open, and new option orders are accepted only at or after your last option fill time. Close them to start a fresh option session.`
+              : "Option trades from this replay stay in Orders and History. A fresh option session starts from the session open."}</p>
+            <label className="mt-3 block text-xs text-muted">Starting virtual balance, rupees<input className="mt-1 w-full" value={startRupees} onChange={(event) => setStartRupees(event.target.value)} inputMode="decimal" /></label>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => setRestart(false)}>Cancel</button>
-              <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => { setReplay((current) => ({ ...current, playhead: firstCandleOn(candles, current.day), playing: false })); setRestart(false); }}>Return to start</button>
-              <button className="rounded-full bg-loss px-3 py-1 text-xs text-white" onClick={() => { setBook(emptyDemoBook()); setReplay((current) => ({ ...current, playhead: firstCandleOn(candles, current.day), playing: false })); setRestart(false); }}>Reset demo book</button>
+              <button className="rounded-full border border-border px-3 py-1 text-xs" onClick={() => { returnToStart(); setRestart(false); }}>Return to start</button>
+              <button className="rounded-full bg-loss px-3 py-1 text-xs text-on-signal" onClick={() => {
+                let start = book.startPaise;
+                try { start = Number(rupeesToPaise(startRupees)); } catch { desk.toast("Enter a starting balance in rupees."); return; }
+                if (start <= 0) { desk.toast("Enter a starting balance above zero."); return; }
+                settledThrough.current = replay.sessionOpen ?? 0;
+                if (!sessionOpenCount && replay.date) ensureOptionSession(replay.date, true);
+                setBook(emptyDemoBook(start));
+                setReplay((current) => ({ ...current, cursor: current.sessionOpen, status: "ready" }));
+                setRestart(false);
+              }}>Reset paper book</button>
             </div>
           </div>
         </div>
       ) : null}
     </div>
   );
-}
-
-function estimate(type: "MARKET" | "LIMIT", side: "BUY" | "SELL", quantity: string, limit: string, close: number | null, cashPaise: number) {
-  const qty = Number(quantity);
-  const price = type === "LIMIT" ? Number(limit) : close;
-  if (!Number.isInteger(qty) || qty <= 0 || price == null || !Number.isFinite(price) || price <= 0) return "Enter a quantity to estimate the order.";
-  const paise = Number(rupeesToPaise(price.toFixed(2)));
-  const notional = paise * qty;
-  const charges = Number(calculateCharges(side, BigInt(paise) * BigInt(qty), DEFAULT_CHARGES).total);
-  const remaining = side === "BUY" ? cashPaise - notional - charges : cashPaise + notional - charges;
-  return `Estimated value ₹${formatDemoRupees(notional)}. Fees ₹${formatDemoRupees(charges)}. Remaining cash ₹${formatDemoRupees(remaining)}.`;
-}
-
-function formatDay(unix: number) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(unix * 1000));
 }
 
 function PracticeDetail({ row, onExit }: { row: PracticePosition; onExit: () => void }) {
@@ -664,7 +1225,7 @@ function PracticeDetail({ row, onExit }: { row: PracticePosition; onExit: () => 
       <Row label="Realized" value={row.realized} />
       <Row label="Mark time" value={row.asOf ? istTime(row.asOf) : "unavailable"} />
     </dl>
-    <button className="mt-3 rounded-full bg-loss px-3 py-1 text-xs text-white" onClick={onExit}>Exit practice position</button>
+    <button className="mt-3 rounded-full bg-loss px-3 py-1 text-xs text-on-signal" onClick={onExit}>Exit practice position</button>
     </>
   );
 }
@@ -688,75 +1249,134 @@ function Row({ label, value }: { label: string; value: string }) {
   return <div className="flex justify-between gap-3 border-b border-border py-1"><dt className="text-muted">{label}</dt><dd className="num text-right">{value}</dd></div>;
 }
 
-function OpenTable({ mode, practice, practiceError, broker, brokerNote, onPick, selected }: { mode: "demo" | "live"; practice: PracticePosition[] | null; practiceError: string; broker: Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null; brokerNote: string; onPick: (symbol: string) => void; selected: string }) {
-  if (mode === "live") {
-    if (!broker) return <p className="py-3 text-xs text-muted">{brokerNote || "Broker positions are unavailable."}</p>;
-    if (broker.length === 0) return <p className="py-3 text-xs text-muted">No open broker positions were returned.</p>;
-    return (
-      <table className="text-xs"><thead><tr><th>Symbol</th><th>Side</th><th>Qty</th><th>Avg</th><th>Unrealized</th></tr></thead><tbody>
-        {broker.map((row) => <tr key={row.symbol} className={row.symbol === selected ? "bg-elevated" : ""}><td><button className="inline-flex items-center gap-2 text-primary" onClick={() => onPick(row.symbol)}><StockLogo symbol={row.symbol} size={22} />{row.symbol}</button></td><td>{row.side}</td><td className="num">{row.qty}</td><td className="num">{row.avg}</td><td className="num">{row.pnl}</td></tr>)}
-      </tbody></table>
-    );
-  }
-  if (practiceError) return <p className="py-3 text-xs text-loss">{practiceError}</p>;
-  if (!practice) return <p className="py-3 text-xs text-muted">Loading practice positions…</p>;
-  if (practice.length === 0) return <p className="py-3 text-xs text-muted">No open practice positions. Search a stock above, open its chart, or use Practice trade. Nothing here is a filled order until you confirm one.</p>;
+type BrokerRow = { symbol: string; qty: string; side: string; avg: string; pnl: string };
+type OrderRowData = PracticeBook["orders"][number];
+type FillRow = PracticeBook["executions"][number];
+
+function pnlClass(value: string | number | null | undefined) {
+  if (value == null || value === "" || value === "—") return "text-muted";
+  const text = String(value).trim();
+  const number = Number(text.replace(/[^\d.-]/g, ""));
+  if (!Number.isFinite(number) || number === 0) return "text-text";
+  return text.startsWith("-") || text.startsWith("−") || number < 0 ? "text-loss" : "text-profit";
+}
+
+function displaySymbol(symbol: string) {
+  const option = parseOptionLedgerSymbol(symbol);
+  return option ? `${option.underlying} ${option.strike} ${option.right}` : symbol;
+}
+
+function SymbolCell({ symbol, name, onPick }: { symbol: string; name?: string; onPick: (symbol: string) => void }) {
+  const option = parseOptionLedgerSymbol(symbol);
   return (
-    <table className="text-xs"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Last</th><th>Unrealized</th></tr></thead><tbody>
-      {practice.map((row) => <tr key={row.symbol} className={row.symbol === selected ? "bg-elevated" : ""}><td><button className="inline-flex items-center gap-2 text-primary" onClick={() => onPick(row.symbol)}><StockLogo symbol={row.symbol} name={row.name} size={22} />{row.symbol}</button></td><td className="num">{row.quantity}</td><td className="num">{row.averageCost}</td><td className="num">{row.mark ?? "—"}</td><td className="num">{row.unrealized ?? "—"}</td></tr>)}
-    </tbody></table>
+    <button type="button" className="inline-flex max-w-[16rem] items-center gap-2 text-left font-medium text-text hover:text-primary" onClick={() => onPick(symbol)}>
+      <StockLogo symbol={option?.underlying ?? symbol} name={name} size={20} />
+      <span className="min-w-0 truncate">{displaySymbol(symbol)}{option ? <span className="ml-1.5 text-[11px] font-normal text-muted">{option.expiry}</span> : null}</span>
+    </button>
   );
 }
 
-function ClosedTable({ rows, onPick }: { rows: PracticeBook["executions"]; onPick: (symbol: string) => void }) {
-  if (rows.length === 0) return <p className="py-3 text-xs text-muted">No closing fills are stored. The practice ledger keeps one long position and does not keep a separate closed-position book.</p>;
+function SideText({ side }: { side: string }) {
+  return <span className={cx("font-semibold", side === "BUY" ? "text-profit" : side === "SELL" ? "text-loss" : "text-text-2")}>{side}</span>;
+}
+
+function DockEmpty({ title, body }: { title: string; body?: string }) {
+  return <EmptyState title={title} body={body} />;
+}
+
+function OpenTable({ mode, practice, practiceError, broker, brokerNote, onPick }: { mode: "demo" | "live"; practice: PracticePosition[] | null; practiceError: string; broker: BrokerRow[] | null; brokerNote: string; onPick: (symbol: string) => void }) {
+  if (mode === "live") {
+    if (!broker) return <DockEmpty title="Broker positions are unavailable" body={brokerNote || undefined} />;
+    const columns: Column<BrokerRow>[] = [
+      { key: "symbol", header: "Symbol", render: (row) => <SymbolCell symbol={row.symbol} onPick={onPick} /> },
+      { key: "side", header: "Side", render: (row) => <SideText side={row.side} /> },
+      { key: "qty", header: "Qty", numeric: true, render: (row) => row.qty },
+      { key: "avg", header: "Avg", numeric: true, render: (row) => row.avg },
+      { key: "pnl", header: "Unrealized", numeric: true, render: (row) => <span className={pnlClass(row.pnl)}>{row.pnl}</span> },
+    ];
+    return <Table label="Broker positions" dense columns={columns} rows={broker} rowKey={(row) => row.symbol} empty={<DockEmpty title="No open broker positions" />} />;
+  }
+  if (practiceError) return <p className="px-3 py-4 text-data text-loss" role="alert">{practiceError}</p>;
+  if (!practice) return <p className="px-3 py-4 text-data text-muted">Loading practice positions…</p>;
+  const columns: Column<PracticePosition>[] = [
+    { key: "symbol", header: "Instrument", render: (row) => <SymbolCell symbol={row.symbol} name={row.name} onPick={onPick} /> },
+    { key: "lots", header: "Lots", numeric: true, render: (row) => row.lots ?? "—" },
+    { key: "qty", header: "Qty", numeric: true, render: (row) => row.quantity.toLocaleString("en-IN") },
+    { key: "avg", header: "Avg", numeric: true, render: (row) => row.averageCost },
+    { key: "ltp", header: "LTP", numeric: true, render: (row) => row.mark ?? "—" },
+    { key: "value", header: "Value", numeric: true, render: (row) => row.marketValue ?? "—" },
+    { key: "pnl", header: "Unrealized", numeric: true, render: (row) => <span className={cx("font-semibold", pnlClass(row.unrealized))}>{row.unrealized ?? "—"}</span> },
+  ];
+  return <Table label="Open positions" dense columns={columns} rows={practice} rowKey={(row) => row.symbol} empty={<DockEmpty title="No open positions" body="Buy a contract from the option chain and it appears here." />} />;
+}
+
+function ClosedTable({ rows, onPick }: { rows: FillRow[]; onPick: (symbol: string) => void }) {
+  if (rows.length === 0) return <DockEmpty title="No closed positions yet" body="Closing fills with realized P&L appear here." />;
   return <HistoryTable rows={rows} onPick={onPick} />;
 }
 
-function OrderTable({ mode, rows, note, onPick }: { mode: "demo" | "live"; rows: PracticeBook["orders"]; note: string; onPick: (symbol: string) => void }) {
-  if (mode === "live") return <p className="py-3 text-xs text-muted">Live broker orders stay unavailable. {note}</p>;
-  if (rows.length === 0) return <p className="py-3 text-xs text-muted">No practice orders.</p>;
-  return (
-    <table className="text-xs"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Status</th></tr></thead><tbody>
-      {rows.map((row) => <tr key={row.id}><td>{istTime(row.submittedAt)}</td><td><button className="inline-flex items-center gap-2 text-primary" onClick={() => onPick(row.symbol)}><StockLogo symbol={row.symbol} size={22} />{row.symbol}</button></td><td className={row.side === "BUY" ? "up" : "down"}>{row.side}</td><td className="num">{row.quantity}</td><td title={row.reason ?? ""}><OrderStatus status={row.status} /></td></tr>)}
-    </tbody></table>
-  );
+function OrderTable({ mode, rows, note, onPick }: { mode: "demo" | "live"; rows: OrderRowData[]; note: string; onPick: (symbol: string) => void }) {
+  if (mode === "live") return <DockEmpty title="Live broker orders are not shown" body={`TradeD is read-only in live view. ${note}`.trim()} />;
+  const columns: Column<OrderRowData>[] = [
+    { key: "time", header: "Time", render: (row) => <span className="num text-text-2">{istTime(row.submittedAt)}</span> },
+    { key: "symbol", header: "Instrument", render: (row) => <SymbolCell symbol={row.symbol} onPick={onPick} /> },
+    { key: "side", header: "Side", render: (row) => <SideText side={row.side} /> },
+    { key: "type", header: "Type", render: (row) => <span className="text-text-2">{row.type}</span> },
+    { key: "qty", header: "Qty", numeric: true, render: (row) => `${row.filledQuantity}/${row.quantity}` },
+    { key: "avg", header: "Avg fill", numeric: true, render: (row) => row.avgFill ?? "—" },
+    { key: "status", header: "Status", align: "right", render: (row) => <span title={row.reason ?? undefined}><OrderStatus status={row.status} /></span> },
+  ];
+  return <Table label="Orders" dense columns={columns} rows={rows} rowKey={(row) => row.id} empty={<DockEmpty title="No orders yet" body="Orders you place from the ticket are listed here." />} />;
 }
 
-function HistoryTable({ rows, onPick }: { rows: PracticeBook["executions"]; onPick: (symbol: string) => void }) {
-  if (rows.length === 0) return <p className="py-3 text-xs text-muted">No practice fills.</p>;
-  return (
-    <table className="text-xs"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>Realized</th></tr></thead><tbody>
-      {rows.map((row) => <tr key={row.id}><td>{istTime(row.executedAt)}</td><td><button className="text-primary" onClick={() => onPick(row.symbol)}>{row.symbol}</button></td><td>{row.side}</td><td className="num">{row.quantity}</td><td className="num">{row.price}</td><td className="num">{row.realized}</td></tr>)}
-    </tbody></table>
-  );
+function HistoryTable({ rows, onPick }: { rows: FillRow[]; onPick: (symbol: string) => void }) {
+  const columns: Column<FillRow>[] = [
+    { key: "time", header: "Time", render: (row) => <span className="num text-text-2">{istTime(row.executedAt)}</span> },
+    { key: "symbol", header: "Instrument", render: (row) => <SymbolCell symbol={row.symbol} onPick={onPick} /> },
+    { key: "side", header: "Side", render: (row) => <SideText side={row.side} /> },
+    { key: "qty", header: "Qty", numeric: true, render: (row) => row.quantity.toLocaleString("en-IN") },
+    { key: "price", header: "Price", numeric: true, render: (row) => row.price },
+    { key: "charges", header: "Charges", numeric: true, render: (row) => <span className="text-text-2">{row.charges}</span> },
+    { key: "realized", header: "Realized", numeric: true, render: (row) => <span className={cx("font-semibold", pnlClass(row.realized))}>{row.realized}</span> },
+  ];
+  return <Table label="Fills" dense columns={columns} rows={rows} rowKey={(row) => row.id} empty={<DockEmpty title="No fills yet" />} />;
 }
 
 function ReplayTable({ book, mark, symbol, onPick, onCancel }: { book: DemoBook; mark: number | null; symbol: string; onPick: (symbol: string) => void; onCancel: (id: string) => void }) {
+  type ReplayRow = DemoBook["positions"][number];
+  const open = book.orders.filter((order) => order.status === "OPEN");
+  const columns: Column<ReplayRow>[] = [
+    { key: "symbol", header: "Symbol", render: (row) => <SymbolCell symbol={row.symbol} onPick={onPick} /> },
+    { key: "qty", header: "Qty", numeric: true, render: (row) => row.quantity.toLocaleString("en-IN") },
+    { key: "avg", header: "Avg", numeric: true, render: (row) => formatDemoRupees(row.avgPaise) },
+    { key: "pnl", header: "Unrealized", numeric: true, render: (row) => {
+      if (row.symbol !== symbol || mark == null) return <span className="text-muted">—</span>;
+      const pnl = (mark - row.avgPaise) * row.quantity;
+      return <span className={cx("font-semibold", pnl > 0 ? "text-profit" : pnl < 0 ? "text-loss" : "text-text")}>{formatDemoRupees(pnl)}</span>;
+    } },
+  ];
   return (
-    <div className="space-y-2 text-xs">
-      <p className="text-muted">Cash ₹{formatDemoRupees(book.cashPaise)} · Realized ₹{formatDemoRupees(book.realizedPaise)}. This book is stored in this browser.</p>
-      {book.positions.length === 0 ? <p className="text-muted">No replay positions.</p> : (
-        <table><thead><tr><th>Symbol</th><th>Qty</th><th>Avg</th><th>Unrealized</th></tr></thead><tbody>
-          {book.positions.map((row) => <tr key={row.symbol}><td><button className="text-primary" onClick={() => onPick(row.symbol)}>{row.symbol}</button></td><td className="num">{row.quantity}</td><td className="num">{formatDemoRupees(row.avgPaise)}</td><td className="num">{row.symbol === symbol && mark != null ? formatDemoRupees((mark - row.avgPaise) * row.quantity) : "—"}</td></tr>)}
-        </tbody></table>
-      )}
-      {book.orders.filter((order) => order.status === "OPEN").map((order) => (
-        <p key={order.id}>{order.side} {order.quantity} {order.symbol} {order.type} {order.reason} <button className="text-loss" onClick={() => onCancel(order.id)}>Cancel</button></p>
+    <div className="flex min-h-0 flex-col">
+      <p className="border-b border-border px-3 py-1.5 text-[11px] text-muted">Cash <span className="num text-text">₹{formatDemoRupees(book.cashPaise)}</span> · Realized <span className={cx("num", book.realizedPaise > 0 ? "text-profit" : book.realizedPaise < 0 ? "text-loss" : "text-text")}>₹{formatDemoRupees(book.realizedPaise)}</span> · Stored in this browser, separate from your demo account.</p>
+      <Table label="Replay positions" dense columns={columns} rows={book.positions} rowKey={(row) => row.symbol} empty={<DockEmpty title="No replay positions" />} />
+      {open.map((order) => (
+        <div key={order.id} className="flex items-center gap-2 border-t border-border px-3 py-1.5 text-data">
+          <SideText side={order.side} />
+          <span className="num">{order.quantity}</span>
+          <span className="font-medium">{order.symbol}</span>
+          <span className="text-muted">{order.type} {order.reason}</span>
+          <button type="button" className="ml-auto h-7 rounded-input px-2 font-medium text-loss hover:bg-loss/10" onClick={() => onCancel(order.id)}>Cancel</button>
+        </div>
       ))}
     </div>
   );
 }
 
-function EmptyPositions({ onTrade, symbol, live }: { onTrade: () => void; symbol: string; live: boolean }) {
+function EmptyPositions({ symbol, live }: { symbol: string; live: boolean }) {
   return (
     <div className="mt-3 text-sm">
       <p>{live ? "No open broker positions were returned." : `No open position for ${symbol}.`}</p>
       <p className="mt-2 text-xs text-muted">Search a symbol above to load its chart. Opening a chart does not place an order.</p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button className="rounded-full border border-primary px-3 py-1 text-xs text-primary" onClick={onTrade}>Demo Trade</button>
-        <Link className="rounded-full bg-primary px-3 py-1 text-xs text-white" href={`/terminal?symbol=${symbol}&side=BUY`}>Practice trade</Link>
-      </div>
     </div>
   );
 }

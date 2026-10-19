@@ -2,27 +2,38 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
+  Activity,
+  ArrowDownRight,
+  ArrowUpRight,
   Bell,
+  Eye,
+  FlaskConical,
   CandlestickChart,
-  ChevronLeft,
-  ChevronRight,
   ClipboardList,
   GitBranch,
   House,
   Layers,
   LineChart,
-  Menu,
+  LogOut,
+  MoreHorizontal,
   Moon,
+  Palette,
   PieChart,
-  Search,
+  Settings,
   Sun,
   TrendingUp,
+  UsersRound,
   Wallet,
   X,
+  type LucideIcon,
 } from "lucide-react";
-import { api, money, tone } from "@/components/api";
+import { api } from "@/components/api";
+import { AppearancePanel } from "@/components/appearance-panel";
+import { GlobalSearch } from "@/components/global-search";
+import { Badge, Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
+import { appearanceKey, applyAppearance, emptyAppearance, loadAppearance, presetAppearance, saveAppearance, type Appearance } from "@/lib/color/appearance";
 
 type User = { name: string; email: string; role: string; status: string; tradingEnabled: boolean };
 type Health = {
@@ -36,17 +47,23 @@ type Health = {
   token: { source: string; expiresAt: string | null; expired: boolean };
 };
 
+export type IndexQuote = { name: string; last: number; previous: number | null };
+
 type Desk = {
   user: User | null;
+  indices: IndexQuote[];
+  indexNote: string;
   health: Health | null;
   mode: "demo" | "live";
   theme: "dark" | "light";
   requestMode: (next: "demo" | "live") => void;
-  toast: (message: string) => void;
+  toast: (message: string, options?: ToastOptions) => void;
   symbol: string;
   chooseSymbol: (symbol: string) => void;
   openChart: (symbol: string) => void;
   online: boolean;
+  appearance: Appearance;
+  setAppearance: (next: Appearance) => void;
 };
 
 const DeskContext = createContext<Desk | null>(null);
@@ -56,18 +73,29 @@ export function useDesk() {
   return value;
 }
 
-const NAV = [
+type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; accent?: boolean };
+
+const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: House },
-  { href: "/holdings", label: "Portfolio", icon: PieChart },
+  { href: "/chart", label: "Chart", icon: CandlestickChart },
+  { href: "/options", label: "Options", icon: GitBranch },
   { href: "/positions", label: "Positions", icon: Layers },
   { href: "/orders", label: "Orders", icon: ClipboardList },
+  { href: "/multi-account", label: "Multi-Acct", title: "Multi-Account Trading", icon: UsersRound, accent: true },
+  { href: "/holdings", label: "Portfolio", icon: PieChart },
   { href: "/funds", label: "Money", icon: Wallet },
   { href: "/markets", label: "Markets", icon: LineChart },
-  { href: "/options", label: "Options", icon: GitBranch },
   { href: "/alerts", label: "Alerts", icon: Bell },
-  { href: "/chart", label: "Chart", icon: CandlestickChart },
   { href: "/prediction", label: "Prediction", icon: TrendingUp },
-] as const;
+];
+
+const TAB_BAR = ["/", "/chart", "/options", "/positions"] as const;
+
+const TICKER_LABEL: Record<string, string> = { "Nifty 50": "NIFTY", "Nifty Bank": "BANKNIFTY", "India VIX": "INDIA VIX" };
+
+function inferTone(message: string): ToastOptions["tone"] {
+  return /\b(failed|rejected|error|insufficient|cannot|could not|invalid)\b/i.test(message) ? "error" : "info";
+}
 
 export function Shell({ children }: { children: ReactNode }) {
   const path = usePathname();
@@ -81,18 +109,21 @@ export function Shell({ children }: { children: ReactNode }) {
   const [notes, setNotes] = useState<Array<{ id: string; title: string; body: string; read: boolean }>>([]);
   const [openNotes, setOpenNotes] = useState(false);
   const [openUser, setOpenUser] = useState(false);
-  const [toasts, setToasts] = useState<Array<{ id: number; message: string }>>([]);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [menu, setMenu] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "light">("light");
-  const [indices, setIndices] = useState<Array<{ name: string; last: number; previous: number | null }>>([]);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [appearance, setAppearanceState] = useState<Appearance>(() => emptyAppearance("classic"));
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [indices, setIndices] = useState<IndexQuote[]>([]);
   const [indexNote, setIndexNote] = useState("");
 
-  const toast = useCallback((message: string) => {
-    const id = Date.now();
-    setToasts((current) => [...current.slice(-3), { id, message }]);
-    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 4200);
-  }, []);
+  const dismiss = useCallback((id: number) => setToasts((current) => current.filter((item) => item.id !== id)), []);
+  const toast = useCallback((message: string, options: ToastOptions = {}) => {
+    const id = Date.now() + Math.random();
+    const tone = options.tone ?? inferTone(message) ?? "info";
+    setToasts((current) => [...current.slice(-3), { id, message, tone, action: options.action }]);
+    window.setTimeout(() => dismiss(id), options.duration ?? (tone === "error" ? 7000 : 4500));
+  }, [dismiss]);
 
   const chooseSymbol = useCallback((next: string) => {
     const symbol = next.toUpperCase();
@@ -116,15 +147,30 @@ export function Shell({ children }: { children: ReactNode }) {
     const savedMode = localStorage.getItem("td-mode");
     if (saved) setSymbol(saved);
     if (savedMode === "live" || savedMode === "demo") setMode(savedMode);
-    const savedTheme = localStorage.getItem("td-theme");
-    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
-    else setTheme("light");
-    if (localStorage.getItem("td-nav") === "collapsed") setCollapsed(true);
   }, []);
 
   useEffect(() => {
     api<{ user: User | null }>("/api/session").then((data) => setUser(data.user)).catch(() => setUser(null));
   }, []);
+
+  const appearanceUser = user?.email ?? "";
+  const setAppearance = useCallback((next: Appearance) => {
+    const saved = saveAppearance(next, appearanceUser);
+    applyAppearance(saved);
+    localStorage.setItem("td-theme", saved.mode);
+    setTheme(saved.mode);
+    setAppearanceState(saved);
+  }, [appearanceUser]);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(appearanceKey(appearanceUser));
+    const savedTheme = localStorage.getItem("td-theme");
+    const current = savedTheme === "light" || savedTheme === "dark" ? savedTheme : document.documentElement.dataset.theme === "light" ? "light" : "dark";
+    const next = stored ? loadAppearance(appearanceUser) : presetAppearance(current === "dark" ? "classic" : "light");
+    setAppearanceState(next);
+    applyAppearance(next);
+    setTheme(next.mode);
+  }, [appearanceUser]);
 
   useEffect(() => {
     let stop = false;
@@ -150,7 +196,7 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => {
     let stop = false;
     const load = () => {
-      api<{ indices: Array<{ name: string; last: number; previous: number | null }>; message: string }>("/api/market/indices")
+      api<{ indices: IndexQuote[]; message: string }>("/api/market/indices")
         .then((data) => {
           if (stop) return;
           setIndices(data.indices);
@@ -158,7 +204,7 @@ export function Shell({ children }: { children: ReactNode }) {
           setOnline(true);
         })
         .catch((error: unknown) => {
-          if (!stop) setIndexNote(error instanceof Error ? error.message : "Index feed unavailable.");
+          if (!stop) setIndexNote(error instanceof Error ? error.message : "Index prices are unavailable.");
         });
     };
     load();
@@ -175,17 +221,20 @@ export function Shell({ children }: { children: ReactNode }) {
       .catch(() => undefined);
   }, [openNotes]);
 
+  const [shownPath, setShownPath] = useState(path);
+  if (shownPath !== path) {
+    setShownPath(path);
+    setMenu(false);
+    setOpenUser(false);
+    setOpenNotes(false);
+  }
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable);
-      if (event.key === "/" && !typing) {
-        event.preventDefault();
-        document.getElementById("td-search")?.focus();
-      }
-      if (typing) return;
-      if (event.key.toLowerCase() === "b") window.dispatchEvent(new CustomEvent("td-ticket", { detail: "BUY" }));
-      if (event.key.toLowerCase() === "s") window.dispatchEvent(new CustomEvent("td-ticket", { detail: "SELL" }));
+      if (event.key !== "Escape") return;
+      setOpenUser(false);
+      setOpenNotes(false);
+      setAppearanceOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -193,6 +242,8 @@ export function Shell({ children }: { children: ReactNode }) {
 
   const value = useMemo<Desk>(() => ({
     user,
+    indices,
+    indexNote,
     health,
     mode,
     theme,
@@ -202,148 +253,276 @@ export function Shell({ children }: { children: ReactNode }) {
     chooseSymbol,
     openChart,
     online,
-  }), [user, health, mode, theme, toast, symbol, chooseSymbol, openChart, online]);
+    appearance,
+    setAppearance,
+  }), [user, indices, indexNote, health, mode, theme, toast, symbol, chooseSymbol, openChart, online, appearance, setAppearance]);
 
-  const status = !online ? "disconnected" : health?.token.expired ? "token expired" : indices.length && health?.marketMode === "REALTIME" ? "live" : health?.marketMode === "DEMO" ? "demo data" : health?.marketMode === "UNAVAILABLE" ? "unavailable" : (health?.marketMode ?? "connecting").toLowerCase();
+  const feed = !online
+    ? { label: "Disconnected", tone: "bg-loss" }
+    : health?.token.expired
+      ? { label: "Feed token expired", tone: "bg-warning" }
+      : health?.marketMode === "REALTIME" && indices.length
+        ? { label: "Live", tone: "bg-profit" }
+        : health?.marketMode === "UNAVAILABLE"
+          ? { label: "Market data unavailable", tone: "bg-loss" }
+          : health?.marketMode === "DELAYED"
+            ? { label: "Delayed", tone: "bg-warning" }
+            : { label: health ? health.marketMode.toLowerCase() : "Connecting", tone: "bg-muted" };
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
-  const toggleTheme = () => {
-    const next = theme === "light" ? "dark" : "light";
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem("td-theme", next);
-    setTheme(next);
-  };
-  const toggleNav = () => {
-    setCollapsed((value) => {
-      const next = !value;
-      localStorage.setItem("td-nav", next ? "collapsed" : "expanded");
-      return next;
-    });
-  };
-  const navLinks = (showLabel: boolean, onPick?: () => void) => NAV.map(({ href, label, icon: Icon }) => (
-    <Link
-      key={href}
-      href={href}
-      title={showLabel ? label : label}
-      aria-label={label}
-      aria-current={active(href) ? "page" : undefined}
-      onClick={onPick}
-      className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition hover:bg-elevated active:scale-[0.99] ${active(href) ? "bg-primary/10 font-semibold text-primary" : "text-muted"} ${showLabel ? "" : "justify-center px-0"}`}
-    >
-      <Icon className={`h-4 w-4 shrink-0 ${active(href) ? "text-primary" : ""}`} aria-hidden />
-      {showLabel ? <span>{label}</span> : <span className="sr-only">{label}</span>}
-    </Link>
-  ));
+  const toggleTheme = useCallback(() => setAppearance(presetAppearance(theme === "light" ? "classic" : "light", appearance)), [setAppearance, theme, appearance]);
+  const links = useMemo<NavItem[]>(() => (user?.role === "SUPER_ADMIN" ? [...NAV, { href: "/admin", label: "Admin", icon: Settings }] : [...NAV]), [user?.role]);
+  const goTo = useCallback((href: string) => router.push(href), [router]);
+  const unread = notes.some((note) => !note.read);
 
   return (
     <DeskContext.Provider value={value}>
       <div className="flex h-dvh min-h-0 bg-background">
-        <aside className={`hidden shrink-0 flex-col border-r border-border bg-panel transition-[width] duration-200 ease-out lg:flex ${collapsed ? "w-16" : "w-56"}`}>
-          <Link href="/" className="m-3 grid h-9 w-9 place-items-center rounded-full bg-primary text-sm font-semibold text-white" title="TradeD" aria-label="TradeD home">T</Link>
-          <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto px-2" aria-label="Main">
-            {navLinks(!collapsed)}
+        <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft bg-sunken lg:flex" aria-label="Primary">
+          <div className="flex h-[var(--topbar)] shrink-0 items-center justify-center">
+            <BrandMark />
+          </div>
+          <nav className="no-scrollbar flex min-h-0 flex-1 flex-col items-stretch gap-0.5 overflow-y-auto px-2 pb-3 pt-1" aria-label="Main">
+            {links.map(({ href, label, icon: Icon, title, accent }) => {
+              const current = active(href);
+              return (
+                <Fragment key={href}>
+                  {href === "/markets" || href === "/admin" ? <div className="mx-3 my-1.5 h-px bg-border-soft" aria-hidden /> : null}
+                  <Link
+                    href={href}
+                    aria-current={current ? "page" : undefined}
+                    aria-label={title}
+                    title={title}
+                    className={cx(
+                      "group relative flex flex-col items-center gap-1 rounded-md px-1 py-2 text-micro font-medium transition-colors duration-150",
+                      current ? "text-text" : "text-muted hover:text-text",
+                    )}
+                  >
+                    {current ? <span className="absolute -left-2 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden /> : null}
+                    <span className={cx(
+                      "relative grid h-8 w-11 place-items-center rounded-input transition-colors duration-150",
+                      current ? "bg-primary-soft text-primary" : accent ? "bg-info-soft text-info group-hover:brightness-110" : "group-hover:bg-hover",
+                    )}>
+                      <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
+                      {accent ? <span className="absolute right-1.5 top-1 h-1.5 w-1.5 rounded-full bg-warning" aria-hidden /> : null}
+                    </span>
+                    <span className="max-w-full truncate">{label}</span>
+                  </Link>
+                </Fragment>
+              );
+            })}
           </nav>
-          <button type="button" className="m-2 grid h-9 place-items-center rounded-xl text-muted hover:bg-elevated hover:text-text" onClick={toggleNav} aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} title={collapsed ? "Expand navigation" : "Collapse navigation"}>
-            {collapsed ? <ChevronRight className="h-4 w-4" aria-hidden /> : <ChevronLeft className="h-4 w-4" aria-hidden />}
-          </button>
+          <div className="flex shrink-0 flex-col items-center gap-1 border-t border-border-soft py-3">
+            <Tooltip side="right" content={theme === "light" ? "Dark theme" : "Light theme"}>
+              <button type="button" className="grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
+                {theme === "light" ? <Moon className="h-[18px] w-[18px]" aria-hidden /> : <Sun className="h-[18px] w-[18px]" aria-hidden />}
+              </button>
+            </Tooltip>
+          </div>
         </aside>
+
         <div className="flex min-w-0 flex-1 flex-col">
-        <header className="shrink-0 border-b border-border bg-panel">
-          <div className="flex h-12 items-center gap-2 px-3">
-            <button type="button" className="grid h-9 w-9 place-items-center rounded-xl text-muted hover:bg-elevated lg:hidden" onClick={() => setMenu(true)} aria-label="Open navigation" title="Open navigation">
-              <Menu className="h-4 w-4" aria-hidden />
-            </button>
-            <div className="flex min-w-0 flex-1 items-center gap-6 overflow-x-auto text-[13px]">
-              {indices.length === 0 ? <span className="text-xs text-muted">{indexNote || "Loading indices…"}</span> : indices.map((item) => {
-                const change = item.previous == null ? null : item.last - item.previous;
-                const pct = item.previous ? ((item.last - item.previous) / item.previous) * 100 : null;
-                return (
-                  <span key={item.name} className="flex shrink-0 items-center gap-2">
-                    <span className="text-muted">{item.name}</span>
-                    <span className={`num font-medium ${tone(change)}`}>{money(item.last)}</span>
-                    {change != null && pct != null ? <span className={`num whitespace-nowrap text-xs ${tone(change)}`}>{change >= 0 ? "+" : ""}{change.toFixed(2)} ({pct.toFixed(2)}%)</span> : null}
-                  </span>
-                );
-              })}
+          <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft bg-background/85 px-2 backdrop-blur-md sm:gap-3 sm:px-4">
+            <div className="lg:hidden"><BrandMark /></div>
+            <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Index prices">
+              {indices.length === 0 ? (
+                <span className="truncate text-data text-muted">{indexNote || "Loading index prices…"}</span>
+              ) : (indices.some((item) => TICKER_LABEL[item.name]) ? indices.filter((item) => TICKER_LABEL[item.name]) : indices).map((item) => (
+                <IndexChip key={item.name} label={TICKER_LABEL[item.name] ?? item.name} last={item.last} previous={item.previous} volatility={item.name === "India VIX"} />
+              ))}
+              <span className="ml-1 hidden shrink-0 items-center gap-1.5 rounded-pill border border-border-soft px-2.5 py-1 text-micro font-medium text-text-2 xl:inline-flex" title={health?.marketMessage || feed.label}>
+                <span className={cx("h-1.5 w-1.5 rounded-full", feed.tone, feed.label === "Live" && "live-dot text-profit")} aria-hidden />
+                {feed.label}
+              </span>
             </div>
-            <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-muted hover:bg-elevated" title="Search instruments" aria-label="Search instruments" onClick={() => {
-              const node = document.getElementById("td-search");
-              if (node) node.focus();
-              else router.push("/");
-            }}>
-              <Search className="h-4 w-4" aria-hidden />
-            </button>
-            <button type="button" className="relative grid h-8 w-8 place-items-center rounded-full text-muted hover:bg-elevated" title="Notifications" aria-label="Notifications" onClick={() => setOpenNotes((value) => !value)}>
-              <Bell className="h-4 w-4" aria-hidden />
-              {notes.some((note) => !note.read) ? <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-loss" /> : null}
-            </button>
-            <button type="button" className={`rounded-full px-2 py-1 text-[10px] font-semibold ${mode === "demo" ? "bg-demo/15 text-demo" : "bg-loss/10 text-loss"}`} onClick={() => setPendingMode(mode === "demo" ? "live" : "demo")} aria-label={mode === "demo" ? "Switch to live view" : "Switch to demo"}>{mode === "demo" ? "DEMO" : "LIVE"}</button>
-            <button type="button" className="grid h-8 w-8 place-items-center rounded-full text-muted hover:bg-elevated" title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
-              {theme === "light" ? <Moon className="h-4 w-4" aria-hidden /> : <Sun className="h-4 w-4" aria-hidden />}
-            </button>
-            <div className="relative">
-              <button type="button" className="grid h-9 w-9 place-items-center rounded-full bg-primary text-sm font-semibold text-white" onClick={() => setOpenUser((value) => !value)} title={user?.email || "Account"} aria-label="Account menu">{(user?.name || "T").slice(0, 1).toUpperCase()}</button>
+
+            <GlobalSearch pages={links} onSymbol={openChart} onPage={goTo} />
+
+            <Tooltip content={mode === "demo" ? "Simulated orders on your practice account. Click to switch view." : "Read-only broker view. Click to switch back to demo."}>
+              <button
+                type="button"
+                className={cx(
+                  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-pill border px-2.5 text-micro font-semibold uppercase tracking-[0.05em] transition-colors",
+                  mode === "demo" ? "border-demo/35 bg-demo-soft text-demo hover:border-demo/60" : "border-warning/40 bg-warning-soft text-warning hover:border-warning/70",
+                )}
+                onClick={() => setPendingMode(mode === "demo" ? "live" : "demo")}
+                aria-label={mode === "demo" ? "Demo mode. Switch to live view" : "Live view. Switch to demo"}
+              >
+                {mode === "demo" ? <FlaskConical className="h-3.5 w-3.5" aria-hidden /> : <Eye className="h-3.5 w-3.5" aria-hidden />}
+                <span className="hidden sm:inline">{mode === "demo" ? "Demo" : "Live view"}</span>
+              </button>
+            </Tooltip>
+
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Tooltip content="Notifications">
+                <button type="button" className="relative grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={unread ? "Notifications, unread" : "Notifications"} aria-expanded={openNotes} onClick={() => { setOpenNotes((value) => !value); setOpenUser(false); }}>
+                  <Bell className="h-[18px] w-[18px]" aria-hidden />
+                  {unread ? <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-background bg-loss" /> : null}
+                </button>
+              </Tooltip>
+              <Tooltip content={theme === "light" ? "Dark theme" : "Light theme"}>
+                <button type="button" className="hidden h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text sm:grid lg:hidden" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
+                  {theme === "light" ? <Moon className="h-[18px] w-[18px]" aria-hidden /> : <Sun className="h-[18px] w-[18px]" aria-hidden />}
+                </button>
+              </Tooltip>
+            </div>
+
+            <div className="relative shrink-0">
+              <button type="button" className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => { setOpenUser((value) => !value); setOpenNotes(false); }} title={user?.email || "Account"} aria-label="Account menu" aria-expanded={openUser}>
+                {(user?.name || "T").slice(0, 1).toUpperCase()}
+              </button>
               {openUser ? (
-                <div className="absolute right-0 top-11 z-30 w-56 rounded-xl border border-border bg-panel p-3 text-xs shadow-lg">
-                  <p className="font-medium">{user?.name}</p>
-                  <p className="text-muted">{user?.email}</p>
-                  <p className="mt-1 text-muted">{user?.role}</p>
-                  <button className="mt-3 w-full rounded-lg border border-border py-1.5" onClick={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }}>Sign out</button>
+                <div className="surface-overlay anim-rise absolute right-0 top-11 z-40 w-64 rounded-card p-1.5" role="menu">
+                  <div className="px-2.5 py-2">
+                    <p className="truncate text-[13px] font-semibold">{user?.name ?? "Signed in"}</p>
+                    <p className="truncate text-data text-muted">{user?.email}</p>
+                    {user?.role ? <Badge className="mt-1.5">{user.role.replace("_", " ")}</Badge> : null}
+                  </div>
+                  <div className="my-1 h-px bg-border" />
+                  <MenuItem icon={theme === "light" ? Moon : Sun} label={theme === "light" ? "Dark theme" : "Light theme"} onClick={() => { toggleTheme(); setOpenUser(false); }} />
+                  <MenuItem icon={Palette} label="Chart colours" onClick={() => { setAppearanceOpen(true); setOpenUser(false); }} />
+                  <div className="my-1 h-px bg-border" />
+                  <MenuItem icon={LogOut} label="Sign out" onClick={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }} />
                 </div>
               ) : null}
             </div>
-          </div>
-        </header>
-        <div className="min-h-0 flex-1">{children}</div>
+          </header>
+
+          <main className="min-h-0 flex-1 overflow-hidden pb-[calc(var(--tabbar)+env(safe-area-inset-bottom))] lg:pb-0">{children}</main>
         </div>
+
+        <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[calc(var(--tabbar)+env(safe-area-inset-bottom))] border-t border-border-soft bg-panel/92 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
+          {TAB_BAR.map((href) => {
+            const item = NAV.find((link) => link.href === href)!;
+            const Icon = item.icon;
+            const current = active(href);
+            return (
+              <Link key={href} href={href} aria-current={current ? "page" : undefined} className={cx("relative flex flex-1 flex-col items-center justify-center gap-1 text-micro font-medium transition-colors", current ? "text-primary" : "text-muted")}>
+                {current ? <span className="absolute top-0 h-[3px] w-8 rounded-b-full bg-primary" aria-hidden /> : null}
+                <Icon className="h-5 w-5" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
+                {item.label}
+              </Link>
+            );
+          })}
+          <button type="button" className={cx("flex flex-1 flex-col items-center justify-center gap-1 text-micro font-medium", menu || !TAB_BAR.some((href) => active(href)) ? "text-primary" : "text-muted")} onClick={() => setMenu(true)} aria-label="More pages" aria-expanded={menu}>
+            <MoreHorizontal className="h-5 w-5" aria-hidden />
+            More
+          </button>
+        </nav>
+
         {menu ? (
-          <div className="fixed inset-0 z-40 lg:hidden">
-            <button type="button" className="absolute inset-0 bg-black/40" aria-label="Close navigation" onClick={() => setMenu(false)} />
-            <aside className="absolute inset-y-0 left-0 flex w-64 flex-col bg-panel shadow-xl">
-              <div className="flex items-center justify-between px-3 py-3">
-                <span className="text-sm font-semibold">TradeD</span>
-                <button type="button" className="grid h-8 w-8 place-items-center rounded-lg text-muted hover:bg-elevated" aria-label="Close navigation" title="Close" onClick={() => setMenu(false)}>
-                  <X className="h-4 w-4" aria-hidden />
-                </button>
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <button type="button" className="anim-fade absolute inset-0 bg-[var(--scrim)]" aria-label="Close menu" onClick={() => setMenu(false)} />
+            <div className="surface-modal anim-sheet absolute inset-x-0 bottom-0 rounded-t-sheet p-4 pb-[max(16px,env(safe-area-inset-bottom))]" role="dialog" aria-label="All pages">
+              <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border-strong" aria-hidden />
+              <p className="eyebrow mb-2 px-1">All pages</p>
+              <div className="grid grid-cols-4 gap-1.5">
+                {links.map(({ href, label, icon: Icon }) => (
+                  <Link key={href} href={href} onClick={() => setMenu(false)} aria-current={active(href) ? "page" : undefined} className={cx("flex flex-col items-center gap-1.5 rounded-md px-1 py-3 text-data font-medium transition-colors", active(href) ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover")}>
+                    <Icon className="h-5 w-5" aria-hidden />
+                    {label}
+                  </Link>
+                ))}
               </div>
-              <nav className="flex flex-col gap-1 px-2" aria-label="Main">
-                {navLinks(true, () => setMenu(false))}
-              </nav>
-            </aside>
+              <div className="mt-4 flex gap-2 border-t border-border-soft pt-4">
+                <Button block icon={theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />} onClick={toggleTheme}>{theme === "light" ? "Dark theme" : "Light theme"}</Button>
+                <Button block icon={<X className="h-4 w-4" />} onClick={() => setMenu(false)}>Close</Button>
+              </div>
+            </div>
           </div>
         ) : null}
-        <div className="pointer-events-none fixed bottom-3 right-3 z-40 flex w-72 flex-col gap-2">
-          {toasts.map((item) => <div key={item.id} className="pointer-events-auto border border-border bg-panel px-3 py-2 text-xs shadow-lg">{item.message}</div>)}
-        </div>
+
+        <ToastStack items={toasts} onDismiss={dismiss} />
+
         {openNotes ? (
-          <div className="fixed right-3 top-14 z-30 w-80 border border-border bg-panel p-2 shadow-lg">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="font-medium">Notifications</span>
-              <span className="flex items-center gap-2">
-                <button className="text-primary" onClick={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}>Mark read</button>
-                <button type="button" className="grid h-7 w-7 place-items-center rounded-lg text-muted hover:bg-elevated" aria-label="Close notifications" title="Close" onClick={() => setOpenNotes(false)}><X className="h-4 w-4" aria-hidden /></button>
+          <div className="surface-overlay anim-rise fixed right-3 top-[calc(var(--topbar)+4px)] z-40 w-[min(360px,calc(100vw-1.5rem))] overflow-hidden rounded-card" role="dialog" aria-label="Notifications">
+            <div className="flex items-center justify-between border-b border-border-soft px-3.5 py-2.5">
+              <span className="text-[13px] font-semibold">Notifications</span>
+              <span className="flex items-center gap-1">
+                <Button size="sm" variant="ghost" disabled={!unread} onClick={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}>Mark all read</Button>
+                <button type="button" className="grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-elevated" aria-label="Close notifications" onClick={() => setOpenNotes(false)}><X className="h-4 w-4" aria-hidden /></button>
               </span>
             </div>
-            {notes.length === 0 ? <p className="text-xs text-muted">No notifications.</p> : notes.slice(0, 8).map((note) => (
-              <div key={note.id} className="border-t border-border py-2 text-xs">
-                <p className="font-medium">{note.title}</p>
-                <p className="text-muted">{note.body}</p>
-              </div>
-            ))}
+            <div className="max-h-[60vh] overflow-y-auto">
+              {notes.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <Bell className="mx-auto h-5 w-5 text-muted" aria-hidden />
+                  <p className="mt-2 text-[13px] font-medium">You’re all caught up</p>
+                  <p className="mt-0.5 text-data text-muted">Price alerts and order updates appear here.</p>
+                </div>
+              ) : notes.slice(0, 8).map((note) => (
+                <div key={note.id} className="flex gap-2 border-b border-border px-3 py-2.5 last:border-b-0">
+                  <span className={cx("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", note.read ? "bg-transparent" : "bg-primary")} aria-hidden />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium">{note.title}</p>
+                    <p className="text-data text-muted">{note.body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
+
+        {appearanceOpen ? <AppearancePanel appearance={appearance} onChange={setAppearance} onClose={() => setAppearanceOpen(false)} /> : null}
+
         {pendingMode ? (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
-            <div className="w-full max-w-md border border-border bg-panel p-4">
-              <h2 className="text-sm font-semibold">Switch to {pendingMode === "live" ? "live view" : "demo"}?</h2>
-              <p className="mt-2 text-xs text-muted">This does not move, cancel, or submit orders. Demo orders stay on the practice ledger. Live view only reads broker account data when the saved token allows it. TradeD does not send orders to the exchange.</p>
-              <div className="mt-4 flex justify-end gap-2">
-                <button className="border border-border px-3 py-1 text-xs" onClick={() => setPendingMode(null)}>Stay</button>
-                <button className="bg-primary px-3 py-1 text-xs text-on-primary" onClick={() => { setMode(pendingMode); localStorage.setItem("td-mode", pendingMode); setPendingMode(null); }}>Switch</button>
+          <div className="fixed inset-0 z-[80] grid place-items-center p-4">
+            <button type="button" aria-label="Cancel" tabIndex={-1} className="anim-fade absolute inset-0 bg-[var(--scrim)]" onClick={() => setPendingMode(null)} />
+            <div role="dialog" aria-modal="true" aria-label="Switch view" className="surface-modal anim-rise relative w-full max-w-md rounded-sheet p-6">
+              <span className={cx("mb-4 grid h-10 w-10 place-items-center rounded-md", pendingMode === "live" ? "bg-warning-soft text-warning" : "bg-demo-soft text-demo")} aria-hidden>
+                {pendingMode === "live" ? <Eye className="h-5 w-5" /> : <FlaskConical className="h-5 w-5" />}
+              </span>
+              <h2 className="text-section font-semibold">Switch to {pendingMode === "live" ? "live view" : "demo"}?</h2>
+              <p className="mt-2 text-[13px] text-text-2">This does not move, cancel or submit any order. Demo orders stay on your practice account. Live view only reads broker account data. TradeD never sends orders to an exchange.</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <Button autoFocus onClick={() => setPendingMode(null)}>Stay</Button>
+                <Button variant="primary" onClick={() => { setMode(pendingMode); localStorage.setItem("td-mode", pendingMode); setPendingMode(null); }}>Switch</Button>
               </div>
             </div>
           </div>
         ) : null}
       </div>
     </DeskContext.Provider>
+  );
+}
+
+function BrandMark() {
+  return (
+    <Link href="/" className="group flex items-center gap-2 rounded-input" aria-label="TradeD home">
+      <span className="relative grid h-9 w-9 place-items-center overflow-hidden rounded-[11px] bg-primary text-on-primary shadow-e2 ring-1 ring-primary/40">
+        <span className="absolute inset-0 bg-[linear-gradient(135deg,transparent_40%,var(--demo)_160%)] opacity-60" aria-hidden />
+        <Activity className="relative h-[18px] w-[18px]" strokeWidth={2.4} aria-hidden />
+      </span>
+    </Link>
+  );
+}
+
+/** Index summary. VIX measures volatility, so its direction is shown without profit or loss colour. */
+function IndexChip({ label, last, previous, volatility }: { label: string; last: number; previous: number | null; volatility: boolean }) {
+  const change = previous == null ? null : last - previous;
+  const pct = previous ? (change! / previous) * 100 : null;
+  const direction = change == null || change === 0 ? "flat" : change > 0 ? "up" : "down";
+  const tone = volatility || direction === "flat" ? "bg-sunken text-text-2" : direction === "up" ? "bg-profit-soft text-profit" : "bg-loss-soft text-loss";
+  const Arrow = direction === "up" ? ArrowUpRight : direction === "down" ? ArrowDownRight : null;
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2.5 rounded-input border border-border-soft bg-panel/70 pl-3 pr-1.5">
+      <span className="text-micro font-semibold tracking-[0.04em] text-muted">{label}</span>
+      <PriceCell value={last} className="text-dense font-semibold text-text" />
+      {change != null && pct != null ? (
+        <span className={cx("num inline-flex h-6 items-center gap-0.5 rounded-sm px-1.5 text-micro font-semibold", tone)} title={`${change >= 0 ? "+" : "−"}${Math.abs(change).toFixed(2)} points`}>
+          {Arrow ? <Arrow className="h-3 w-3" aria-hidden /> : null}
+          <span className="sr-only">{direction === "up" ? "Up" : direction === "down" ? "Down" : "Unchanged"}</span>
+          {pct >= 0 ? "+" : "−"}{Math.abs(pct).toFixed(2)}%
+        </span>
+      ) : <span className="px-1.5 text-micro text-muted">Change N/A</span>}
+    </div>
+  );
+}
+
+function MenuItem({ icon: Icon, label, onClick }: { icon: typeof Bell; label: string; onClick: () => void }) {
+  return (
+    <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-input px-2.5 py-2 text-left text-dense text-text-2 transition-colors hover:bg-hover hover:text-text" onClick={onClick}>
+      <Icon className="h-4 w-4 text-muted" aria-hidden />
+      <span className="flex-1">{label}</span>
+    </button>
   );
 }

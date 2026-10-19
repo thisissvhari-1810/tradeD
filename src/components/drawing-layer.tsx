@@ -2,16 +2,21 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "lightweight-charts";
-import { FIB_EXTENSION_RATIOS, barsBetween, fibLevels, fibTimes, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, placeMeasureCard, pointsNeeded, positionStats, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MeasureGesture, type Point } from "@/components/drawing-model";
+import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
+import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
+import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
+import { FIB_CHANNEL_RATIOS, FIB_EXTENSION_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, drawingVisible, fibLevels, fibTimes, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
 type Bar = { time: number; open: number; high: number; low: number; close: number; volume?: number };
+
+const WEAK_MAGNET_PX = 14;
 
 type MarkStyle = { stroke?: number; pattern?: "solid" | "dashed" | "dotted" };
 type Mark = (
   | { id: string; kind: "segment"; x1: number; y1: number; x2: number; y2: number; color: string; selected: boolean; dash?: boolean }
   | { id: string; kind: "hline"; y: number; color: string; label: string; selected: boolean }
   | { id: string; kind: "poly"; d: string; color: string; selected: boolean; opacity?: number }
-  | { id: string; kind: "text"; x: number; y: number; text: string; color: string; selected: boolean }
+  | { id: string; kind: "text"; x: number; y: number; text: string; color: string; selected: boolean; size?: number; bold?: boolean; italic?: boolean; anchor?: "start" | "middle" | "end" }
   | { id: string; kind: "dot"; x: number; y: number; color: string; selected: boolean }
   | { id: string; kind: "vline"; x: number; color: string; selected: boolean }
   | { id: string; kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; color: string; fill: string; selected: boolean }
@@ -36,6 +41,10 @@ export function DrawingLayer({
   onTool,
   onSelect,
   ready = 0,
+  span = "1d",
+  focusId,
+  stay = true,
+  lockAll = false,
 }: {
   chartRef: { current: IChartApi | null };
   seriesRef: { current: ISeriesApi<SeriesType> | null };
@@ -43,7 +52,9 @@ export function DrawingLayer({
   drawings: Drawing[];
   onDrawings: (next: Drawing[], undo?: boolean) => void;
   tool: DrawTool;
-  magnet: boolean;
+  magnet: MagnetMode | boolean;
+  stay?: boolean;
+  lockAll?: boolean;
   hidden: boolean;
   annotation: string;
   command: { id: number; name: "lock" | "trash" | "color" } | null;
@@ -51,12 +62,14 @@ export function DrawingLayer({
   onTool: (tool: DrawTool) => void;
   onSelect?: (id: string | null) => void;
   ready?: number;
+  span?: string;
+  focusId?: string | null;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<() => void>(() => undefined);
   const drawingsRef = useRef(drawings);
   const toolRef = useRef(tool);
-  const magnetRef = useRef(magnet);
+  const magnetRef = useRef<MagnetMode>("off");
   const annotationRef = useRef(annotation);
   const onDrawingsRef = useRef(onDrawings);
   const onToolRef = useRef(onTool);
@@ -65,17 +78,36 @@ export function DrawingLayer({
   const previewRef = useRef<Point | null>(null);
   const selectedRef = useRef<string | null>(null);
   const brushing = useRef<Point[] | null>(null);
+  const pickedAt = useRef(0);
   const measureDrag = useRef<MeasureGesture | null>(null);
+  const shapeDrag = useRef<Point | null>(null);
+  const spanRef = useRef(span);
   const [marks, setMarks] = useState<Mark[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(focusId ?? null);
+  const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [eraseHover, setEraseHover] = useState<string | null>(null);
+  const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
+  const stayRef = useRef(stay);
+  const lockAllRef = useRef(lockAll);
+  const [seenFocus, setSeenFocus] = useState(focusId);
+  if (focusId !== seenFocus) {
+    setSeenFocus(focusId);
+    if (focusId !== undefined) setSelected(focusId);
+  }
+  useEffect(() => {
+    stayRef.current = stay;
+    lockAllRef.current = lockAll;
+  }, [stay, lockAll]);
   drawingsRef.current = drawings;
   toolRef.current = tool;
-  magnetRef.current = magnet;
+  magnetRef.current = magnet === true ? "strong" : magnet === false ? "off" : magnet;
   annotationRef.current = annotation;
   onDrawingsRef.current = onDrawings;
   onToolRef.current = onTool;
   onSelectRef.current = onSelect;
   selectedRef.current = selected;
+  spanRef.current = span;
 
   function project() {
     const chart = chartRef.current;
@@ -85,15 +117,9 @@ export function DrawingLayer({
       return;
     }
     const scale = chart.timeScale();
-    const step = barStep(candles);
     const xy = (point: Point) => {
-      let x = scale.timeToCoordinate(point.time as UTCTimestamp);
+      const x = timeToScreenX((index) => scale.logicalToCoordinate(index as Logical), candles, point.time);
       const y = series.priceToCoordinate(point.price);
-      if (x == null && candles.length && step > 0) {
-        const last = candles[candles.length - 1].time;
-        const logical = (candles.length - 1) + (point.time - last) / step;
-        x = scale.logicalToCoordinate(logical as Logical);
-      }
       return x == null || y == null ? null : { x, y };
     };
     const next: Mark[] = [];
@@ -101,20 +127,25 @@ export function DrawingLayer({
     const preview = previewShape();
     if (preview) show.push(preview);
     for (const drawing of show) {
-      if (drawing.hidden && drawing.id !== "preview") continue;
+      if (drawing.id !== "preview" && !drawingVisible(drawing, spanRef.current)) continue;
       const active = drawing.id === selectedRef.current;
       const from = next.length;
       if ((drawing.kind === "hline" || drawing.kind === "hray") && drawing.points[0]) {
         const y = series.priceToCoordinate(drawing.points[0].price);
         if (y != null && drawing.kind === "hline") next.push({ id: drawing.id, kind: "hline", y, color: drawing.color, label: drawing.points[0].price.toFixed(2), selected: active });
-        if (drawing.kind === "hray") pushSegment(next, drawing.id, drawing.points[0], { time: drawing.points[0].time + barStep(candles) * 80, price: drawing.points[0].price }, drawing.color, active, xy, drawing.dash === "dashed");
+        if (drawing.kind === "hray" && y != null) {
+          const x = timeToScreenX((index) => scale.logicalToCoordinate(index as Logical), candles, drawing.points[0].time);
+          if (x != null) next.push({ id: drawing.id, kind: "segment", x1: x, y1: y, x2: Math.max(x, scale.width()), y2: y, color: drawing.color, selected: active, dash: drawing.dash === "dashed" });
+        }
       } else if ((drawing.kind === "text" || drawing.kind === "note" || drawing.kind === "price" || drawing.kind === "callout") && drawing.points[0]) {
         const at = xy(drawing.points[0]);
         if (at) {
           const label = drawing.kind === "price" ? (drawing.text || drawing.points[0].price.toFixed(2)) : (drawing.text || "Note");
-          if (drawing.kind === "note" || drawing.kind === "price" || drawing.kind === "callout") next.push({ id: `${drawing.id}-bg`, kind: "box", x: at.x - 4, y: drawing.kind === "callout" ? at.y - 36 : at.y - 16, width: Math.max(48, label.length * 7), height: 20, fill: "#141A26", color: drawing.color, selected: active });
+          const style = drawing.textStyle;
+          const size = style?.size ?? 12;
+          if (drawing.kind === "note" || drawing.kind === "price" || drawing.kind === "callout") next.push({ id: `${drawing.id}-bg`, kind: "box", x: at.x - 4, y: drawing.kind === "callout" ? at.y - 20 - size * 1.35 : at.y - size - 4, width: Math.max(48, label.length * size * 0.6 + 8), height: size + 8, fill: "var(--elevated)", color: drawing.color, selected: active });
           if (drawing.kind === "callout") next.push({ id: `${drawing.id}-stem`, kind: "segment", x1: at.x, y1: at.y, x2: at.x, y2: at.y - 16, color: drawing.color, selected: active });
-          next.push({ id: drawing.id, kind: "text", x: at.x, y: drawing.kind === "callout" ? at.y - 22 : at.y, text: label, color: drawing.color, selected: active });
+          next.push({ id: drawing.id, kind: "text", x: at.x, y: drawing.kind === "callout" ? at.y - 22 : at.y, text: label, color: drawing.color, selected: active, size, bold: style?.bold, italic: style?.italic });
         }
       } else if (drawing.kind === "marker" && drawing.points[0]) {
         const at = xy(drawing.points[0]);
@@ -124,22 +155,22 @@ export function DrawingLayer({
         }
       } else if (drawing.kind === "range" && drawing.points.length >= 2) {
         pushRange(next, drawing, xy, candles, active, hostRef.current);
-      } else if ((drawing.kind === "path" || drawing.kind === "brush") && drawing.points.length > 1) {
+      } else if ((drawing.kind === "path" || drawing.kind === "polyline" || drawing.kind === "brush" || drawing.kind === "highlighter") && drawing.points.length > 1) {
         const d = drawing.points.flatMap((point, index) => {
           const at = xy(point);
           return at ? [`${index === 0 ? "M" : "L"}${at.x},${at.y}`] : [];
         }).join(" ");
-        if (d) next.push({ id: drawing.id, kind: "poly", d, color: drawing.color, selected: active });
+        if (d) next.push({ id: drawing.id, kind: "poly", d, color: drawing.color, selected: active, opacity: drawing.kind === "highlighter" ? 0.35 : 1 });
       } else if ((drawing.kind === "fib" || drawing.kind === "fibext") && drawing.points.length >= 2) {
-        for (const level of fibLevels(drawing.points[0].price, drawing.points[1].price, drawing.kind === "fibext" ? FIB_EXTENSION_RATIOS : undefined)) {
+        fibLevels(drawing.points[0].price, drawing.points[1].price, drawing.kind === "fibext" ? FIB_EXTENSION_RATIOS : undefined).forEach((level, index) => {
           const y = series.priceToCoordinate(level.price);
-          if (y != null) next.push({ id: `${drawing.id}-${level.ratio}`, kind: "hline", y, color: drawing.color, label: `${(level.ratio * 100).toFixed(1)}% ${level.price.toFixed(2)}`, selected: active });
-        }
+          if (y != null) next.push({ id: `${drawing.id}-${level.ratio}`, kind: "hline", y, color: levelColor(drawing, index), label: `${(level.ratio * 100).toFixed(1)}% ${level.price.toFixed(2)}`, selected: active });
+        });
       } else if (drawing.kind === "fibtime" && drawing.points.length >= 2) {
-        for (const zone of fibTimes(drawing.points[0].time, drawing.points[1].time)) {
+        fibTimes(drawing.points[0].time, drawing.points[1].time).forEach((zone, index) => {
           const at = xy({ time: zone.time, price: drawing.points[0].price });
-          if (at) next.push({ id: `${drawing.id}-t${zone.ratio}`, kind: "vline", x: at.x, color: drawing.color, selected: active });
-        }
+          if (at) next.push({ id: `${drawing.id}-t${zone.ratio}`, kind: "vline", x: at.x, color: levelColor(drawing, index), selected: active });
+        });
       } else if (drawing.kind === "channel" && drawing.points.length >= 2) {
         pushSegment(next, drawing.id, drawing.points[0], drawing.points[1], drawing.color, active, xy);
         const offset = (drawing.points[2]?.price ?? drawing.points[0].price) - drawing.points[0].price;
@@ -156,7 +187,7 @@ export function DrawingLayer({
         };
         pushSegment(next, `${drawing.id}-ext`, drawing.points[1], extend, drawing.color, active, xy, true);
       } else if (drawing.kind === "avwap" && drawing.points[0]) {
-        pushPoly(next, drawing.id, anchoredVwap(candles, drawing.points[0].time), "#089981", active, xy);
+        pushPoly(next, drawing.id, anchoredVwap(candles, drawing.points[0].time), drawing.color, active, xy);
       } else if ((drawing.kind === "bars" || drawing.kind === "ghost") && drawing.points.length >= 2) {
         pushPoly(next, drawing.id, patternLine(candles, drawing.points[0].time, drawing.points[1].time, drawing.kind === "ghost"), drawing.color, active, xy, drawing.kind === "ghost" ? 0.45 : 1);
       } else if (drawing.kind === "vprofile" && drawing.points.length >= 2) {
@@ -176,6 +207,51 @@ export function DrawingLayer({
       } else if (drawing.kind === "arrow" && drawing.points.length >= 2) {
         pushSegment(next, drawing.id, drawing.points[0], drawing.points[1], drawing.color, active, xy, drawing.dash === "dashed");
         pushArrowHead(next, drawing, xy);
+      } else if (drawing.kind === "circle" && drawing.points.length >= 2) {
+        pushCircle(next, drawing, xy, active);
+      } else if (drawing.kind === "rrect" && drawing.points.length >= 2) {
+        pushRotatedRect(next, drawing, xy, active);
+      } else if ((drawing.kind === "arc" || drawing.kind === "curve" || drawing.kind === "dcurve") && drawing.points.length >= 2) {
+        pushBend(next, drawing, xy, active);
+      } else if (isMarkArrow(drawing.kind) && drawing.points[0]) {
+        pushMarkArrow(next, drawing, xy, active);
+      } else if (drawing.kind === "crossline" && drawing.points[0]) {
+        const at = xy(drawing.points[0]);
+        if (at) {
+          next.push({ id: drawing.id, kind: "hline", y: at.y, color: drawing.color, label: drawing.points[0].price.toFixed(2), selected: active });
+          next.push({ id: `${drawing.id}-v`, kind: "vline", x: at.x, color: drawing.color, selected: active });
+        }
+      } else if (drawing.kind === "infoline" && drawing.points.length >= 2) {
+        pushSegment(next, drawing.id, drawing.points[0], drawing.points[1], drawing.color, active, xy);
+        const left = xy(drawing.points[0]);
+        const right = xy(drawing.points[1]);
+        if (left && right) {
+          const stats = measureStats(drawing.points[0], drawing.points[1], barsBetween(drawing.points[0].time, drawing.points[1].time, barStep(candles), candles.map((candle) => candle.time)));
+          next.push({ id: `${drawing.id}-info`, kind: "text", x: right.x + 6, y: right.y - 6, text: `${signed(stats.change)} (${signed(stats.percent)}%) · ${stats.bars} bars · ${screenAngle(right.x - left.x, right.y - left.y).toFixed(1)}°`, color: drawing.color, selected: active });
+        }
+      } else if ((drawing.kind === "daterange" || drawing.kind === "dprange") && drawing.points.length >= 2) {
+        pushSpan(next, drawing, xy, candles, active);
+      } else if (drawing.kind === "regression" && drawing.points.length >= 2) {
+        pushRegression(next, drawing, xy, candles, active);
+      } else if ((drawing.kind === "pitchfork" || drawing.kind === "schiff" || drawing.kind === "modschiff") && drawing.points.length >= 3) {
+        pushPitchfork(next, drawing, drawing.kind, xy, active);
+      } else if (drawing.kind === "fibfan" && drawing.points.length >= 2) {
+        pushFan(next, drawing, [...FIB_FAN_RATIOS, 1].map((ratio) => ({ ratio, label: ratio === 1 ? "1" : ratio.toString() })), xy, active);
+      } else if (drawing.kind === "gannfan" && drawing.points.length >= 2) {
+        pushFan(next, drawing, GANN_FAN.map(([a, b]) => ({ ratio: a / b, label: `${a}x${b}` })), xy, active);
+      } else if (drawing.kind === "fibchannel" && drawing.points.length >= 3) {
+        const offset = drawing.points[2].price - drawing.points[0].price;
+        FIB_CHANNEL_RATIOS.forEach((ratio, index) => {
+          const a = { time: drawing.points[0].time, price: drawing.points[0].price + offset * ratio };
+          const b = { time: drawing.points[1].time, price: drawing.points[1].price + offset * ratio };
+          pushSegment(next, index === 0 ? drawing.id : `${drawing.id}-c${index}`, a, b, levelColor(drawing, index), active, xy, ratio !== 0 && ratio !== 1);
+          const end = xy(b);
+          if (end) next.push({ id: `${drawing.id}-cl${index}`, kind: "text", x: end.x + 4, y: end.y + 4, text: ratio.toString(), color: levelColor(drawing, index), selected: active, size: 10 });
+        });
+      } else if ((drawing.kind === "gannbox" || drawing.kind === "gannsquare") && drawing.points.length >= 2) {
+        pushGann(next, drawing, xy, active);
+      } else if ((drawing.kind === "xabcd" || drawing.kind === "headshoulders" || drawing.kind === "elliott" || drawing.kind === "elliottabc") && drawing.points.length >= 2) {
+        pushPattern(next, drawing, xy, active);
       } else if (drawing.kind === "angle" && drawing.points.length >= 2) {
         pushSegment(next, drawing.id, drawing.points[0], drawing.points[1], drawing.color, active, xy);
         const left = xy(drawing.points[0]);
@@ -193,13 +269,17 @@ export function DrawingLayer({
         }
       }
       const drawn = next.length;
+      const fade = !isClosedShape(drawing.kind) && drawing.borderOpacity != null && drawing.borderOpacity < 1 ? drawing.borderOpacity : null;
       for (let index = from; index < drawn; index += 1) {
         const mark = next[index];
         const forced = "dash" in mark && mark.dash;
-        next[index] = { ...mark, stroke: drawing.width ?? 1.5, pattern: forced ? "dashed" : (drawing.dash ?? "solid") };
+        const tinted = fade != null && "color" in mark ? { color: tint(mark.color, fade) } : {};
+        next[index] = { ...mark, ...tinted, stroke: mark.stroke ?? drawing.width ?? 1.5, pattern: forced ? "dashed" : (mark.pattern ?? drawing.dash ?? "solid") };
       }
+      if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
       if (active && drawing.id !== "preview") {
-        drawing.points.forEach((point, index) => {
+        if ((drawing.kind === "rect" || drawing.kind === "ellipse") && drawing.points.length >= 2) pushBoxHandles(next, drawing, xy);
+        else drawing.points.forEach((point, index) => {
           const at = xy(point);
           if (at) next.push({ id: `${drawing.id}#${index}`, kind: "handle", x: at.x, y: at.y, selected: true });
         });
@@ -215,7 +295,7 @@ export function DrawingLayer({
     const active = toolRef.current;
     if (!draft.length || !preview) return null;
     const points = [...draft, preview];
-    if (pointsNeeded(active) >= 2) return { id: "preview", kind: active as Drawing["kind"], points, color: "#9598A1", locked: false };
+    if (pointsNeeded(active) >= 2) return { id: "preview", kind: active as Drawing["kind"], points, color: "var(--muted)", locked: false };
     return null;
   }
 
@@ -227,7 +307,12 @@ export function DrawingLayer({
     chart.timeScale().subscribeVisibleTimeRangeChange(onRange);
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
     chart.timeScale().subscribeSizeChange(onRange);
-    const onClick = () => { setSelected(null); onSelectRef.current?.(null); };
+    const onClick = () => {
+      if (performance.now() - pickedAt.current < 300) return;
+      setSelected(null);
+      onSelectRef.current?.(null);
+      setMenu(null);
+    };
     chart.subscribeClick(onClick);
     return () => {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(onRange);
@@ -235,7 +320,7 @@ export function DrawingLayer({
       chart.timeScale().unsubscribeSizeChange(onRange);
       chart.unsubscribeClick(onClick);
     };
-  }, [candles, drawings, hidden, selected, tool, ready]);
+  }, [candles, drawings, hidden, selected, tool, ready, span]);
 
   useEffect(() => {
     if (!enabled || !command) return;
@@ -244,9 +329,9 @@ export function DrawingLayer({
       const id = selectedRef.current;
       if (id) {
         const item = current.find((drawing) => drawing.id === id);
-        if (item && !item.locked) onDrawingsRef.current(current.filter((drawing) => drawing.id !== id), true);
+        if (item && !item.locked && !lockAllRef.current) onDrawingsRef.current(current.filter((drawing) => drawing.id !== id), true);
         setSelected(null);
-      } else if (window.confirm("Remove all drawings for this symbol? Orders and balances stay.")) {
+      } else if (!lockAllRef.current && window.confirm("Remove all drawings for this symbol? Orders and balances stay.")) {
         onDrawingsRef.current([], true);
       }
     } else if (command.name === "lock") {
@@ -267,6 +352,7 @@ export function DrawingLayer({
       const target = event.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
       if (event.key === "Escape") {
+        setMenu(null);
         measureDrag.current = null;
         draftRef.current = [];
         previewRef.current = null;
@@ -277,12 +363,12 @@ export function DrawingLayer({
       }
       if ((event.key === "Delete" || event.key === "Backspace") && selectedRef.current) {
         const item = drawingsRef.current.find((drawing) => drawing.id === selectedRef.current);
-        if (item && !item.locked) onDrawingsRef.current(drawingsRef.current.filter((drawing) => drawing.id !== item.id), true);
+        if (item && !item.locked && !lockAllRef.current) onDrawingsRef.current(drawingsRef.current.filter((drawing) => drawing.id !== item.id), true);
         setSelected(null);
         onSelectRef.current?.(null);
       }
-      if (event.key === "Enter" && toolRef.current === "path" && draftRef.current.length >= 2) {
-        commit(draftRef.current);
+      if (event.key === "Enter" && (toolRef.current === "path" || toolRef.current === "polyline") && draftRef.current.length >= 2) {
+        commit(draftRef.current, toolRef.current);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -291,14 +377,18 @@ export function DrawingLayer({
 
   function commit(points: Point[], kind: Drawing["kind"] = toolRef.current as Drawing["kind"]) {
     const typed = annotationRef.current.trim();
-    const text = kind === "price" ? (typed || points[0]?.price.toFixed(2) || "") : kind === "marker" ? typed : (typed || "Note");
-    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: "#D4AF37", width: 1.5, dash: "solid", locked: false };
+    const text = kind === "price" ? (typed || points[0]?.price.toFixed(2) || "") : kind === "marker" ? typed : (typed || (kind === "text" || kind === "note" || kind === "callout" ? "Note" : ""));
+    const style = preferredTemplate(kind);
+    const now = Date.now();
+    const rectangle = kind === "rect";
+    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (rectangle ? "#F48FB1" : "#D4AF37"), fill: style?.fill ?? (rectangle ? "#F8BBD0" : undefined), fillOpacity: style?.fillOpacity ?? (rectangle ? 0.28 : undefined), width: style?.width ?? (rectangle ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
     onDrawingsRef.current([...drawingsRef.current, drawing], true);
     draftRef.current = [];
     previewRef.current = null;
     brushing.current = null;
     measureDrag.current = null;
     project();
+    if (!stayRef.current) onToolRef.current("cursor");
   }
 
   function read(event: { clientX: number; clientY: number }): Point | null {
@@ -309,26 +399,35 @@ export function DrawingLayer({
     const rect = host.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const located = chart.timeScale().coordinateToTime(x);
     const price = series.coordinateToPrice(y);
-    if (price == null) return null;
-    let time: number;
-    if (typeof located === "number") time = located;
-    else {
-      const logical = chart.timeScale().coordinateToLogical(x);
-      const step = barStep(candles);
-      if (logical == null || !candles.length || step <= 0) return null;
-      time = candles[candles.length - 1].time + (logical - (candles.length - 1)) * step;
-    }
-    if (!magnetRef.current || !candles.length) return { time, price };
+    const time = screenXToTime((pixel) => chart.timeScale().coordinateToLogical(pixel), candles, x);
+    if (price == null || time == null) return null;
+    const mode = magnetRef.current;
+    if (mode === "off" || !candles.length) return { time, price };
     const bar = candles.reduce((best, candle) => Math.abs(candle.time - time) < Math.abs(best.time - time) ? candle : best);
     const snap = [bar.open, bar.high, bar.low, bar.close].reduce((best, value) => Math.abs(value - price) < Math.abs(best - price) ? value : best);
+    if (mode === "weak") {
+      const snapY = series.priceToCoordinate(snap);
+      if (snapY == null || Math.abs(snapY - y) > WEAK_MAGNET_PX) return { time, price };
+    }
     return { time: bar.time, price: snap };
+  }
+
+  function isLocked(drawing: Drawing) {
+    return Boolean(drawing.locked) || lockAll;
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     const point = read(event);
     if (!point) return;
+    if (isClosedShape(toolRef.current as Drawing["kind"])) {
+      shapeDrag.current = point;
+      draftRef.current = [point];
+      previewRef.current = point;
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* The pointer already ended. */ }
+      project();
+      return;
+    }
     if (toolRef.current === "range") {
       measureDrag.current = measureGestureDown(point);
       draftRef.current = [point];
@@ -337,7 +436,7 @@ export function DrawingLayer({
       project();
       return;
     }
-    if (toolRef.current === "brush") {
+    if (toolRef.current === "brush" || toolRef.current === "highlighter") {
       brushing.current = [point];
       event.currentTarget.setPointerCapture(event.pointerId);
     }
@@ -349,6 +448,12 @@ export function DrawingLayer({
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     const point = read(event);
+    if (shapeDrag.current && point) {
+      draftRef.current = [shapeDrag.current];
+      previewRef.current = point;
+      project();
+      return;
+    }
     if (measureDrag.current) {
       if (!point) return;
       measureDrag.current = measureGestureMove(measureDrag.current, point);
@@ -358,7 +463,7 @@ export function DrawingLayer({
       return;
     }
     if (!point) return;
-    if (brushing.current && toolRef.current === "brush") {
+    if (brushing.current && (toolRef.current === "brush" || toolRef.current === "highlighter")) {
       const last = brushing.current[brushing.current.length - 1];
       if (Math.abs(point.price - last.price) > 0 || point.time !== last.time) brushing.current.push(point);
       draftRef.current = brushing.current;
@@ -383,6 +488,13 @@ export function DrawingLayer({
   }
 
   function onPointerCancel() {
+    if (shapeDrag.current) {
+      shapeDrag.current = null;
+      draftRef.current = [];
+      previewRef.current = null;
+      project();
+      return;
+    }
     if (!measureDrag.current) return;
     measureDrag.current = null;
     draftRef.current = [];
@@ -392,10 +504,20 @@ export function DrawingLayer({
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     const point = read(event);
+    if (shapeDrag.current) {
+      const start = shapeDrag.current;
+      shapeDrag.current = null;
+      const box = point ? dragBox(start, point) : null;
+      draftRef.current = [];
+      previewRef.current = null;
+      if (box) commit(box, toolRef.current as Drawing["kind"]);
+      else project();
+      return;
+    }
     if (finishMeasure(point)) return;
     const active = toolRef.current;
-    if (active === "brush" && brushing.current && brushing.current.length > 1) {
-      commit(brushing.current, "brush");
+    if ((active === "brush" || active === "highlighter") && brushing.current && brushing.current.length > 1) {
+      commit(brushing.current, active);
       return;
     }
     if (active === "zoom" && brushing.current && point && chartRef.current) {
@@ -409,10 +531,10 @@ export function DrawingLayer({
     if (!point) return;
     const needed = pointsNeeded(active);
     if (needed === 1) commit([point], active as Drawing["kind"]);
-    else if (needed === 2 || needed === 3) {
+    else if (needed >= 2 && Number.isFinite(needed)) {
       draftRef.current = [...draftRef.current, point];
       if (draftRef.current.length >= needed) commit(draftRef.current.slice(0, needed), active as Drawing["kind"]);
-    } else if (active === "path") {
+    } else if (active === "path" || active === "polyline") {
       draftRef.current = [...draftRef.current, point];
     }
     previewRef.current = point;
@@ -422,15 +544,22 @@ export function DrawingLayer({
   function startDrag(id: string, event: ReactPointerEvent) {
     event.stopPropagation();
     event.preventDefault();
-    const handle = id.split("#");
-    const pointIndex = handle.length > 1 ? Number(handle[1]) : undefined;
-    const lookup = handle[0];
+    const hash = id.lastIndexOf("#");
+    const suffix = hash >= 0 ? id.slice(hash + 1) : "";
+    const pointIndex = suffix === "" ? undefined : Number(suffix);
+    const lookup = hash >= 0 ? id.slice(0, hash) : id;
     const drawing = drawingsRef.current.find((item) => item.id === lookup || lookup.startsWith(`${item.id}-`) || lookup.startsWith(`${item.id}#`));
     const realId = drawing?.id;
-    if (!realId) return;
+    if (!realId || !drawing) return;
+    pickedAt.current = event.timeStamp;
+    if (toolRef.current === "eraser") {
+      if (!isLocked(drawing)) onDrawingsRef.current(drawingsRef.current.filter((item) => item.id !== realId), true);
+      setEraseHover(null);
+      return;
+    }
     setSelected(realId);
     onSelectRef.current?.(realId);
-    if (!drawing || drawing.locked || toolRef.current !== "cursor") return;
+    if (isLocked(drawing) || toolRef.current !== "cursor") return;
     const origin = read(event);
     if (!origin) return;
     const snapshot = drawing.points.map((point) => ({ ...point }));
@@ -438,7 +567,9 @@ export function DrawingLayer({
     const move = (ev: PointerEvent) => {
       const now = read(ev);
       if (!now) return;
-      const shifted = shiftDrawing({ ...drawing, points: snapshot }, now.time - origin.time, now.price - origin.price, Number.isFinite(pointIndex) ? pointIndex : undefined);
+      const shifted = isBoxHandle(suffix) && (drawing.kind === "rect" || drawing.kind === "ellipse")
+        ? resizeBox({ ...drawing, points: snapshot }, suffix, now)
+        : shiftDrawing({ ...drawing, points: snapshot }, now.time - origin.time, now.price - origin.price, Number.isFinite(pointIndex) ? pointIndex : undefined);
       onDrawingsRef.current(drawingsRef.current.map((item) => item.id === realId ? shifted : item), !saved);
       saved = true;
     };
@@ -497,6 +628,28 @@ export function DrawingLayer({
   }, [ready]);
 
   useEffect(() => {
+    if (!menu) return;
+    const close = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest("[data-drawing-menu]")) return;
+      setMenu(null);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [menu]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (box) setHostSize({ width: box.width, height: box.height });
+    });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     if (tool === "range" || !measureDrag.current) return;
     measureDrag.current = null;
     draftRef.current = [];
@@ -504,59 +657,263 @@ export function DrawingLayer({
     projectRef.current();
   }, [tool]);
 
+  function drawingFromMark(markId: string) {
+    return drawingsRef.current.find((item) => item.id === markId || markId.startsWith(`${item.id}-`) || markId.startsWith(`${item.id}#`)) ?? null;
+  }
+
+  function openMenu(event: { preventDefault: () => void; clientX: number; clientY: number; currentTarget: EventTarget | null }) {
+    if (toolRef.current !== "cursor") return;
+    const node = event.currentTarget as Element | null;
+    const markId = node?.getAttribute("data-drawing");
+    const drawing = markId ? drawingFromMark(markId) : null;
+    if (!drawing) return;
+    event.preventDefault();
+    setSelected(drawing.id);
+    onSelectRef.current?.(drawing.id);
+    setMenu({ x: event.clientX, y: event.clientY, id: drawing.id });
+  }
+
   const capturing = enabled && tool !== "cursor";
+  const interactive = tool === "cursor" || tool === "eraser";
+  const hit = interactive ? "auto" : "none";
+  const hitStroke = interactive ? "stroke" : "none";
+  const menuDrawing = menu ? drawings.find((item) => item.id === menu.id) : null;
+  const selectedDrawing = selected ? drawings.find((item) => item.id === selected) ?? null : null;
+  const handles = marks.flatMap((mark) => mark.kind === "handle" ? [mark] : []);
+  const editBar = selectedDrawing && tool === "cursor" && handles.length && hostSize.width > 0 ? placeEditBar(handles, hostSize.width) : null;
+  const erasing = tool === "eraser" ? eraseHover : null;
+
+  function ownedBy(markId: string, id: string) {
+    return markId === id || markId.startsWith(`${id}-`) || markId.startsWith(`${id}#`);
+  }
+
+  function hoverMark(markId: string) {
+    if (toolRef.current !== "eraser") return;
+    const drawing = drawingFromMark(markId);
+    setEraseHover(drawing && !isLocked(drawing) ? drawing.id : null);
+  }
+
+  function patchSelected(patch: Partial<Drawing>) {
+    const id = selectedRef.current;
+    const item = drawingsRef.current.find((drawing) => drawing.id === id);
+    if (!id || !item || isLocked(item)) return;
+    onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === id ? { ...drawing, ...patch, updatedAt: Date.now() } : drawing), true);
+  }
+
+  function removeDrawing(id: string) {
+    const item = drawingsRef.current.find((drawing) => drawing.id === id);
+    if (!item || isLocked(item)) return;
+    onDrawingsRef.current(drawingsRef.current.filter((drawing) => drawing.id !== id), true);
+    setSelected(null);
+    onSelectRef.current?.(null);
+  }
+
+  function runAction(id: string, action: EditAction) {
+    onDrawingsRef.current(applyListAction(drawingsRef.current, id, action), true);
+    if (action === "hide") {
+      setSelected(null);
+      onSelectRef.current?.(null);
+    }
+  }
+
+  function bind(markId: string) {
+    return {
+      "data-drawing": markId,
+      onPointerDown: (event: ReactPointerEvent) => startDrag(markId, event),
+      onPointerEnter: () => hoverMark(markId),
+      onPointerLeave: () => setEraseHover(null),
+      onContextMenu: openMenu,
+    };
+  }
+
   return (
-    <div ref={hostRef} className="absolute inset-0 z-10" style={{ pointerEvents: capturing ? "auto" : "none", touchAction: capturing ? "none" : "auto", cursor: capturing ? "crosshair" : "default" }} onPointerDown={capturing ? onPointerDown : undefined} onPointerMove={capturing ? onPointerMove : undefined} onPointerUp={capturing ? onPointerUp : undefined} onPointerCancel={capturing ? onPointerCancel : undefined} onDoubleClick={capturing && tool === "path" ? () => { if (draftRef.current.length >= 2) commit(draftRef.current, "path"); } : undefined}>
+    <div ref={hostRef} className="absolute inset-0 z-10" style={{ pointerEvents: capturing ? "auto" : "none", touchAction: capturing ? "none" : "auto", cursor: tool === "eraser" ? "default" : capturing ? "crosshair" : "default" }} onPointerDown={capturing ? onPointerDown : undefined} onPointerMove={capturing ? onPointerMove : undefined} onPointerUp={capturing ? onPointerUp : undefined} onPointerCancel={capturing ? onPointerCancel : undefined} onDoubleClick={capturing && (tool === "path" || tool === "polyline") ? () => { if (draftRef.current.length >= 2) commit(draftRef.current, tool); } : undefined}>
       <svg className="h-full w-full" style={{ pointerEvents: "none" }}>
         {capturing ? <rect x="0" y="0" width="100%" height="100%" fill="transparent" style={{ pointerEvents: "all" }} /> : null}
         {marks.map((mark) => {
-          const width = mark.selected ? Math.max(mark.stroke ?? 1.5, 2.2) : (mark.stroke ?? 1.5);
+          const doomed = erasing != null && ownedBy(mark.id, erasing);
+          const width = mark.selected || doomed ? Math.max(mark.stroke ?? 1.5, 2.2) : (mark.stroke ?? 1.5);
           const dash = mark.pattern === "dashed" ? "6 4" : mark.pattern === "dotted" ? "1.5 3" : undefined;
+          const ink = mark.kind === "handle" ? "" : doomed ? "var(--loss)" : mark.color;
+          const pointer = tool === "eraser" ? "pointer" : undefined;
           if (mark.kind === "hline") {
             return (
-              <g key={mark.id} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)}>
-                <line x1="0" x2="100%" y1={mark.y} y2={mark.y} stroke={mark.color} strokeWidth={width} strokeDasharray={dash} />
-                <text x="8" y={mark.y - 4} fill={mark.color} fontSize="11">{mark.label}</text>
+              <g key={mark.id} {...bind(mark.id)} style={{ pointerEvents: hit, cursor: pointer }}>
+                <line x1="0" x2="100%" y1={mark.y} y2={mark.y} stroke="transparent" strokeWidth={16} style={{ pointerEvents: hitStroke }} />
+                <line x1="0" x2="100%" y1={mark.y} y2={mark.y} strokeWidth={width} strokeDasharray={dash} style={{ stroke: ink, pointerEvents: "none" }} />
+                <text x="8" y={mark.y - 4} fontSize="11" style={{ fill: ink }}>{mark.label}</text>
               </g>
             );
           }
           if (mark.kind === "vline") {
-            return <line key={mark.id} x1={mark.x} x2={mark.x} y1="0" y2="100%" stroke={mark.color} strokeWidth={width} strokeDasharray={dash} style={{ pointerEvents: tool === "cursor" ? "stroke" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return (
+              <g key={mark.id} {...bind(mark.id)} style={{ cursor: pointer }}>
+                <line x1={mark.x} x2={mark.x} y1="0" y2="100%" stroke="transparent" strokeWidth={16} style={{ pointerEvents: hitStroke }} />
+                <line x1={mark.x} x2={mark.x} y1="0" y2="100%" strokeWidth={width} strokeDasharray={dash} style={{ stroke: ink, pointerEvents: "none" }} />
+              </g>
+            );
           }
           if (mark.kind === "ellipse") {
-            return <ellipse key={mark.id} cx={mark.cx} cy={mark.cy} rx={mark.rx} ry={mark.ry} fill={mark.fill} stroke={mark.color} strokeWidth={width} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return <ellipse key={mark.id} {...bind(mark.id)} cx={mark.cx} cy={mark.cy} rx={mark.rx} ry={mark.ry} strokeWidth={width} strokeDasharray={dash} style={{ fill: mark.fill, stroke: ink, pointerEvents: hit, cursor: pointer }} />;
           }
           if (mark.kind === "handle") {
-            return <circle key={mark.id} cx={mark.x} cy={mark.y} r="4" fill="#F8FAFC" stroke="#0A0D14" strokeWidth="1" style={{ pointerEvents: "auto" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return <circle key={mark.id} cx={mark.x} cy={mark.y} r="4.5" strokeWidth="1.5" style={{ fill: "var(--panel)", stroke: "var(--primary)", pointerEvents: "auto", cursor: handleCursor(mark.id) }} onPointerDown={(event) => startDrag(mark.id, event)} />;
           }
           if (mark.kind === "box") {
-            return <rect key={mark.id} x={mark.x} y={mark.y} width={mark.width} height={mark.height} fill={mark.fill} stroke={mark.color} strokeWidth={width} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return <rect key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} width={mark.width} height={mark.height} strokeWidth={width} strokeDasharray={dash} style={{ fill: mark.fill, stroke: ink, pointerEvents: hit, cursor: pointer }} />;
           }
           if (mark.kind === "card") {
             return (
-              <g key={mark.id} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)}>
-                <rect x={mark.x} y={mark.y} width={mark.width} height={mark.height} rx="4" fill="#141A26" stroke={mark.color} />
-                {mark.lines.map((line, index) => <text key={line} x={mark.x + 8} y={mark.y + 16 + index * 14} fill={line.startsWith("Direction") || line.startsWith("Price Change") || line.startsWith("Percentage") ? mark.color : "#F8FAFC"} fontSize="11">{line}</text>)}
+              <g key={mark.id} {...bind(mark.id)} style={{ pointerEvents: hit, cursor: pointer }}>
+                <rect x={mark.x} y={mark.y} width={mark.width} height={mark.height} rx="6" style={{ fill: "var(--elevated)", stroke: ink }} />
+                {mark.lines.map((line, index) => <text key={line} x={mark.x + 8} y={mark.y + 16 + index * 14} fontSize="11" style={{ fill: line.startsWith("Direction") || line.startsWith("Price Change") || line.startsWith("Percentage") ? ink : "var(--text)" }}>{line}</text>)}
               </g>
             );
           }
           if (mark.kind === "profile") {
-            return <rect key={mark.id} x={mark.x} y={mark.y} width={mark.width} height={8} fill={mark.color} opacity={0.55} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return <rect key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} width={mark.width} height={8} opacity={0.55} style={{ fill: ink, pointerEvents: hit, cursor: pointer }} />;
           }
           if (mark.kind === "segment") {
-            return <line key={mark.id} x1={mark.x1} y1={mark.y1} x2={mark.x2} y2={mark.y2} stroke={mark.color} strokeWidth={width} strokeDasharray={dash} style={{ pointerEvents: tool === "cursor" ? "stroke" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return (
+              <g key={mark.id} {...bind(mark.id)} style={{ cursor: pointer }}>
+                <line x1={mark.x1} y1={mark.y1} x2={mark.x2} y2={mark.y2} stroke="transparent" strokeWidth={16} style={{ pointerEvents: hitStroke }} />
+                <line x1={mark.x1} y1={mark.y1} x2={mark.x2} y2={mark.y2} strokeWidth={width} strokeDasharray={dash} style={{ stroke: ink, pointerEvents: "none" }} />
+              </g>
+            );
           }
           if (mark.kind === "poly") {
-            return <path key={mark.id} d={mark.d} fill="none" stroke={mark.color} strokeWidth={width} strokeDasharray={dash} opacity={mark.opacity ?? 1} style={{ pointerEvents: tool === "cursor" ? "stroke" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return (
+              <g key={mark.id} {...bind(mark.id)} style={{ cursor: pointer }}>
+                <path d={mark.d} fill="none" stroke="transparent" strokeWidth={16} style={{ pointerEvents: hitStroke }} />
+                <path d={mark.d} fill="none" strokeWidth={width} strokeDasharray={dash} opacity={mark.opacity ?? 1} strokeLinecap="round" strokeLinejoin="round" style={{ stroke: ink, pointerEvents: "none" }} />
+              </g>
+            );
           }
           if (mark.kind === "dot") {
-            return <circle key={mark.id} cx={mark.x} cy={mark.y} r={mark.selected ? 6 : 4} fill={mark.color} style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return <circle key={mark.id} {...bind(mark.id)} cx={mark.x} cy={mark.y} r={mark.selected ? 6 : 4} style={{ fill: ink, pointerEvents: hit, cursor: pointer }} />;
           }
-          return <text key={mark.id} x={mark.x} y={mark.y} fill={mark.color} fontSize="12" style={{ pointerEvents: tool === "cursor" ? "auto" : "none" }} onPointerDown={(event) => startDrag(mark.id, event)}>{mark.text}</text>;
+          return <text key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} fontSize={mark.size ?? 12} fontWeight={mark.bold ? 700 : 400} fontStyle={mark.italic ? "italic" : "normal"} textAnchor={mark.anchor ?? "start"} style={{ fill: ink, pointerEvents: hit, cursor: pointer }}>{mark.text}</text>;
         })}
       </svg>
+      {selectedDrawing && editBar ? (
+        <DrawingEditBar
+          key={selectedDrawing.id}
+          drawing={selectedDrawing}
+          locked={isLocked(selectedDrawing)}
+          globalLock={lockAll}
+          at={editBar}
+          flip={editBar.y > hostSize.height / 2}
+          onPatch={patchSelected}
+          onDelete={() => removeDrawing(selectedDrawing.id)}
+          onToggleLock={() => onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === selectedDrawing.id ? { ...drawing, locked: !drawing.locked } : drawing), true)}
+          onSettings={() => setEditorOpen(true)}
+          onAction={(action) => runAction(selectedDrawing.id, action)}
+        />
+      ) : null}
+      {menu && menuDrawing ? (
+        <div data-drawing-menu role="menu" aria-label="Drawing actions" className="surface-overlay fixed z-50 min-w-44 rounded-lg p-1 text-dense" style={{ top: menu.y, left: menu.x, pointerEvents: "auto" }} onPointerDown={(event) => event.stopPropagation()}>
+          <ContextItem label="Settings" onClick={() => { setEditorOpen(true); setMenu(null); }} />
+          <ContextItem label="Clone" onClick={() => { runAction(menuDrawing.id, "duplicate"); setMenu(null); }} />
+          <ContextItem label="Bring forward" onClick={() => { runAction(menuDrawing.id, "forward"); setMenu(null); }} />
+          <ContextItem label="Send backward" onClick={() => { runAction(menuDrawing.id, "backward"); setMenu(null); }} />
+          <ContextItem label={menuDrawing.locked ? "Unlock" : "Lock"} disabled={lockAll} onClick={() => {
+            onDrawingsRef.current(drawingsRef.current.map((item) => item.id === menuDrawing.id ? { ...item, locked: !item.locked } : item), true);
+            setMenu(null);
+          }} />
+          <ContextItem label={menuDrawing.hidden ? "Show" : "Hide"} onClick={() => { runAction(menuDrawing.id, "hide"); setMenu(null); }} />
+          <ContextItem label="Remove" danger disabled={isLocked(menuDrawing)} onClick={() => { removeDrawing(menuDrawing.id); setMenu(null); }} />
+        </div>
+      ) : null}
+      {editorOpen && selectedDrawing ? <DrawingProperties drawing={selectedDrawing} onChange={(next) => onDrawingsRef.current(drawingsRef.current.map((item) => item.id === next.id ? next : item), true)} onClose={() => setEditorOpen(false)} /> : null}
     </div>
   );
+}
+
+function ContextItem({ label, danger, disabled, onClick }: { label: string; danger?: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" role="menuitem" disabled={disabled} className={`block h-8 w-full rounded-md px-2.5 text-left hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)] disabled:opacity-40 ${danger ? "text-loss" : "text-text"}`} onClick={onClick}>
+      {label}
+    </button>
+  );
+}
+
+function handleCursor(id: string) {
+  const name = id.slice(id.lastIndexOf("#") + 1);
+  if (name === "n" || name === "s") return "ns-resize";
+  if (name === "e" || name === "w") return "ew-resize";
+  if (name === "ne" || name === "sw") return "nesw-resize";
+  if (name === "nw" || name === "se") return "nwse-resize";
+  return "move";
+}
+
+function placeEditBar(handles: Array<{ x: number; y: number }>, hostWidth: number) {
+  const xs = handles.map((handle) => handle.x);
+  const ys = handles.map((handle) => handle.y);
+  const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const top = Math.min(...ys);
+  const limit = Math.max(184, hostWidth - 184);
+  return { x: Math.min(Math.max(184, mid), limit), y: top < 52 ? top + 18 : top - 48 };
+}
+
+function isMarkArrow(kind: Drawing["kind"]) {
+  return kind === "arrowmark" || kind === "arrowup" || kind === "arrowdown" || kind === "arrowleft" || kind === "arrowright";
+}
+
+function pushMarkArrow(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, selected: boolean) {
+  const at = xy(drawing.points[0]);
+  if (!at) return;
+  const vector = drawing.kind === "arrowdown" ? [0, 22] : drawing.kind === "arrowleft" ? [-22, 0] : drawing.kind === "arrowright" ? [22, 0] : drawing.kind === "arrowmark" ? [16, -16] : [0, -22];
+  const end = { x: at.x + vector[0], y: at.y + vector[1] };
+  marks.push({ id: drawing.id, kind: "segment", x1: at.x, y1: at.y, x2: end.x, y2: end.y, color: drawing.color, selected });
+  const angle = Math.atan2(end.y - at.y, end.x - at.x);
+  const size = 9;
+  const a = { x: end.x - size * Math.cos(angle - 0.45), y: end.y - size * Math.sin(angle - 0.45) };
+  const b = { x: end.x - size * Math.cos(angle + 0.45), y: end.y - size * Math.sin(angle + 0.45) };
+  marks.push({ id: `${drawing.id}-head`, kind: "poly", d: `M${a.x},${a.y} L${end.x},${end.y} L${b.x},${b.y}`, color: drawing.color, selected });
+}
+
+function pushCircle(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, selected: boolean) {
+  const center = xy(drawing.points[0]);
+  const edge = xy(drawing.points[1]);
+  if (!center || !edge) return;
+  const radius = Math.max(4, Math.hypot(edge.x - center.x, edge.y - center.y));
+  const fill = drawing.fillVisible === false ? "transparent" : tint(drawing.fill || drawing.color, drawing.fillOpacity ?? 0.13);
+  marks.push({ id: drawing.id, kind: "ellipse", cx: center.x, cy: center.y, rx: radius, ry: radius, color: drawing.color, fill, selected });
+}
+
+function pushRotatedRect(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, selected: boolean) {
+  const a = xy(drawing.points[0]);
+  const b = xy(drawing.points[1]);
+  if (!a || !b) return;
+  const c = drawing.points[2] ? xy(drawing.points[2]) : null;
+  if (!c) {
+    marks.push({ id: drawing.id, kind: "segment", x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: drawing.color, selected });
+    return;
+  }
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const height = (c.x - a.x) * nx + (c.y - a.y) * ny;
+  const c1 = { x: b.x + nx * height, y: b.y + ny * height };
+  const c2 = { x: a.x + nx * height, y: a.y + ny * height };
+  marks.push({ id: drawing.id, kind: "poly", d: `M${a.x},${a.y} L${b.x},${b.y} L${c1.x},${c1.y} L${c2.x},${c2.y} Z`, color: drawing.color, selected });
+}
+
+function pushBend(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, selected: boolean) {
+  const points = drawing.points.flatMap((point) => {
+    const at = xy(point);
+    return at ? [at] : [];
+  });
+  if (points.length < 2) return;
+  let d = points.map((point, index) => `${index === 0 ? "M" : "L"}${point.x},${point.y}`).join(" ");
+  if (drawing.kind === "dcurve" && points.length >= 4) d = `M${points[0].x},${points[0].y} C${points[1].x},${points[1].y} ${points[2].x},${points[2].y} ${points[3].x},${points[3].y}`;
+  else if (drawing.kind === "arc" && points.length >= 3) {
+    const control = { x: 2 * points[1].x - 0.5 * points[0].x - 0.5 * points[2].x, y: 2 * points[1].y - 0.5 * points[0].y - 0.5 * points[2].y };
+    d = `M${points[0].x},${points[0].y} Q${control.x},${control.y} ${points[2].x},${points[2].y}`;
+  } else if (drawing.kind === "curve" && points.length >= 3) d = `M${points[0].x},${points[0].y} Q${points[1].x},${points[1].y} ${points[2].x},${points[2].y}`;
+  marks.push({ id: drawing.id, kind: "poly", d, color: drawing.color, selected });
 }
 
 function pushRange(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, candles: Bar[], selected: boolean, host: HTMLElement | null) {
@@ -576,7 +933,7 @@ function pushRange(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: n
     { width: Math.max(168, ...lines.map((line) => line.length * 6.5 + 16)), height: lines.length * 14 + 12 },
     bounds.width > 0 && bounds.height > 0 ? bounds : { width: 10_000, height: 10_000 },
   );
-  marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill: `${tone}33`, color: tone, selected });
+  marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill: tint(tone, 0.2), color: tone, selected });
   marks.push({ id: `${drawing.id}-start`, kind: "dot", x: left.x, y: left.y, color: tone, selected });
   marks.push({ id: `${drawing.id}-end`, kind: "dot", x: right.x, y: right.y, color: tone, selected });
   marks.push({ id: `${drawing.id}-card`, kind: "card", x: card.x, y: card.y, width: card.width, height: card.height, lines, color: tone, selected });
@@ -594,6 +951,17 @@ function formatSpan(seconds: number) {
   return `${Math.round(abs)}s`;
 }
 
+function pushCenterLine(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null) {
+  const style = drawing.center ?? RECTANGLE_CENTER;
+  if (!style.visible) return;
+  const segment = centerSegment(drawing.points);
+  if (!segment) return;
+  const left = xy(segment[0]);
+  const right = xy(segment[1]);
+  if (!left || !right) return;
+  marks.push({ id: `${drawing.id}-center`, kind: "segment", x1: left.x, y1: left.y, x2: right.x, y2: right.y, color: style.color, selected: false, stroke: style.width, pattern: style.dash });
+}
+
 function pushClosed(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, selected: boolean) {
   const left = xy(drawing.points[0]);
   const right = xy(drawing.points[1]);
@@ -602,11 +970,43 @@ function pushClosed(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: 
   const y = Math.min(left.y, right.y);
   const width = Math.max(2, Math.abs(right.x - left.x));
   const height = Math.max(2, Math.abs(right.y - left.y));
+  const stroke = drawing.borderVisible === false ? "transparent" : tint(drawing.color, drawing.borderOpacity ?? 1);
+  const fill = drawing.fillVisible === false ? "transparent" : tint(drawing.fill || drawing.color, drawing.fillOpacity ?? 0.13);
   if (drawing.kind === "ellipse") {
-    marks.push({ id: drawing.id, kind: "ellipse", cx: x + width / 2, cy: y + height / 2, rx: width / 2, ry: height / 2, color: drawing.color, fill: `${drawing.color}22`, selected });
+    marks.push({ id: drawing.id, kind: "ellipse", cx: x + width / 2, cy: y + height / 2, rx: width / 2, ry: height / 2, color: stroke, fill, selected });
+    pushShapeText(marks, drawing, x, y, width, height);
     return;
   }
-  marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill: `${drawing.color}22`, color: drawing.color, selected });
+  marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill, color: stroke, selected });
+  pushShapeText(marks, drawing, x, y, width, height);
+}
+
+function pushShapeText(marks: Mark[], drawing: Drawing, x: number, y: number, width: number, height: number) {
+  const style = drawing.textStyle ?? (drawing.text ? defaultTextStyle() : null);
+  if (!drawing.text || !style || style.visible === false) return;
+  const textX = style.align === "left" ? x + 6 : style.align === "right" ? x + width - 6 : x + width / 2;
+  const textY = style.valign === "top" ? y + style.size : style.valign === "bottom" ? y + height - 6 : y + height / 2;
+  marks.push({ id: `${drawing.id}-label`, kind: "text", x: textX, y: textY, text: drawing.text, color: style.color, selected: false, size: style.size, bold: style.bold, italic: style.italic, anchor: style.align === "left" ? "start" : style.align === "right" ? "end" : "middle" });
+}
+
+function pushBoxHandles(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null) {
+  const [first, second] = drawing.points;
+  const topLeft = xy({ time: Math.min(first.time, second.time), price: Math.max(first.price, second.price) });
+  const bottomRight = xy({ time: Math.max(first.time, second.time), price: Math.min(first.price, second.price) });
+  if (!topLeft || !bottomRight) return;
+  const midX = (topLeft.x + bottomRight.x) / 2;
+  const midY = (topLeft.y + bottomRight.y) / 2;
+  const spots = {
+    nw: topLeft,
+    n: { x: midX, y: topLeft.y },
+    ne: { x: bottomRight.x, y: topLeft.y },
+    e: { x: bottomRight.x, y: midY },
+    se: bottomRight,
+    s: { x: midX, y: bottomRight.y },
+    sw: { x: topLeft.x, y: bottomRight.y },
+    w: { x: topLeft.x, y: midY },
+  };
+  for (const [name, at] of Object.entries(spots)) marks.push({ id: `${drawing.id}#${name}`, kind: "handle", x: at.x, y: at.y, selected: true });
 }
 
 function pushArrowHead(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null) {
@@ -620,7 +1020,7 @@ function pushArrowHead(marks: Mark[], drawing: Drawing, xy: (point: Point) => { 
   marks.push({ id: `${drawing.id}-head`, kind: "poly", d: `M${a.x},${a.y} L${right.x},${right.y} L${b.x},${b.y}`, color: drawing.color, selected: false });
 }
 
-function pushSegment(marks: Mark[], id: string, a: Point, b: Point, color: string, selected: boolean, xy: (point: Point) => { x: number; y: number } | null, dash = false) {
+function pushSegment(marks: Mark[], id: string, a: Point, b: Point, color: string, selected: boolean, xy: XYFn, dash = false) {
   const left = xy(a);
   const right = xy(b);
   if (left && right) marks.push({ id, kind: "segment", x1: left.x, y1: left.y, x2: right.x, y2: right.y, color, selected, dash });
@@ -652,8 +1052,8 @@ function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x
   if (!left || !right || targetY == null || stopY == null || entryY == null) return;
   const x = Math.min(left.x, right.x);
   const width = Math.max(24, Math.abs(right.x - left.x));
-  const reward = "#089981";
-  const risk = "#F23645";
+  const reward = "var(--profit)";
+  const risk = "var(--loss)";
   const targetColor = drawing.kind === "long" ? reward : risk;
   const stopColor = drawing.kind === "long" ? risk : reward;
   marks.push(box(drawing.id, x, entryY, targetY, width, targetColor, drawing.id === "preview"));
@@ -663,7 +1063,7 @@ function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x
 
 function box(id: string, x: number, y1: number, y2: number, width: number, color: string, selected: boolean): Mark {
   const y = Math.min(y1, y2);
-  return { id, kind: "box", x, y, width, height: Math.max(2, Math.abs(y2 - y1)), fill: `${color}33`, color, selected };
+  return { id, kind: "box", x, y, width, height: Math.max(2, Math.abs(y2 - y1)), fill: tint(color, 0.2), color, selected };
 }
 
 function pushProfile(marks: Mark[], drawing: Drawing, candles: Bar[], xy: (point: Point) => { x: number; y: number } | null) {
@@ -687,7 +1087,7 @@ function pushProfile(marks: Mark[], drawing: Drawing, candles: Bar[], xy: (point
     const price = low + (index + 0.5) * step;
     const at = xy({ time: to, price });
     if (!at) return;
-    marks.push({ id: `${drawing.id}-${index}`, kind: "profile", x: at.x, y: at.y - 4, width: Math.max(2, (volume / peak) * 96), color: "#D4AF37", selected: false });
+    marks.push({ id: `${drawing.id}-${index}`, kind: "profile", x: at.x, y: at.y - 4, width: Math.max(2, (volume / peak) * 96), color: drawing.color, selected: false });
   });
 }
 
@@ -719,6 +1119,166 @@ function anchoredVwap(candles: Bar[], anchor: number): Point[] {
     line.push({ time: candle.time, price: priceVolume / volume });
   }
   return line;
+}
+
+type XYFn = (point: Point) => { x: number; y: number } | null;
+
+function tint(color: string, opacity: number) {
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return hexAlpha(color, opacity);
+  if (opacity >= 1) return color;
+  return `color-mix(in srgb, ${color} ${Math.round(Math.max(0, opacity) * 100)}%, transparent)`;
+}
+
+function signed(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}`;
+}
+
+function arrowHeadMark(id: string, from: { x: number; y: number }, to: { x: number; y: number }, color: string): Mark {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const size = 8;
+  const a = { x: to.x - size * Math.cos(angle - 0.45), y: to.y - size * Math.sin(angle - 0.45) };
+  const b = { x: to.x - size * Math.cos(angle + 0.45), y: to.y - size * Math.sin(angle + 0.45) };
+  return { id, kind: "poly", d: `M${a.x},${a.y} L${to.x},${to.y} L${b.x},${b.y}`, color, selected: false, pattern: "solid" };
+}
+
+function pushSpan(marks: Mark[], drawing: Drawing, xy: XYFn, candles: Bar[], selected: boolean) {
+  const left = xy(drawing.points[0]);
+  const right = xy(drawing.points[1]);
+  if (!left || !right) return;
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  const width = Math.max(4, Math.abs(right.x - left.x));
+  const height = Math.max(4, Math.abs(right.y - left.y));
+  const midY = y + height / 2;
+  const midX = x + width / 2;
+  const forward = right.x >= left.x;
+  const bars = barsBetween(drawing.points[0].time, drawing.points[1].time, barStep(candles), candles.map((candle) => candle.time));
+  const seconds = Math.abs(drawing.points[1].time - drawing.points[0].time);
+  marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill: tint(drawing.color, 0.12), color: tint(drawing.color, 0.5), selected });
+  marks.push({ id: `${drawing.id}-h`, kind: "segment", x1: x, y1: midY, x2: x + width, y2: midY, color: drawing.color, selected });
+  marks.push(arrowHeadMark(`${drawing.id}-hh`, forward ? { x, y: midY } : { x: x + width, y: midY }, forward ? { x: x + width, y: midY } : { x, y: midY }, drawing.color));
+  const lines = [`${bars} bars, ${formatSpan(seconds)}`];
+  if (drawing.kind === "dprange") {
+    const up = right.y <= left.y;
+    marks.push({ id: `${drawing.id}-v`, kind: "segment", x1: midX, y1: y, x2: midX, y2: y + height, color: drawing.color, selected });
+    marks.push(arrowHeadMark(`${drawing.id}-vh`, up ? { x: midX, y: y + height } : { x: midX, y }, up ? { x: midX, y } : { x: midX, y: y + height }, drawing.color));
+    const change = drawing.points[1].price - drawing.points[0].price;
+    const percent = drawing.points[0].price ? (change / drawing.points[0].price) * 100 : 0;
+    lines.unshift(`${signed(change)} (${signed(percent)}%)`);
+  }
+  lines.forEach((line, index) => marks.push({ id: `${drawing.id}-t${index}`, kind: "text", x: midX, y: y + height + 14 + index * 14, text: line, color: drawing.color, selected, anchor: "middle", size: 11 }));
+}
+
+function pushRegression(marks: Mark[], drawing: Drawing, xy: XYFn, candles: Bar[], selected: boolean) {
+  const from = Math.min(drawing.points[0].time, drawing.points[1].time);
+  const to = Math.max(drawing.points[0].time, drawing.points[1].time);
+  const fit = regressionLine(candles.filter((candle) => candle.time >= from && candle.time <= to).map((candle) => ({ time: candle.time, price: candle.close })));
+  if (!fit) {
+    pushSegment(marks, drawing.id, drawing.points[0], drawing.points[1], drawing.color, selected, xy, true);
+    return;
+  }
+  const band = fit.deviation * 2;
+  pushSegment(marks, drawing.id, { time: from, price: fit.at(from) }, { time: to, price: fit.at(to) }, drawing.color, selected, xy);
+  pushSegment(marks, `${drawing.id}-up`, { time: from, price: fit.at(from) + band }, { time: to, price: fit.at(to) + band }, drawing.color, selected, xy, true);
+  pushSegment(marks, `${drawing.id}-dn`, { time: from, price: fit.at(from) - band }, { time: to, price: fit.at(to) - band }, drawing.color, selected, xy, true);
+}
+
+function pushPitchfork(marks: Mark[], drawing: Drawing, kind: "pitchfork" | "schiff" | "modschiff", xy: XYFn, selected: boolean) {
+  const [a, b, c] = drawing.points;
+  const origin = pitchforkOrigin(kind, a, b);
+  const mid = { time: (b.time + c.time) / 2, price: (b.price + c.price) / 2 };
+  const dt = (mid.time - origin.time) * 4;
+  const dp = (mid.price - origin.price) * 4;
+  const reach = (point: Point) => ({ time: point.time + dt, price: point.price + dp });
+  pushSegment(marks, drawing.id, origin, reach(mid), drawing.color, selected, xy);
+  pushSegment(marks, `${drawing.id}-b`, b, reach(b), levelColor(drawing, 1), selected, xy);
+  pushSegment(marks, `${drawing.id}-c`, c, reach(c), levelColor(drawing, 2), selected, xy);
+  pushSegment(marks, `${drawing.id}-bc`, b, c, drawing.color, selected, xy, true);
+  if (origin !== a) pushSegment(marks, `${drawing.id}-ao`, a, origin, drawing.color, selected, xy, true);
+}
+
+function pushFan(marks: Mark[], drawing: Drawing, rays: Array<{ ratio: number; label: string }>, xy: XYFn, selected: boolean) {
+  const [origin, unit] = drawing.points;
+  const dt = unit.time - origin.time;
+  const dp = unit.price - origin.price;
+  rays.forEach((ray, index) => {
+    const target = { time: origin.time + dt, price: origin.price + dp * ray.ratio };
+    const far = farPoint(origin, target, 3);
+    const color = levelColor(drawing, index);
+    pushSegment(marks, index === 0 ? drawing.id : `${drawing.id}-r${index}`, origin, far, color, selected, xy);
+    const at = xy(target);
+    if (at) marks.push({ id: `${drawing.id}-rl${index}`, kind: "text", x: at.x + 4, y: at.y - 3, text: ray.label, color, selected, size: 10 });
+  });
+}
+
+function pushGann(marks: Mark[], drawing: Drawing, xy: XYFn, selected: boolean) {
+  const [first, second] = drawing.points;
+  const t0 = Math.min(first.time, second.time);
+  const t1 = Math.max(first.time, second.time);
+  const p0 = Math.min(first.price, second.price);
+  const p1 = Math.max(first.price, second.price);
+  const topLeft = xy({ time: t0, price: p1 });
+  const bottomRight = xy({ time: t1, price: p0 });
+  if (!topLeft || !bottomRight) return;
+  marks.push({ id: drawing.id, kind: "box", x: topLeft.x, y: topLeft.y, width: Math.max(2, bottomRight.x - topLeft.x), height: Math.max(2, bottomRight.y - topLeft.y), fill: tint(drawing.color, drawing.fillVisible === false ? 0 : drawing.fillOpacity ?? 0.06), color: drawing.color, selected });
+  pushSegment(marks, `${drawing.id}-d1`, { time: t0, price: p0 }, { time: t1, price: p1 }, drawing.color, selected, xy);
+  if (drawing.kind === "gannsquare") {
+    pushSegment(marks, `${drawing.id}-d2`, { time: t0, price: p1 }, { time: t1, price: p0 }, drawing.color, selected, xy);
+    pushSegment(marks, `${drawing.id}-mh`, { time: t0, price: (p0 + p1) / 2 }, { time: t1, price: (p0 + p1) / 2 }, drawing.color, selected, xy, true);
+    pushSegment(marks, `${drawing.id}-mv`, { time: (t0 + t1) / 2, price: p0 }, { time: (t0 + t1) / 2, price: p1 }, drawing.color, selected, xy, true);
+    return;
+  }
+  GANN_RATIOS.slice(1, -1).forEach((ratio, offset) => {
+    const index = offset + 1;
+    const color = levelColor(drawing, index);
+    const price = p0 + (p1 - p0) * ratio;
+    const time = t0 + (t1 - t0) * ratio;
+    pushSegment(marks, `${drawing.id}-gh${index}`, { time: t0, price }, { time: t1, price }, color, selected, xy, true);
+    pushSegment(marks, `${drawing.id}-gv${index}`, { time, price: p0 }, { time, price: p1 }, color, selected, xy, true);
+    const label = xy({ time: t1, price });
+    if (label) marks.push({ id: `${drawing.id}-gl${index}`, kind: "text", x: label.x + 4, y: label.y + 4, text: ratio.toString(), color, selected, size: 10 });
+  });
+}
+
+const PATTERN_LABELS: Record<"xabcd" | "headshoulders" | "elliott" | "elliottabc", string[]> = {
+  xabcd: ["X", "A", "B", "C", "D"],
+  headshoulders: ["Left shoulder", "", "Head", "", "Right shoulder"],
+  elliott: ["(1)", "(2)", "(3)", "(4)", "(5)"],
+  elliottabc: ["(A)", "(B)", "(C)"],
+};
+
+function pushPattern(marks: Mark[], drawing: Drawing, xy: XYFn, selected: boolean) {
+  const kind = drawing.kind as keyof typeof PATTERN_LABELS;
+  const points = drawing.points;
+  pushPoly(marks, drawing.id, points, drawing.color, selected, xy);
+  const labels = PATTERN_LABELS[kind];
+  points.forEach((point, index) => {
+    const label = labels[index];
+    const at = xy(point);
+    if (!label || !at) return;
+    const neighbours = [points[index - 1], points[index + 1]].filter((item): item is Point => item != null);
+    const high = neighbours.every((item) => point.price >= item.price);
+    marks.push({ id: `${drawing.id}-l${index}`, kind: "text", x: at.x, y: high ? at.y - 8 : at.y + 16, text: label, color: drawing.color, selected, anchor: "middle", size: 11, bold: true });
+  });
+  if (kind === "headshoulders" && points.length >= 4) {
+    pushSegment(marks, `${drawing.id}-neck`, farPoint(points[3], points[1], 0.6), farPoint(points[1], points[3], 0.6), drawing.color, selected, xy, true);
+  }
+  if (kind === "xabcd" && points.length >= 3) {
+    const leg = (a: Point, b: Point) => Math.abs(b.price - a.price);
+    const ratios: Array<[Point, Point, number, number, string]> = [];
+    if (points.length >= 3) ratios.push([points[0], points[2], leg(points[1], points[2]), leg(points[0], points[1]), "ab"]);
+    if (points.length >= 4) ratios.push([points[1], points[3], leg(points[2], points[3]), leg(points[1], points[2]), "bc"]);
+    if (points.length >= 5) {
+      ratios.push([points[2], points[4], leg(points[3], points[4]), leg(points[2], points[3]), "cd"]);
+      ratios.push([points[0], points[4], leg(points[1], points[4]), leg(points[0], points[1]), "xd"]);
+    }
+    for (const [a, b, part, whole, key] of ratios) {
+      pushSegment(marks, `${drawing.id}-${key}`, a, b, drawing.color, selected, xy, true);
+      const start = xy(a);
+      const end = xy(b);
+      if (start && end && whole > 0) marks.push({ id: `${drawing.id}-${key}r`, kind: "text", x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 4, text: (part / whole).toFixed(3), color: drawing.color, selected, anchor: "middle", size: 10 });
+    }
+  }
 }
 
 function nextColor(color: string) {

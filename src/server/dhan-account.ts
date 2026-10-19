@@ -1,9 +1,9 @@
 import { AppError } from "@/lib/http";
-import { dhanTokenStatus, getDhanAccessToken } from "@/server/settings";
+import { dhanTokenStatus, getDhanAccessToken, getDhanClientId } from "@/server/settings";
 
 async function dhanGet(path: string) {
-  const clientId = process.env.DHAN_CLIENT_ID?.trim();
-  if (!clientId) throw new AppError("DHAN_CLIENT_ID is not configured, so account data cannot be read.", 503);
+  const clientId = await getDhanClientId();
+  if (!clientId) throw new AppError("The account client id is not set, so account data cannot be read.", 503);
   const response = await fetch(`https://api.dhan.co/v2${path}`, {
     method: "GET",
     headers: {
@@ -21,7 +21,7 @@ async function dhanGet(path: string) {
 
 export async function brokerAccountView() {
   const token = await dhanTokenStatus();
-  const clientConfigured = Boolean(process.env.DHAN_CLIENT_ID?.trim());
+  const clientConfigured = Boolean(await getDhanClientId());
   const safeToken = {
     source: token.source,
     expiresAt: token.expiresAt,

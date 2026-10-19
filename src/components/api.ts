@@ -1,11 +1,34 @@
+export class ApiError extends Error {
+  status: number;
+  code: string;
+  field?: string;
+  details?: Record<string, unknown>;
+
+  constructor(message: string, status: number, code: string, field?: string, details?: Record<string, unknown>) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.field = field;
+    this.details = details;
+  }
+}
+
 export async function api<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError("No connection to TradeD. Check your internet and retry.", 0, "NETWORK");
+  }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Request failed.");
+  if (!response.ok) {
+    const message = typeof data.message === "string" ? data.message : typeof data.error === "string" ? data.error : `Request failed (HTTP ${response.status}).`;
+    throw new ApiError(message, response.status, typeof data.code === "string" ? data.code : "UNKNOWN", typeof data.field === "string" ? data.field : undefined, data.details && typeof data.details === "object" ? data.details : undefined);
+  }
   return data as T;
 }
 
@@ -67,6 +90,14 @@ export function istTime(value: string | null | undefined) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", second: "2-digit", day: "2-digit", month: "short" });
+}
+
+export function istStamp(value: string | null | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const text = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(date);
+  return `${text} IST`;
 }
 
 export function key() {

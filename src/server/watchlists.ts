@@ -1,8 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { registerOptionContract } from "@/server/option-chain";
 import { AppError } from "@/lib/http";
+import { LIQUID_NSE } from "@/lib/market/liquid";
 
-const SEEDS = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "ITC", "BHARTIARTL", "LT", "HINDUNILVR", "AXISBANK", "KOTAKBANK", "BAJFINANCE", "SUNPHARMA", "WIPRO", "NTPC"];
+const SEEDS = [...LIQUID_NSE];
 
 function present(list: {
   id: string;
@@ -53,12 +55,34 @@ export async function listWatchlists(userId: string) {
       });
     }
   }
+  const target = lists.find((list) => list.name === "Default") ?? lists[0];
+  if (target && target.items.length > 0 && target.items.length <= 16) {
+    const have = new Set(target.items.map((item) => item.instrument.symbol));
+    const room = 36 - target.items.length;
+    const wanted = SEEDS.filter((symbol) => !have.has(symbol)).slice(0, room);
+    if (wanted.length) {
+      const instruments = await prisma.instrument.findMany({ where: { symbol: { in: wanted }, isActive: true } });
+      const bySymbol = new Map(instruments.map((instrument) => [instrument.symbol, instrument]));
+      const adding = wanted.flatMap((symbol) => {
+        const instrument = bySymbol.get(symbol);
+        return instrument ? [{ watchlistId: target.id, instrumentId: instrument.id }] : [];
+      });
+      if (adding.length) {
+        await prisma.watchlistItem.createMany({ data: adding, skipDuplicates: true });
+        lists = await prisma.watchlist.findMany({
+          where: { userId },
+          include: { items: { include: { instrument: true }, orderBy: { createdAt: "asc" } } },
+          orderBy: { createdAt: "asc" },
+        });
+      }
+    }
+  }
   return lists.map(present);
 }
 
 export async function mutateWatchlist(
   userId: string,
-  body: { action?: string; id?: string; name?: string; symbol?: string },
+  body: { action?: string; id?: string; name?: string; symbol?: string; expiry?: string; strike?: number; right?: "CE" | "PE" },
 ) {
   const action = body.action ?? "";
   if (action === "create") {
@@ -94,6 +118,22 @@ export async function mutateWatchlist(
     if (count <= 1) throw new AppError("Keep at least one watchlist.", 400);
     await prisma.watchlist.delete({ where: { id: list.id } });
     return { ok: true };
+  }
+  if (action === "add-option") {
+    const expiry = typeof body.expiry === "string" ? body.expiry : "";
+    const strike = Number(body.strike);
+    const right = body.right === "PE" ? "PE" : body.right === "CE" ? "CE" : "";
+    if (!right || !Number.isFinite(strike)) throw new AppError("Choose an option contract.", 400);
+    const contract = await registerOptionContract({ underlying: body.symbol ?? "", expiry, strike, right });
+    const count = await prisma.watchlistItem.count({ where: { watchlistId: list.id } });
+    if (count >= 50) throw new AppError("This watchlist already has 50 instruments.", 400);
+    const instrument = await prisma.instrument.findUniqueOrThrow({ where: { symbol: contract.symbol } });
+    await prisma.watchlistItem.upsert({
+      where: { watchlistId_instrumentId: { watchlistId: list.id, instrumentId: instrument.id } },
+      create: { watchlistId: list.id, instrumentId: instrument.id },
+      update: {},
+    });
+    return { ok: true, symbol: contract.symbol };
   }
   const symbol = (body.symbol ?? "").trim().toUpperCase();
   const instrument = await prisma.instrument.findUnique({ where: { symbol } });

@@ -17,8 +17,9 @@ import {
 import type { Candle } from "@/components/chart-panel";
 import type { ForecastPoint } from "@/lib/market/forecast";
 
+/* Keep in sync with the --chart-* variables in src/app/tokens.css. */
 const UP = "#089981";
-const DOWN = "#f23645";
+const DOWN = "#F23645";
 const FORECAST_UP = "#FACC15";
 const FORECAST_DOWN = "#E879F9";
 
@@ -56,16 +57,16 @@ export function PredictionChart({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const background = scheme === "light" ? "#ffffff" : "#131722";
-    const text = scheme === "light" ? "#131722" : "#d1d4dc";
-    const grid = scheme === "light" ? "#f0f3fa" : "#2a2e39";
+    const background = scheme === "light" ? "#FFFFFF" : "#101620";
+    const text = scheme === "light" ? "#46546A" : "#B4C0D0";
+    const grid = scheme === "light" ? "#EEF1F6" : "#161E29";
     const chart = createChart(host, {
       autoSize: true,
       layout: { background: { type: ColorType.Solid, color: background }, textColor: text, fontSize: 10, attributionLogo: false },
       grid: { vertLines: { color: grid }, horzLines: { color: grid } },
       rightPriceScale: { borderColor: grid, minimumWidth: 84, entireTextOnly: true },
       timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false },
-      crosshair: { mode: 1, vertLine: { color: "#9598a1", style: LineStyle.Dashed, width: 1, labelBackgroundColor: text }, horzLine: { color: "#9598a1", style: LineStyle.Dashed, width: 1, labelBackgroundColor: text } },
+      crosshair: { mode: 1, vertLine: { color: scheme === "light" ? "#8593A8" : "#5D6B80", style: LineStyle.Dashed, width: 1, labelBackgroundColor: text }, horzLine: { color: scheme === "light" ? "#8593A8" : "#5D6B80", style: LineStyle.Dashed, width: 1, labelBackgroundColor: text } },
       handleScroll: true,
       handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
     });

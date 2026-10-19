@@ -2,10 +2,13 @@ import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { applyAdverseSlippage, rupeesToPaise } from "@/lib/money";
 import { DEMO_UNIVERSE, demoIntraday, demoDailyCandles, demoQuote, type Candle, type DemoQuote } from "@/lib/market/demo";
-import { nseCashSession } from "@/lib/market/clock";
-import { dhanCandles, dhanFeed, dhanIndexQuotes, dhanQuote, nseScrip, quoteFromFeed, rankFeed, sessionPreviousClose, type LiveMover } from "@/server/dhan-market";
+import { kolkataParts, nseCashSession } from "@/lib/market/clock";
+import { dhanCandles, dhanContextMinutes, dhanFeed, dhanIndexQuotes, dhanPriorDaily, dhanQuote, dhanSessionTape, nseScrip, quoteFromFeed, rankFeed, sessionPreviousClose, type LiveMover } from "@/server/dhan-market";
 import { findIndex, searchIndices } from "@/lib/market/indices";
+import { LIQUID_NSE } from "@/lib/market/liquid";
 import { aggregateCount, aggregateMinutes, aggregatePeriod, type ChartSpan } from "@/lib/market/spans";
+import { describeSession, normalizeTape, selectPreviousSession, type PreviousSession } from "@/lib/trading/replay-engine";
+import { istDay } from "@/lib/trading/demo-replay";
 import { configuredProvider, getHolidays } from "@/server/settings";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
 import type { DataMode } from "@prisma/client";
@@ -186,6 +189,113 @@ function demoSpan(symbol: string, basePaise: number, now: Date, timeframe: Chart
   if (timeframe === "1w") return aggregatePeriod(daily, "week");
   if (timeframe === "1mo") return aggregatePeriod(daily, "month");
   return daily;
+}
+
+export type ReplaySession = {
+  tape: Candle[];
+  prior: Candle[];
+  context: Candle[];
+  previous: PreviousSession | null;
+  sessionOpen: number | null;
+  sessionClose: number | null;
+  message: string;
+  unavailable: null | "invalid" | "weekend" | "holiday" | "future" | "nodata" | "synthetic" | "unsupported";
+  mode: string;
+  source: string;
+};
+
+const replayCache = new Map<string, { at: number; value: ReplaySession }>();
+
+function replayResult(input: Omit<ReplaySession, "tape" | "prior" | "context" | "previous" | "mode" | "source"> & Partial<Pick<ReplaySession, "tape" | "prior" | "context" | "previous" | "mode" | "source">>): ReplaySession {
+  return {
+    tape: input.tape ?? [],
+    prior: input.prior ?? [],
+    context: input.context ?? [],
+    previous: input.previous ?? null,
+    sessionOpen: input.sessionOpen,
+    sessionClose: input.sessionClose,
+    message: input.message,
+    unavailable: input.unavailable,
+    mode: input.mode ?? "HISTORICAL",
+    source: input.source ?? "session",
+  };
+}
+
+/** One cash session of 1-minute history, plus completed daily candles from before that date. */
+export async function getReplay(symbol: string, date: string): Promise<ReplaySession> {
+  const today = kolkataParts(new Date()).dateKey;
+  const holidays = await getHolidays();
+  const session = describeSession(date, holidays, today);
+  if (!session.ok) return replayResult({ sessionOpen: null, sessionClose: null, message: session.message, unavailable: session.reason });
+  const key = symbol.trim().toUpperCase();
+  const index = findIndex(key);
+  const instrument = await prisma.instrument.findUnique({ where: { symbol: key } });
+  if (!instrument && !index) throw new AppError("Instrument is not available.", 404);
+  const provider = configuredProvider();
+  if (provider === "demo") {
+    return replayResult({
+      sessionOpen: session.open,
+      sessionClose: session.close,
+      unavailable: "synthetic",
+      message: "Historical replay needs exchange candles. This data source is synthetic, so this date was not replayed.",
+    });
+  }
+  if (provider !== "dhan") {
+    return replayResult({
+      sessionOpen: session.open,
+      sessionClose: session.close,
+      unavailable: "unsupported",
+      message: "This data source does not provide a one-day intraday session, so the date was not replayed.",
+    });
+  }
+  const cacheKey = `${key}|${date}`;
+  const hit = replayCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < (hit.value.tape.length ? 10 * 60 * 1000 : 60 * 1000)) return hit.value;
+  const stored = instrument?.dhanSecurityId ?? "";
+  const name = index?.symbol ?? instrument!.symbol;
+  let tape: Candle[] = [];
+  let context: Candle[] = [];
+  let prior: Candle[] = [];
+  try {
+    const [sessionBars, earlierMinutes, earlierDaily] = await Promise.all([
+      dhanSessionTape(name, stored, session.open, session.close),
+      dhanContextMinutes(name, stored, session.open).catch(() => [] as Candle[]),
+      dhanPriorDaily(name, stored, session.open).catch(() => [] as Candle[]),
+    ]);
+    tape = normalizeTape(sessionBars.filter((bar) => istDay(bar.time) === date && bar.time >= session.open && bar.time < session.close));
+    context = normalizeTape(earlierMinutes.filter((bar) => istDay(bar.time) < date && bar.time < session.open));
+    prior = normalizeTape(earlierDaily.filter((bar) => istDay(bar.time) < date)).slice(-1600);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The historical session could not be loaded.";
+    return replayResult({ sessionOpen: session.open, sessionClose: session.close, unavailable: "nodata", message: `${message} This date was not replaced with another session.` });
+  }
+  if (!tape.length) {
+    const value = replayResult({
+      sessionOpen: session.open,
+      sessionClose: session.close,
+      unavailable: "nodata",
+      message: `No 1-minute candles were returned for ${key} on ${date}. This date was not replaced with another session.`,
+    });
+    replayCache.set(cacheKey, { at: Date.now(), value });
+    return value;
+  }
+  const previous = selectPreviousSession(prior, context, date);
+  const availableClose = Math.min(session.close, tape[tape.length - 1].time + 60);
+  const previousNote = previous
+    ? `Previous session ${previous.date}: open ${previous.open}, close ${previous.close}.`
+    : "Previous session open and close were not returned.";
+  const value = replayResult({
+    tape,
+    prior,
+    context,
+    previous,
+    sessionOpen: session.open,
+    sessionClose: availableClose,
+    unavailable: null,
+    message: `Session ${date}, 09:15–15:30 IST. Replay uses this session only. ${context.length} earlier one-minute candles and ${prior.length} daily candles are chart context and do not advance playback. ${previousNote} A minute's high, low, close, and volume stay hidden until that minute ends.`,
+  });
+  replayCache.set(cacheKey, { at: Date.now(), value });
+  return value;
 }
 
 export async function getCandles(symbol: string, timeframe: ChartSpan): Promise<{ candles: Candle[]; mode: string; source: string; message: string }> {
@@ -374,22 +484,31 @@ export async function getMarketMovers() {
   if (configuredProvider() !== "dhan") {
     return { gainers: [], losers: [], volume: [], scanned: 0, message: "Market movers need the live quote feed. The configured provider is not returning them, so this list is empty." };
   }
-  if (moverCache && Date.now() - moverCache.at < 20000) return { gainers: moverCache.gainers, losers: moverCache.losers, volume: moverCache.volume, scanned: moverCache.scanned, message: moverCache.message };
+  if (moverCache && Date.now() - moverCache.at < 60000) return { gainers: moverCache.gainers, losers: moverCache.losers, volume: moverCache.volume, scanned: moverCache.scanned, message: moverCache.message };
+  const wanted = new Set<string>(LIQUID_NSE);
   const instruments = await prisma.instrument.findMany({
-    where: { isActive: true },
+    where: { isActive: true, symbol: { in: [...wanted] } },
     select: { symbol: true, name: true, dhanSecurityId: true, exchange: true },
   });
-  const items = instruments.flatMap((item) => {
-    if (item.exchange !== "NSE" || item.symbol.includes("NSETEST")) return [];
+  const bySymbol = new Map(instruments.map((item) => [item.symbol, item]));
+  const items = LIQUID_NSE.flatMap((symbol) => {
+    const item = bySymbol.get(symbol);
+    if (!item || item.exchange !== "NSE") return [];
     const id = item.dhanSecurityId.trim() || nseScrip(item.symbol)?.id;
     return id ? [{ symbol: item.symbol, name: item.name, id }] : [];
-  }).slice(0, 2000);
+  });
   if (!items.length) return { gainers: [], losers: [], volume: [], scanned: 0, message: "No NSE equities in the instrument master matched the live scrip list." };
-  const book = await dhanFeed(items.map((item) => Number(item.id)));
+  let book: Awaited<ReturnType<typeof dhanFeed>>;
+  try {
+    book = await dhanFeed(items.map((item) => Number(item.id)));
+  } catch (error) {
+    if (moverCache) return { gainers: moverCache.gainers, losers: moverCache.losers, volume: moverCache.volume, scanned: moverCache.scanned, message: moverCache.message };
+    throw error;
+  }
   const ranked = rankFeed(items, book);
-  const gainers = [...ranked].sort((a, b) => b.percent - a.percent).slice(0, 10);
-  const losers = [...ranked].sort((a, b) => a.percent - b.percent).slice(0, 10);
-  const volume = [...ranked].filter((item) => item.volume != null).sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0)).slice(0, 10);
+  const gainers = [...ranked].sort((a, b) => b.percent - a.percent).slice(0, 20);
+  const losers = [...ranked].sort((a, b) => a.percent - b.percent).slice(0, 20);
+  const volume = [...ranked].filter((item) => item.volume != null).sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0)).slice(0, 20);
   const message = `Live quotes for ${ranked.length} of ${items.length} NSE equities. Prices are the feed, not practice marks.`;
   moverCache = { at: Date.now(), gainers, losers, volume, scanned: ranked.length, message };
   return { gainers, losers, volume, scanned: ranked.length, message };

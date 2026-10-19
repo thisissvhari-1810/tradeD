@@ -5,7 +5,7 @@ import type { Candle, DemoQuote } from "@/lib/market/demo";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
-import { getDhanAccessToken } from "@/server/settings";
+import { getDhanAccessToken, getDhanClientId } from "@/server/settings";
 import { aggregateCount, aggregateMinutes, aggregatePeriod, type ChartSpan } from "@/lib/market/spans";
 
 /** Kept for the renamed Tata Motors passenger-vehicle scrip. The live book is the Dhan NSE equity master. */
@@ -27,6 +27,12 @@ function securityId(symbol: string, stored = "") {
   const id = stored.trim() || nseScrip(symbol)?.id;
   if (!id) throw new AppError(`${symbol} is not on the NSE equity list.`, 404);
   return id;
+}
+
+export function feedTarget(symbol: string, stored = ""): { securityId: string; segment: "IDX_I" | "NSE_EQ" } {
+  const index = findIndex(symbol);
+  if (index) return { securityId: index.id, segment: "IDX_I" };
+  return { securityId: securityId(symbol, stored), segment: "NSE_EQ" };
 }
 
 function istStamp(date: Date) {
@@ -51,7 +57,7 @@ async function dhanPost(path: string, body: unknown) {
     "Content-Type": "application/json",
     "access-token": await getDhanAccessToken(),
   };
-  const clientId = process.env.DHAN_CLIENT_ID?.trim();
+  const clientId = await getDhanClientId();
   if (clientId) headers["client-id"] = clientId;
   const response = await fetch(`https://api.dhan.co/v2${path}`, {
     method: "POST",
@@ -73,9 +79,10 @@ function candlesFromSeries(series: Series): Candle[] {
     const high = series.high?.[index];
     const low = series.low?.[index];
     const close = series.close?.[index];
+    const seconds = time > 10_000_000_000 ? Math.floor(time / 1000) : time;
     if (open == null || high == null || low == null || close == null) return;
-    if (![time, open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) return;
-    candles.push({ time, open, high, low, close, volume: Math.max(0, Number(series.volume?.[index] ?? 0)) });
+    if (![seconds, open, high, low, close].every((value) => Number.isFinite(value) && value > 0)) return;
+    candles.push({ time: seconds, open, high, low, close, volume: Math.max(0, Number(series.volume?.[index] ?? 0)) });
   });
   return candles;
 }
@@ -126,6 +133,69 @@ async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", fr
   return candlesFromSeries(series).sort((a, b) => a.time - b.time);
 }
 
+export async function dhanSessionTape(symbol: string, storedSecurityId: string, open: number, close: number): Promise<Candle[]> {
+  const index = findIndex(symbol);
+  const id = index?.id ?? securityId(symbol, storedSecurityId);
+  const segment = index ? "IDX_I" : "NSE_EQ";
+  const kind = index ? "INDEX" : "EQUITY";
+  // The history end is exclusive. Stopping at 15:30 drops that session, so the request runs through the next morning and the caller keeps one date.
+  const to = new Date((close + 17 * 60 * 60) * 1000);
+  return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);
+}
+
+/** One-minute bars that end before the selected open. The selected session is not part of this request. */
+export async function dhanContextMinutes(symbol: string, storedSecurityId: string, open: number): Promise<Candle[]> {
+  const index = findIndex(symbol);
+  const id = index?.id ?? securityId(symbol, storedSecurityId);
+  const segment = index ? "IDX_I" : "NSE_EQ";
+  const kind = index ? "INDEX" : "EQUITY";
+  const from = new Date((open - 30 * 86_400) * 1000);
+  return intradayHistory(id, "1", from, new Date(open * 1000), segment, kind);
+}
+
+export async function dhanPriorDaily(symbol: string, storedSecurityId: string, open: number): Promise<Candle[]> {
+  const index = findIndex(symbol);
+  const id = index?.id ?? securityId(symbol, storedSecurityId);
+  const segment = index ? "IDX_I" : "NSE_EQ";
+  const kind = index ? "INDEX" : "EQUITY";
+  const end = new Date(open * 1000);
+  const start = new Date(end.getTime() - 6 * 365 * 86_400_000);
+  // The daily end date is exclusive. Ending on the previous calendar day drops that session, so the request includes the selected morning and the caller keeps earlier dates.
+  return dailyHistory(id, start, end, segment, kind);
+}
+
+/** One session of one-minute option candles for a single contract. */
+export async function dhanOptionSession(id: string, kind: "index" | "equity", open: number, close: number) {
+  if (!/^\d{1,12}$/.test(id)) throw new AppError("This option contract has no market identifier.", 404);
+  const to = new Date((close + 17 * 60 * 60) * 1000);
+  return intradayHistory(id, "1", new Date(open * 1000), to, "NSE_FNO", kind === "index" ? "OPTIDX" : "OPTSTK");
+}
+
+export async function dhanOptionCandles(id: string, kind: "index" | "equity", timeframe: ChartSpan, now: Date) {
+  if (!/^\d{1,12}$/.test(id)) throw new AppError("This option contract has no market identifier.", 404);
+  const segment = "NSE_FNO";
+  const instrument = kind === "index" ? "OPTIDX" : "OPTSTK";
+  const tomorrow = new Date(now.getTime() + 86_400_000);
+  if (timeframe === "1m" || timeframe === "3m" || timeframe === "5m" || timeframe === "15m" || timeframe === "30m" || timeframe === "1h" || timeframe === "2h" || timeframe === "4h") {
+    const days = timeframe === "1m" || timeframe === "3m" ? 30 : 90;
+    const from = new Date(now.getTime() - days * 86_400_000);
+    const interval = timeframe === "1h" || timeframe === "2h" || timeframe === "4h" ? "60" : timeframe === "15m" || timeframe === "30m" ? "15" : timeframe === "5m" ? "5" : "1";
+    let candles = await intradayHistory(id, interval, from, now, segment, instrument);
+    if (timeframe === "3m") candles = aggregateMinutes(candles, 3);
+    if (timeframe === "30m") candles = aggregateMinutes(candles, 30);
+    if (timeframe === "2h") candles = aggregateCount(candles, 2);
+    if (timeframe === "4h") candles = aggregateCount(candles, 4);
+    if (!candles.length) throw new AppError("Historical candles were not returned for this option contract.", 502);
+    return candles;
+  }
+  const from = timeframe === "1y" ? new Date(now.getTime() - 370 * 86_400_000) : timeframe === "5y" ? new Date(now.getTime() - 5 * 365 * 86_400_000) : new Date(Date.UTC(2005, 0, 1));
+  let candles = await dailyHistory(id, from, tomorrow, segment, instrument);
+  if (timeframe === "1w") candles = aggregatePeriod(candles, "week");
+  if (timeframe === "1mo") candles = aggregatePeriod(candles, "month");
+  if (!candles.length) throw new AppError("Historical candles were not returned for this option contract.", 502);
+  return candles;
+}
+
 export async function dhanCandles(symbol: string, storedSecurityId: string, timeframe: ChartSpan, now: Date) {
   const index = findIndex(symbol);
   const id = index?.id ?? securityId(symbol, storedSecurityId);
@@ -170,7 +240,7 @@ let indexCache: { at: number; value: { indices: Array<{ name: string; last: numb
 
 export async function dhanIndices() {
   if (indexCache && Date.now() - indexCache.at < 15000) return indexCache.value;
-  const clientId = process.env.DHAN_CLIENT_ID?.trim();
+  const clientId = await getDhanClientId();
   if (!clientId) return { indices: [], message: "The account client id is required for the index strip." };
   let payload: { data?: { IDX_I?: Record<string, IndexFeed> } } | null = null;
   try {
@@ -295,7 +365,7 @@ export async function dhanQuote(symbol: string, storedSecurityId: string, now: D
   }
   const id = securityId(symbol, storedSecurityId);
   const session = nseCashSession(now, holidays);
-  const clientId = process.env.DHAN_CLIENT_ID?.trim();
+  const clientId = await getDhanClientId();
   const spread = Math.max(1, DEFAULT_CHARGES.spreadBps);
   if (!clientId) {
     const history = await dhanCandles(symbol, storedSecurityId, "1d", now);

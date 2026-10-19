@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { barsBetween, fibLevels, fibTimes, measureAllowsChartWheel, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, normalizeDrawing, overRightPriceScale, parseStoredDrawings, placeMeasureCard, pointsNeeded, positionStats, screenAngle, shiftDrawing, zoomPriceRange, FIB_RATIOS, type Drawing } from "@/components/drawing-model";
+import { barsBetween, centerPrice, centerSegment, dragBox, drawingVisible, fibLevels, fibTimes, hexAlpha, measureAllowsChartWheel, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, moveDrawing, normalizeDrawing, overRightPriceScale, parseStoredDrawings, placeMeasureCard, pointsNeeded, positionStats, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, FIB_RATIOS, type Drawing } from "@/components/drawing-model";
 
 describe("drawing calculations", () => {
   it("places fibonacci retracement prices from the two anchors", () => {
@@ -151,5 +151,61 @@ describe("drawing calculations", () => {
     expect(resized.points[1].price).toBe(22550);
     const remaining = [drawing, { ...drawing, id: "t1", kind: "trend" as const }].filter((item) => item.id !== "m1");
     expect(remaining.map((item) => item.id)).toEqual(["t1"]);
+  });
+
+  it("does not create a rectangle from a click without a drag", () => {
+    expect(dragBox({ time: 10, price: 100 }, { time: 10, price: 100 })).toBeNull();
+    expect(dragBox({ time: 10, price: 100 }, { time: 20, price: 90 })).toEqual([{ time: 10, price: 100 }, { time: 20, price: 90 }]);
+  });
+
+  it("resizes a rectangle edge while the opposite edge stays put", () => {
+    const drawing: Drawing = { id: "box", kind: "rect", points: [{ time: 10, price: 40 }, { time: 30, price: 20 }], color: "#fff", locked: false };
+    const taller = resizeBox(drawing, "n", { time: 12, price: 55 });
+    expect(Math.max(taller.points[0].price, taller.points[1].price)).toBe(55);
+    expect(Math.min(taller.points[0].price, taller.points[1].price)).toBe(20);
+    expect(Math.min(taller.points[0].time, taller.points[1].time)).toBe(10);
+    expect(Math.max(taller.points[0].time, taller.points[1].time)).toBe(30);
+    const wider = resizeBox(drawing, "e", { time: 48, price: 25 });
+    expect(Math.max(wider.points[0].time, wider.points[1].time)).toBe(48);
+    expect(Math.min(wider.points[0].time, wider.points[1].time)).toBe(10);
+  });
+
+  it("hides a drawing on selected timeframes without deleting it", () => {
+    const drawing: Drawing = { id: "box", kind: "rect", points: [{ time: 1, price: 2 }], color: "#fff", locked: false, visibility: { mode: "hide", spans: ["1d"] } };
+    expect(drawingVisible(drawing, "1d")).toBe(false);
+    expect(drawingVisible(drawing, "1h")).toBe(true);
+    expect(drawingVisible({ ...drawing, hidden: true, visibility: { mode: "all", spans: [] } }, "1h")).toBe(false);
+  });
+
+  it("brings a drawing forward in paint order", () => {
+    const rows: Drawing[] = [
+      { id: "a", kind: "rect", points: [{ time: 1, price: 1 }], color: "#fff", locked: false },
+      { id: "b", kind: "rect", points: [{ time: 2, price: 2 }], color: "#fff", locked: false },
+    ];
+    expect(moveDrawing(rows, "a", "forward").map((item) => item.id)).toEqual(["b", "a"]);
+    expect(moveDrawing(rows, "a", "backward")).toBe(rows);
+  });
+
+  it("restores rectangle fill, opacity, and visibility", () => {
+    const loaded = normalizeDrawing({ id: "box", kind: "rect", points: [{ time: 1, price: 2 }], color: "#112233", fill: "#445566", fillOpacity: 0.4, visibility: { mode: "only", spans: ["1h"] }, locked: false });
+    expect(loaded?.fill).toBe("#445566");
+    expect(loaded?.fillOpacity).toBe(0.4);
+    expect(loaded?.visibility).toEqual({ mode: "only", spans: ["1h"] });
+    expect(hexAlpha("#112233", 0.5)).toBe("#11223380");
+  });
+
+  it("keeps the rectangle center line at half the price height after a resize", () => {
+    const drawing: Drawing = { id: "box", kind: "rect", points: [{ time: 10, price: 200 }, { time: 40, price: 100 }], color: "#F48FB1", locked: false };
+    const line = centerSegment(drawing.points);
+    expect(centerPrice(200, 100)).toBe(150);
+    expect(line).toEqual([{ time: 10, price: 150 }, { time: 40, price: 150 }]);
+    const taller = resizeBox(drawing, "n", { time: 10, price: 300 });
+    expect(centerSegment(taller.points)?.[0].price).toBe(200);
+    expect(centerSegment(taller.points)?.map((point) => point.time)).toEqual([10, 40]);
+  });
+
+  it("restores a rectangle center line with the drawing", () => {
+    const loaded = normalizeDrawing({ id: "box", kind: "rect", points: [{ time: 1, price: 2 }, { time: 3, price: 4 }], color: "#F48FB1", center: { color: "#F23645", width: 1, dash: "dashed", visible: true }, locked: false });
+    expect(loaded?.center).toEqual({ color: "#F23645", width: 1, dash: "dashed", visible: true });
   });
 });

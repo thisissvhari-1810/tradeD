@@ -1,6 +1,6 @@
 import { aggregateMinutes } from "@/lib/market/spans";
 import { nseCashSession } from "@/lib/market/clock";
-import { getDhanAccessToken } from "@/server/settings";
+import { getDhanAccessToken, getDhanClientId } from "@/server/settings";
 import { dropFormingBar, modelChain, sampleBreakoutBars, type Bar, type OptionContract } from "@/lib/options/engine";
 
 export type OptionsSnapshot = {
@@ -161,7 +161,7 @@ function parseChain(payload: unknown, expiry: string, fallbackSpot: number) {
 
 async function dhanPost(token: string, path: string, body: unknown) {
   const headers: Record<string, string> = { Accept: "application/json", "Content-Type": "application/json", "access-token": token };
-  const clientId = process.env.DHAN_CLIENT_ID?.trim();
+  const clientId = await getDhanClientId();
   if (clientId) headers["client-id"] = clientId;
   const response = await fetch(`https://api.dhan.co/v2${path}`, {
     method: "POST",

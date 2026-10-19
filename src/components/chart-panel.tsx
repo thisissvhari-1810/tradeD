@@ -10,7 +10,9 @@ import {
   HistogramSeries,
   LineSeries,
   LineStyle,
+  TickMarkType,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type MouseEventParams,
   type SeriesType,
@@ -19,16 +21,15 @@ import {
 } from "lightweight-charts";
 import { bollinger, ema, macd, rsi, sma, supertrend, toLine, vwap } from "@/lib/market/indicators";
 import { themeColor, withAlpha } from "@/lib/theme";
+import { emptyAppearance, type ChartPaint } from "@/lib/color/appearance";
 
 import { DrawingLayer } from "@/components/drawing-layer";
-import type { Drawing, DrawTool } from "@/components/drawing-model";
+import type { CursorStyle, Drawing, DrawTool, MagnetMode } from "@/components/drawing-model";
 
 export type { Drawing, DrawTool } from "@/components/drawing-model";
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
+export type ChartReference = { price: number; title: string; color: string; style?: "dashed" | "dotted" };
 export type ChartType = "candle" | "bar" | "line" | "area";
-
-const UP = "#089981";
-const DOWN = "#f23645";
 
 export type ChartHandle = { fit: () => void; reset: () => void; png: (name: string) => void; range: (bars: number | null) => void; zoom: (direction: -1 | 1) => void };
 export type ChartScheme = "dark" | "light";
@@ -84,10 +85,17 @@ export function ChartPanel({
   enabled = true,
   onTool = () => undefined,
   onSelect,
+  span = "1d",
+  focusId,
   scheme = "dark",
   onHover,
   follow = false,
   focusToken = 0,
+  references = [],
+  paint,
+  stay = true,
+  lockAll = false,
+  cursorStyle = "cross",
 }: {
   candles: Candle[];
   compare: Candle[];
@@ -106,25 +114,41 @@ export function ChartPanel({
   onDrawings: (next: Drawing[], undo?: boolean) => void;
   handleRef?: { current: ChartHandle | null };
   streamKey?: string;
-  magnet?: boolean;
+  magnet?: MagnetMode | boolean;
+  stay?: boolean;
+  lockAll?: boolean;
+  cursorStyle?: CursorStyle;
   hidden?: boolean;
   command?: { id: number; name: "lock" | "trash" | "color" } | null;
   enabled?: boolean;
   onTool?: (tool: DrawTool) => void;
   onSelect?: (id: string | null) => void;
+  span?: string;
+  focusId?: string | null;
   scheme?: ChartScheme;
   onHover?: (candle: Candle | null) => void;
   follow?: boolean;
   focusToken?: number;
+  references?: ChartReference[];
+  paint?: ChartPaint;
 }) {
+  const colors = paint ?? emptyAppearance(scheme === "light" ? "light" : "classic").chart;
+  const paintRef = useRef(colors);
+  paintRef.current = colors;
+  const paintKey = JSON.stringify(colors);
   const priceRef = useRef<HTMLDivElement>(null);
   const oscRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const oscChartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const volumeRef = useRef<ISeriesApi<SeriesType> | null>(null);
+  const overlaySeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
+  const referenceLines = useRef<IPriceLine[]>([]);
+  const oscSeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
+  const viewRef = useRef({ showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators });
+  viewRef.current = { showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators };
   const candlesRef = useRef(candles);
-  const paintedCount = useRef(0);
+  const paintedBars = useRef<Candle[]>([]);
   const schemeRef = useRef(scheme);
   const [hover, setHover] = useState<Candle | null>(null);
   const onHoverRef = useRef(onHover);
@@ -137,44 +161,43 @@ export function ChartPanel({
   const compareRef = useRef(compare);
   compareRef.current = compare;
   const compareKey = compare.map((candle) => `${candle.time}:${candle.close}`).join("|");
+  const referenceKey = references.map((item) => `${item.title}:${item.price}:${item.color}:${item.style ?? "dashed"}`).join("|");
 
   useEffect(() => {
     const rows = candlesRef.current;
     if (!priceRef.current || !rows.length) return;
     const chart = mountChart(priceRef.current, schemeRef.current);
     chartRef.current = chart;
-    const series = addMainSeries(chart, chartType);
+    const series = addMainSeries(chart, chartType, paintRef.current);
     seriesRef.current = series;
     const bars = rows.map((candle) => ({ ...candle, time: candle.time as UTCTimestamp }));
     if (chartType === "line" || chartType === "area") series.setData(bars.map((bar) => ({ time: bar.time, value: bar.close })));
     else series.setData(bars);
-
-    if (showVolume) {
-      const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "volume", priceLineVisible: false, lastValueVisible: false });
-      volumeRef.current = volume;
-      volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-      volume.setData(bars.map((bar) => ({ time: bar.time, value: bar.volume, color: bar.close >= bar.open ? "rgba(8,153,129,0.45)" : "rgba(242,54,69,0.45)" })));
-    }
+    paintedBars.current = rows;
 
     const closes = rows.map((candle) => candle.close);
     const times = rows.map((candle) => candle.time);
+    overlaySeries.current = [];
+    oscSeries.current = [];
     const overlay = (color: string, values: Array<number | null>) => {
       const line = chart.addSeries(LineSeries, { color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      overlaySeries.current.push(line);
       line.setData(toLine(times, values).map((point) => ({ ...point, time: point.time as UTCTimestamp })));
     };
+    const ink = paintRef.current;
     if (showSma) {
-      overlay(themeColor("--primary", "#3B82F6"), sma(closes, Math.max(2, indicators.smaFast)));
-      overlay("#F0B90B", sma(closes, Math.max(2, indicators.smaSlow)));
+      overlay(ink.smaFast, sma(closes, Math.max(2, indicators.smaFast)));
+      overlay(ink.smaSlow, sma(closes, Math.max(2, indicators.smaSlow)));
     }
-    if (showEma) overlay("#B39DDB", ema(closes, Math.max(2, indicators.ema)));
+    if (showEma) overlay(ink.ema, ema(closes, Math.max(2, indicators.ema)));
     if (showBands) {
       const bands = bollinger(closes, Math.max(2, indicators.bandsPeriod), indicators.bandsMult);
-      overlay("rgba(120,123,134,0.9)", bands.middle);
-      overlay("rgba(120,123,134,0.9)", bands.upper);
-      overlay("rgba(120,123,134,0.9)", bands.lower);
+      overlay(ink.bands, bands.middle);
+      overlay(ink.bands, bands.upper);
+      overlay(ink.bands, bands.lower);
     }
-    if (showVwap) overlay(themeColor("--profit", "#10B981"), vwap(rows));
-    if (showSupertrend) overlay("#F0B90B", supertrend(rows, Math.max(2, indicators.supertrendPeriod), indicators.supertrendMult));
+    if (showVwap) overlay(ink.vwap, vwap(rows));
+    if (showSupertrend) overlay(ink.smaSlow, supertrend(rows, Math.max(2, indicators.supertrendPeriod), indicators.supertrendMult));
     const compared = compareRef.current;
     if (compared.length) {
       const line = chart.addSeries(LineSeries, { color: "#F0B90B", lineWidth: 1, priceScaleId: "left", priceLineVisible: false, lastValueVisible: true });
@@ -185,14 +208,16 @@ export function ChartPanel({
     if (oscillator !== "none" && oscRef.current) {
       oscillatorChart = mountChart(oscRef.current, schemeRef.current);
       if (oscillator === "rsi") {
-        const line = oscillatorChart.addSeries(LineSeries, { color: "#B39DDB", lineWidth: 1 });
+        const line = oscillatorChart.addSeries(LineSeries, { color: paintRef.current.rsi, lineWidth: 1 });
+        oscSeries.current.push(line);
         line.setData(toLine(times, rsi(closes, Math.max(2, indicators.rsi))).map((point) => ({ ...point, time: point.time as UTCTimestamp })));
         line.createPriceLine({ price: 70, color: themeColor("--muted", "#94A3B8"), lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
         line.createPriceLine({ price: 30, color: themeColor("--muted", "#94A3B8"), lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
       } else {
         const result = macd(closes, Math.max(2, indicators.macdFast), Math.max(3, indicators.macdSlow), Math.max(2, indicators.macdSignal));
-        const line = oscillatorChart.addSeries(LineSeries, { color: themeColor("--primary", "#D4AF37"), lineWidth: 1 });
-        const signal = oscillatorChart.addSeries(LineSeries, { color: "#F0B90B", lineWidth: 1 });
+        const line = oscillatorChart.addSeries(LineSeries, { color: paintRef.current.macd, lineWidth: 1 });
+        const signal = oscillatorChart.addSeries(LineSeries, { color: paintRef.current.macdSignal, lineWidth: 1 });
+        oscSeries.current.push(line, signal);
         line.setData(toLine(times, result.macd).map((point) => ({ ...point, time: point.time as UTCTimestamp })));
         signal.setData(toLine(times, result.signal).map((point) => ({ ...point, time: point.time as UTCTimestamp })));
       }
@@ -230,31 +255,85 @@ export function ChartPanel({
     return () => {
       chart.remove();
       oscillatorChart?.remove();
+      overlaySeries.current = [];
+      oscSeries.current = [];
       chartRef.current = null;
       oscChartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
     };
-  }, [streamKey, loaded, chartType, compareKey, handleRef, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators]);
+  }, [streamKey, loaded, chartType, compareKey, handleRef, oscillator, showBands, showEma, showSma, showVwap, showSupertrend, indicators]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    if (!showVolume) {
+      if (volumeRef.current) {
+        chart.removeSeries(volumeRef.current);
+        volumeRef.current = null;
+      }
+      return;
+    }
+    if (!volumeRef.current) {
+      const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "volume", priceLineVisible: false, lastValueVisible: false });
+      volumeRef.current = volume;
+      volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    }
+    volumeRef.current.setData(candlesRef.current.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: volumeColor(bar, paintRef.current) })));
+  }, [showVolume, chartEpoch]);
 
   useEffect(() => {
     const series = seriesRef.current;
     const last = candles.at(-1);
     if (!series || !last) return;
+    const paintStudies = (rows: Candle[]) => {
+      const view = viewRef.current;
+      const closes = rows.map((row) => row.close);
+      const times = rows.map((row) => row.time);
+      const draw = (values: Array<number | null>, line: ISeriesApi<SeriesType> | undefined) => {
+        line?.setData(toLine(times, values).map((point) => ({ ...point, time: point.time as UTCTimestamp })));
+      };
+      const lines = overlaySeries.current;
+      let index = 0;
+      if (view.showSma) {
+        draw(sma(closes, Math.max(2, view.indicators.smaFast)), lines[index++]);
+        draw(sma(closes, Math.max(2, view.indicators.smaSlow)), lines[index++]);
+      }
+      if (view.showEma) draw(ema(closes, Math.max(2, view.indicators.ema)), lines[index++]);
+      if (view.showBands) {
+        const bands = bollinger(closes, Math.max(2, view.indicators.bandsPeriod), view.indicators.bandsMult);
+        draw(bands.middle, lines[index++]);
+        draw(bands.upper, lines[index++]);
+        draw(bands.lower, lines[index++]);
+      }
+      if (view.showVwap) draw(vwap(rows), lines[index++]);
+      if (view.showSupertrend) draw(supertrend(rows, Math.max(2, view.indicators.supertrendPeriod), view.indicators.supertrendMult), lines[index++]);
+      const osc = oscSeries.current;
+      if (view.oscillator === "rsi") draw(rsi(closes, Math.max(2, view.indicators.rsi)), osc[0]);
+      if (view.oscillator === "macd") {
+        const result = macd(closes, Math.max(2, view.indicators.macdFast), Math.max(3, view.indicators.macdSlow), Math.max(2, view.indicators.macdSignal));
+        draw(result.macd, osc[0]);
+        draw(result.signal, osc[1]);
+      }
+    };
     const time = last.time as UTCTimestamp;
-    const grewBy = candles.length - paintedCount.current;
+    const previous = paintedBars.current;
+    const sameBar = (left: Candle, right: Candle) => left.time === right.time && left.open === right.open && left.high === right.high && left.low === right.low && left.close === right.close && left.volume === right.volume;
+    const appended = previous.length > 0 && candles.length === previous.length + 1 && previous.every((bar, index) => sameBar(bar, candles[index]));
+    const lastOnly = previous.length > 0 && candles.length === previous.length && candles.slice(0, -1).every((bar, index) => sameBar(bar, previous[index]));
     try {
-      if (paintedCount.current > 0 && (grewBy > 1 || grewBy < 0)) {
+      if (!appended && !lastOnly) {
         const bars = candles.map((candle) => ({ ...candle, time: candle.time as UTCTimestamp }));
         if (chartType === "line" || chartType === "area") series.setData(bars.map((bar) => ({ time: bar.time, value: bar.close })));
         else series.setData(bars);
-        if (volumeRef.current) volumeRef.current.setData(bars.map((bar) => ({ time: bar.time, value: bar.volume, color: bar.close >= bar.open ? "rgba(8,153,129,0.45)" : "rgba(242,54,69,0.45)" })));
+        if (volumeRef.current) volumeRef.current.setData(bars.map((bar) => ({ time: bar.time, value: bar.volume, color: volumeColor(bar, paintRef.current) })));
       } else {
         if (chartType === "line" || chartType === "area") series.update({ time, value: last.close });
         else series.update({ time, open: last.open, high: last.high, low: last.low, close: last.close });
-        volumeRef.current?.update({ time, value: last.volume, color: last.close >= last.open ? "rgba(8,153,129,0.45)" : "rgba(242,54,69,0.45)" });
+        volumeRef.current?.update({ time, value: last.volume, color: volumeColor(last, paintRef.current) });
       }
-      paintedCount.current = candles.length;
+      paintedBars.current = candles;
+      paintStudies(candles);
     } catch { /* The chart was replaced while this tick arrived. */ }
   }, [candles, chartEpoch, chartType]);
 
@@ -279,10 +358,60 @@ export function ChartPanel({
   }, [focusToken, chartEpoch, candles]);
 
   useEffect(() => {
-    const options = chartThemeOptions(chartPalette(scheme));
+    const paintNow = paintRef.current;
+    const options = chartThemeOptions({ background: paintNow.background, text: paintNow.text, grid: paintNow.grid, border: paintNow.border, cross: paintNow.crosshair, label: paintNow.text });
     chartRef.current?.applyOptions(options);
     oscChartRef.current?.applyOptions(options);
-  }, [scheme, chartEpoch]);
+    const seriesOptions = chartType === "line" || chartType === "area"
+      ? { color: paintNow.bullBody, lineColor: paintNow.bullBody, topColor: withAlpha(paintNow.bullBody, 0.28), bottomColor: withAlpha(paintNow.bullBody, 0.02), priceLineVisible: true, priceLineColor: paintNow.priceLine }
+      : candleOptions(paintNow);
+    seriesRef.current?.applyOptions(seriesOptions as never);
+    if (volumeRef.current) volumeRef.current.setData(candlesRef.current.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: volumeColor(bar, paintNow) })));
+    const view = viewRef.current;
+    const width = Math.min(4, Math.max(1, Math.round(paintNow.indicatorWidth))) as 1 | 2 | 3 | 4;
+    const lineStyle = paintNow.indicatorStyle === "dashed" ? LineStyle.Dashed : paintNow.indicatorStyle === "dotted" ? LineStyle.Dotted : LineStyle.Solid;
+    const ink = (color: string) => ({ color: withAlpha(color, paintNow.indicatorOpacity), lineWidth: width, lineStyle });
+    const lines = overlaySeries.current;
+    let index = 0;
+    const paintLine = (color: string) => lines[index++]?.applyOptions(ink(color));
+    if (view.showSma) { paintLine(paintNow.smaFast); paintLine(paintNow.smaSlow); }
+    if (view.showEma) paintLine(paintNow.ema);
+    if (view.showBands) { paintLine(paintNow.bands); paintLine(paintNow.bands); paintLine(paintNow.bands); }
+    if (view.showVwap) paintLine(paintNow.vwap);
+    if (view.showSupertrend) paintLine(paintNow.smaSlow);
+    const osc = oscSeries.current;
+    if (view.oscillator === "rsi") osc[0]?.applyOptions(ink(paintNow.rsi));
+    if (view.oscillator === "macd") { osc[0]?.applyOptions(ink(paintNow.macd)); osc[1]?.applyOptions(ink(paintNow.macdSignal)); }
+  }, [scheme, paintKey, chartEpoch, chartType]);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    const drop = () => {
+      for (const line of referenceLines.current) {
+        try { series.removePriceLine(line); } catch { /* The series was already removed. */ }
+      }
+      referenceLines.current = [];
+    };
+    drop();
+    for (const item of references) {
+      if (!Number.isFinite(item.price) || item.price <= 0) continue;
+      referenceLines.current.push(series.createPriceLine({
+        price: item.price,
+        color: item.color,
+        lineWidth: 1,
+        lineStyle: item.style === "dotted" ? LineStyle.Dotted : LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: item.title,
+      }));
+    }
+    return drop;
+  }, [referenceKey, chartEpoch, references]);
+
+  useEffect(() => {
+    const visible = cursorStyle === "cross";
+    chartRef.current?.applyOptions({ crosshair: { vertLine: { visible, labelVisible: true }, horzLine: { visible, labelVisible: true } } });
+  }, [cursorStyle, chartEpoch]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -301,9 +430,9 @@ export function ChartPanel({
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-panel">
       <p className="sr-only">{hover ? candleCaption(hover, previousClose(candles, hover)) : "Chart"}</p>
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
-        <div ref={priceRef} className="absolute inset-0" />
+        <div ref={priceRef} className={`absolute inset-0 chart-cursor-${cursorStyle}`} />
         <CandleReadout candles={candles} hover={hover} />
-        <DrawingLayer chartRef={chartRef} seriesRef={seriesRef} candles={candles} drawings={drawings} onDrawings={onDrawings} tool={tool} magnet={magnet} hidden={hidden} annotation={annotation} command={command} enabled={enabled} onTool={onTool} onSelect={onSelect} ready={chartEpoch} />
+        <DrawingLayer chartRef={chartRef} seriesRef={seriesRef} candles={candles} drawings={drawings} onDrawings={onDrawings} tool={tool} magnet={magnet} hidden={hidden} annotation={annotation} command={command} enabled={enabled} onTool={onTool} onSelect={onSelect} ready={chartEpoch} span={span} focusId={focusId} stay={stay} lockAll={lockAll} />
       </div>
       {oscillator !== "none" ? <div ref={oscRef} className="h-28 w-full shrink-0 border-t border-border" /> : null}
     </div>
@@ -358,26 +487,41 @@ function CandleReadout({ candles, hover }: { candles: Candle[]; hover: Candle | 
   );
 }
 
-function addMainSeries(chart: IChartApi, chartType: ChartType): ISeriesApi<SeriesType> {
-  const accent = "#2962ff";
-  if (chartType === "line") return chart.addSeries(LineSeries, { color: accent, lineWidth: 2, priceLineVisible: false });
-  if (chartType === "area") return chart.addSeries(AreaSeries, { lineColor: accent, topColor: withAlpha(accent, 0.28), bottomColor: withAlpha(accent, 0.02), lineWidth: 2, priceLineVisible: false });
-  if (chartType === "bar") return chart.addSeries(BarSeries, { upColor: UP, downColor: DOWN, priceLineVisible: false });
-  return chart.addSeries(CandlestickSeries, {
-    upColor: UP,
-    downColor: DOWN,
-    borderVisible: false,
-    wickUpColor: UP,
-    wickDownColor: DOWN,
-    priceLineVisible: false,
-  });
+function candleOptions(paint: ChartPaint) {
+  return {
+    color: paint.bullBody,
+    lineColor: paint.bullBody,
+    topColor: withAlpha(paint.bullBody, 0.28),
+    bottomColor: withAlpha(paint.bullBody, 0.02),
+    upColor: paint.bullBody,
+    downColor: paint.bearBody,
+    borderVisible: true,
+    borderUpColor: paint.bullBorder,
+    borderDownColor: paint.bearBorder,
+    wickUpColor: paint.bullWick,
+    wickDownColor: paint.bearWick,
+    priceLineVisible: true,
+    priceLineColor: paint.priceLine,
+  };
+}
+
+function volumeColor(bar: Candle, paint: ChartPaint) {
+  return withAlpha(bar.close >= bar.open ? paint.volumeUp : paint.volumeDown, 0.45);
+}
+
+function addMainSeries(chart: IChartApi, chartType: ChartType, paint: ChartPaint): ISeriesApi<SeriesType> {
+  const options = candleOptions(paint);
+  if (chartType === "line") return chart.addSeries(LineSeries, { color: options.color, lineWidth: 2, priceLineVisible: true, priceLineColor: paint.priceLine });
+  if (chartType === "area") return chart.addSeries(AreaSeries, { lineColor: options.lineColor, topColor: options.topColor, bottomColor: options.bottomColor, lineWidth: 2, priceLineVisible: true, priceLineColor: paint.priceLine });
+  if (chartType === "bar") return chart.addSeries(BarSeries, { upColor: options.upColor, downColor: options.downColor, priceLineVisible: true, priceLineColor: paint.priceLine });
+  return chart.addSeries(CandlestickSeries, options);
 }
 
 function chartPalette(scheme: ChartScheme) {
   if (scheme === "light") {
-    return { background: "#ffffff", text: "#131722", grid: "#f0f3fa", border: "#e0e3eb", cross: "#9598a1", label: "#131722" };
+    return { background: "#FFFFFF", text: "#46546A", grid: "#EEF1F6", border: "#E0E6EF", cross: "#8593A8", label: "#172033" };
   }
-  return { background: "#131722", text: "#d1d4dc", grid: "#2a2e39", border: "#2a2e39", cross: "#758696", label: "#363a45" };
+  return { background: "#101620", text: "#B4C0D0", grid: "#161E29", border: "#283444", cross: "#5D6B80", label: "#202B39" };
 }
 
 function chartThemeOptions(colors: ReturnType<typeof chartPalette>) {
@@ -394,23 +538,29 @@ function chartThemeOptions(colors: ReturnType<typeof chartPalette>) {
   };
 }
 
+function formatKolkata(time: Time, tickMarkType?: TickMarkType): string {
+  if (typeof time !== "number") return "";
+  const date = new Date(time * 1000);
+  const zone = "Asia/Kolkata";
+  if (tickMarkType === TickMarkType.Year) return new Intl.DateTimeFormat("en-IN", { timeZone: zone, year: "numeric" }).format(date);
+  if (tickMarkType === TickMarkType.Month) return new Intl.DateTimeFormat("en-IN", { timeZone: zone, month: "short", year: "numeric" }).format(date);
+  if (tickMarkType === TickMarkType.DayOfMonth) return new Intl.DateTimeFormat("en-IN", { timeZone: zone, day: "2-digit", month: "short" }).format(date);
+  return new Intl.DateTimeFormat("en-IN", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+}
+
 function mountChart(container: HTMLDivElement, scheme: ChartScheme) {
   const colors = chartPalette(scheme);
   return createChart(container, {
     autoSize: true,
     layout: { ...chartThemeOptions(colors).layout, fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 10, attributionLogo: false },
     grid: chartThemeOptions(colors).grid,
-    localization: {
-      timeFormatter: (time: Time) => (typeof time === "number"
-        ? new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(time * 1000))
-        : ""),
-    },
+    localization: { timeFormatter: (time: Time) => formatKolkata(time) },
     crosshair: { mode: 1, vertLine: { ...chartThemeOptions(colors).crosshair.vertLine, style: LineStyle.Dashed, width: 1 }, horzLine: { ...chartThemeOptions(colors).crosshair.horzLine, style: LineStyle.Dashed, width: 1 } },
     rightPriceScale: { borderColor: colors.border, minimumWidth: 84, entireTextOnly: true },
     leftPriceScale: { visible: false, borderColor: colors.border },
     handleScroll: true,
     handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
-    timeScale: { borderColor: colors.border, timeVisible: true, barSpacing: 9 },
+    timeScale: { borderColor: colors.border, timeVisible: true, secondsVisible: false, barSpacing: 9, tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => formatKolkata(time, tickMarkType) },
   });
 }
 

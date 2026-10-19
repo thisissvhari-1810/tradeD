@@ -9,6 +9,7 @@ import { useDesk } from "@/components/shell";
 import { calculateCharges } from "@/lib/trading/fees";
 import { paiseToRupees, rupeesToPaise } from "@/lib/money";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
+import { feedStatusLabel, useMarketStream } from "@/components/market-stream";
 import { applyLiveTick, CHART_SPANS, type ChartSpan } from "@/lib/market/spans";
 import { StockLogo } from "@/components/stock-identity";
 
@@ -32,7 +33,7 @@ const TOOLS: Array<[DrawTool, string]> = [
   ["text", "Text"],
 ];
 
-const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: true, supertrend: false, oscillator: "none" };
+const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: false, supertrend: false, oscillator: "none" };
 
 export function Terminal() {
   const desk = useDesk();
@@ -76,6 +77,31 @@ export function Terminal() {
   const chartRequest = useRef(0);
   const symbol = desk.symbol;
   const list = lists.find((item) => item.id === listId) ?? lists[0];
+  const timeframeRef = useRef(timeframe);
+  const lastTradeRef = useRef(0);
+  const marketOpenRef = useRef(true);
+  timeframeRef.current = timeframe;
+  marketOpenRef.current = quotes[symbol] ? quotes[symbol].marketOpen : true;
+  const stream = useMarketStream(symbol, true, (tick) => {
+    setCandles((current) => {
+      const next = applyLiveTick(current, timeframeRef.current, tick.price, tick.time, marketOpenRef.current, tick.volumeDelta, lastTradeRef.current);
+      if (tick.time >= lastTradeRef.current) lastTradeRef.current = tick.time;
+      return next;
+    });
+    setQuotes((current) => {
+      const row = current[symbol];
+      if (!row || Date.parse(row.asOf) > tick.time * 1000) return current;
+      return {
+        ...current,
+        [symbol]: {
+          ...row,
+          last: tick.price.toFixed(2),
+          asOf: new Date(tick.time * 1000).toISOString(),
+          volume: tick.dayVolume != null ? String(Math.round(tick.dayVolume)) : row.volume,
+        },
+      };
+    });
+  });
 
   const chooseSymbol = useRef(desk.chooseSymbol);
   chooseSymbol.current = desk.chooseSymbol;
@@ -108,18 +134,6 @@ export function Terminal() {
   useEffect(() => {
     localStorage.setItem("td-chart-prefs", JSON.stringify({ timeframe, chartType, flags, indicators }));
   }, [timeframe, chartType, flags, indicators]);
-
-  useEffect(() => {
-    const onTicket = (event: Event) => {
-      const next = (event as CustomEvent<string>).detail;
-      if (next === "BUY" || next === "SELL") {
-        setSide(next);
-        setMobile("order");
-      }
-    };
-    window.addEventListener("td-ticket", onTicket);
-    return () => window.removeEventListener("td-ticket", onTicket);
-  }, []);
 
   const reloadLists = () => api<{ lists: List[] }>("/api/watchlists").then((data) => {
     setLists(data.lists);
@@ -169,7 +183,13 @@ export function Terminal() {
           if (stop) return;
           setQuotes((current) => {
             const next = { ...current };
-            for (const row of data.quotes) if ("last" in row) next[row.symbol] = row;
+            for (const row of data.quotes) {
+              if (!("last" in row)) continue;
+              const prior = current[row.symbol];
+              next[row.symbol] = prior && prior.symbol === row.symbol && Date.parse(prior.asOf) > Date.parse(row.asOf)
+                ? { ...row, last: prior.last, asOf: prior.asOf, volume: prior.volume || row.volume }
+                : row;
+            }
             return next;
           });
         })
@@ -182,7 +202,10 @@ export function Terminal() {
 
   const quote = quotes[symbol] ?? null;
   useEffect(() => {
-    if (!quote || quote.symbol !== symbol) return;
+    lastTradeRef.current = 0;
+  }, [symbol]);
+  useEffect(() => {
+    if (!quote || quote.symbol !== symbol || quote.mode !== "DEMO") return;
     const last = Number(quote.last);
     setCandles((current) => applyLiveTick(current, timeframe, last, Math.floor(Date.now() / 1000), quote.marketOpen));
   }, [quote, symbol, timeframe]);
@@ -286,6 +309,9 @@ export function Terminal() {
 
   const scheme = desk.theme;
   const state = freshness(quote, desk.online);
+  const marketClosed = quote != null && !quote.marketOpen && quote.mode !== "DEMO";
+  const useFeed = quote?.mode === "REALTIME" || quote?.mode === "HISTORICAL" || stream.status === "live" || stream.status === "delayed";
+  const feedBadge = !useFeed ? state.toUpperCase() : marketClosed ? "Market closed" : feedStatusLabel(stream.status);
   const canTrade = desk.mode === "demo" && desk.user?.role === "STUDENT" && desk.user.tradingEnabled && desk.user.status === "ACTIVE";
 
   return (
@@ -357,7 +383,7 @@ export function Terminal() {
               <div className="text-sm font-semibold">{symbol}</div>
               <div className="whitespace-nowrap text-xs"><span className="num">{quote ? money(quote.last) : "—"}</span> {selectedMove ? <span className={`num ${tone(selectedMove.abs)}`}>{`${selectedMove.abs >= 0 ? "+" : ""}${selectedMove.abs.toFixed(2)} (${selectedMove.pct.toFixed(2)}%)`}</span> : null}</div>
             </div>
-            <span className={`rounded px-1.5 py-0.5 text-[10px] ${state === "live" ? "bg-profit/15 text-profit" : "bg-elevated text-muted"}`}>{state.toUpperCase()}</span>
+            <span className={`rounded px-1.5 py-0.5 text-[10px] ${feedBadge === "Live" ? "bg-profit/15 text-profit" : "bg-elevated text-muted"}`} title={stream.detail || undefined}>{feedBadge}</span>
             <div className="ml-auto flex flex-wrap gap-1">
               {CHART_SPANS.map((span) => (
                 <button key={span} className={`px-1.5 py-0.5 text-[11px] ${timeframe === span ? "bg-elevated text-text" : "text-muted"}`} onClick={() => setTimeframe(span)}>{span}</button>
@@ -445,6 +471,7 @@ export function Terminal() {
                   onTool={setTool}
                   handleRef={handleRef}
                   scheme={scheme}
+                  paint={desk.appearance.chart}
                   streamKey={`${symbol}:${timeframe}:${chartType}:${flags.oscillator}:${flags.sma}:${flags.ema}:${flags.bands}:${flags.vwap}:${flags.volume}:${flags.supertrend}:${indicators.smaFast}:${indicators.smaSlow}:${indicators.ema}:${indicators.bandsPeriod}:${indicators.bandsMult}:${indicators.rsi}:${indicators.macdFast}:${indicators.macdSlow}:${indicators.macdSignal}:${indicators.supertrendPeriod}:${indicators.supertrendMult}`}
                 />
               )}
@@ -497,8 +524,8 @@ export function Terminal() {
           </div>
           <form className="flex flex-1 flex-col gap-2 overflow-auto p-3 text-xs" onSubmit={(event) => { event.preventDefault(); if (canTrade) setReview(true); }}>
             <div className="grid grid-cols-2 gap-1">
-              <button type="button" className={`py-2 ${side === "BUY" ? "bg-profit text-white" : "border border-border"}`} onClick={() => setSide("BUY")}>Buy</button>
-              <button type="button" className={`py-2 ${side === "SELL" ? "bg-loss text-white" : "border border-border"}`} onClick={() => setSide("SELL")}>Sell</button>
+              <button type="button" className={`py-2 ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border"}`} onClick={() => setSide("BUY")}>Buy</button>
+              <button type="button" className={`py-2 ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border"}`} onClick={() => setSide("SELL")}>Sell</button>
             </div>
             <Field label="Instrument" value={symbol} readOnly />
             <Field label="Exchange / segment" value="NSE equity" readOnly />

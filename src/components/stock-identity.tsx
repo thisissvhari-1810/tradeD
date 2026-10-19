@@ -67,7 +67,7 @@ export function StockLogo({ symbol, name, size = 32 }: { symbol: string; name?: 
   const color = markColor(symbol);
   return (
     <span
-      className="inline-grid shrink-0 place-items-center overflow-hidden rounded-lg bg-elevated font-semibold leading-none text-white"
+      className="inline-grid shrink-0 place-items-center overflow-hidden rounded-[28%] font-semibold leading-none text-white ring-1 ring-border-soft"
       style={{ width: size, height: size, background: src ? "var(--elevated)" : color, fontSize: Math.max(10, Math.round(size * 0.34)) }}
       aria-hidden
     >
@@ -109,24 +109,32 @@ export function WatchStar({ active, label, onToggle }: { active: boolean; label:
       title={label}
       aria-label={label}
       aria-pressed={active}
-      className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-muted hover:bg-elevated focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+      className="group/star grid h-8 w-8 shrink-0 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
       onClick={(event) => { event.stopPropagation(); onToggle(); }}
     >
-      <Star className={`h-4 w-4 ${active ? "fill-star text-star" : ""}`} aria-hidden />
+      <Star className={`h-[15px] w-[15px] transition-colors ${active ? "fill-star/70 text-star/70 group-hover/star:fill-star group-hover/star:text-star" : ""}`} aria-hidden />
     </button>
   );
 }
 
+const ORDER_TONE: Record<string, string> = {
+  FILLED: "border-profit/25 bg-profit-soft text-profit",
+  REJECTED: "border-loss/25 bg-loss-soft text-loss",
+  CANCELLED: "border-border bg-sunken text-muted",
+};
+
 export function OrderStatus({ status }: { status: string }) {
-  const toneClass = status === "FILLED" ? "bg-profit/15 text-profit"
-    : status === "REJECTED" ? "bg-loss/15 text-loss"
-      : status === "CANCELLED" ? "bg-elevated text-muted"
-        : "bg-warning/15 text-warning";
-  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${toneClass}`}>{status.replaceAll("_", " ")}</span>;
+  const toneClass = ORDER_TONE[status] ?? "border-warning/30 bg-warning-soft text-warning";
+  return (
+    <span className={`inline-flex h-5 items-center gap-1.5 rounded-sm border px-1.5 text-micro font-semibold uppercase tracking-[0.04em] ${toneClass}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+      {status.replaceAll("_", " ")}
+    </span>
+  );
 }
 
 export function DemoModeBadge({ children = "DEMO" }: { children?: string }) {
-  return <span className="rounded-full bg-demo px-2 py-0.5 text-[10px] font-semibold text-white">{children}</span>;
+  return <span className="inline-flex h-5 items-center rounded-sm border border-demo/30 bg-demo-soft px-1.5 text-micro font-semibold uppercase tracking-[0.04em] text-demo">{children}</span>;
 }
 
 type Hit = { symbol: string; name: string; exchange: string };
@@ -189,7 +197,7 @@ export function StockSearchField({
         aria-autocomplete="list"
         aria-label="Search instruments"
         placeholder={placeholder}
-        className="search-field w-full rounded-full bg-elevated py-2 text-sm"
+        className="search-field h-10 w-full rounded-input py-2 text-dense"
         onFocus={() => setFocused(true)}
         onBlur={() => window.setTimeout(() => setFocused(false), 160)}
         onChange={(event) => onQuery(event.target.value)}
@@ -201,7 +209,7 @@ export function StockSearchField({
         }}
       />
       {open ? (
-        <div id={`${id}-list`} role="listbox" className="absolute left-0 right-0 top-12 z-20 max-h-80 overflow-auto rounded-xl border border-border bg-panel shadow-lg" onMouseDown={(event) => event.preventDefault()}>
+        <div id={`${id}-list`} role="listbox" className="surface-overlay anim-rise absolute left-0 right-0 top-12 z-20 max-h-80 overflow-auto rounded-card p-1" onMouseDown={(event) => event.preventDefault()}>
           {status === "loading" ? <p className="px-3 py-2 text-xs text-muted">Searching…</p> : null}
           {status === "error" ? <p className="px-3 py-2 text-xs text-loss">Search is unavailable right now.</p> : null}
           {status === "empty" ? <p className="px-3 py-2 text-xs text-muted">No instrument matched that name or symbol.</p> : null}
@@ -210,7 +218,7 @@ export function StockSearchField({
             const move = moveOf(quote ? String(quote.last) : undefined, quote ? String(quote.previousClose) : undefined);
             const active = index === cursor;
             return (
-              <div key={`${hit.exchange}-${hit.symbol}`} role="option" aria-selected={active} className={`flex items-center gap-2 border-b border-border px-2 py-2 ${active ? "bg-elevated" : ""}`}>
+              <div key={`${hit.exchange}-${hit.symbol}`} role="option" aria-selected={active} className={`flex items-center gap-2 rounded-input px-2 py-1.5 ${active ? "bg-primary-soft" : ""}`}>
                 <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onMouseEnter={() => setCursor(index)} onClick={() => onSelect(hit)}>
                   <SymbolTitle symbol={hit.symbol} name={hit.name} exchange={hit.exchange} size={36} />
                   <span className="ml-auto shrink-0 text-right">

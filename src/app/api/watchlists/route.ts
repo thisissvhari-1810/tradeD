@@ -4,10 +4,13 @@ import { requireUser } from "@/server/auth";
 import { listWatchlists, mutateWatchlist } from "@/server/watchlists";
 
 const bodySchema = z.object({
-  action: z.enum(["create", "rename", "delete", "add", "remove"]),
+  action: z.enum(["create", "rename", "delete", "add", "remove", "add-option"]),
   id: z.string().optional(),
   name: z.string().optional(),
   symbol: z.string().optional(),
+  expiry: z.string().optional(),
+  strike: z.number().optional(),
+  right: z.enum(["CE", "PE"]).optional(),
 });
 
 export const GET = query(async () => {

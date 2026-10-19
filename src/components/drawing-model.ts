@@ -4,36 +4,123 @@ export type LineDash = "solid" | "dashed" | "dotted";
 export type DrawTool =
   | "cursor" | "trend" | "ray" | "extended" | "hline" | "hray" | "vline" | "channel" | "angle"
   | "fib" | "fibext" | "fibtime" | "measure"
-  | "rect" | "ellipse" | "triangle" | "path" | "arrow"
+  | "rect" | "ellipse" | "circle" | "rrect" | "triangle" | "path" | "polyline" | "arc" | "curve" | "dcurve" | "arrow"
+  | "arrowmark" | "arrowup" | "arrowdown" | "arrowleft" | "arrowright"
   | "text" | "note" | "price" | "callout" | "marker" | "range"
   | "long" | "short"
   | "forecast" | "bars" | "ghost" | "projection" | "avwap" | "vprofile"
-  | "brush" | "zoom";
+  | "brush" | "highlighter" | "zoom"
+  | "crossline" | "infoline" | "regression" | "daterange" | "dprange"
+  | "pitchfork" | "schiff" | "modschiff"
+  | "fibfan" | "fibchannel" | "gannbox" | "gannsquare" | "gannfan"
+  | "xabcd" | "headshoulders" | "elliott" | "elliottabc"
+  | "eraser";
+
+export type MagnetMode = "off" | "weak" | "strong";
+export type CursorStyle = "cross" | "dot" | "arrow";
+
+export type TextAlign = "left" | "center" | "right";
+export type TextValign = "top" | "middle" | "bottom";
+
+export type DrawingTextStyle = {
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  color: string;
+  align: TextAlign;
+  valign: TextValign;
+  visible: boolean;
+};
+
+export type DrawingVisibility = { mode: "all" | "only" | "hide"; spans: string[] };
+
+export type CenterLineStyle = { color: string; width: number; dash: LineDash; visible: boolean };
+
+export const RECTANGLE_CENTER: CenterLineStyle = { color: "#F23645", width: 1, dash: "dashed", visible: true };
 
 export type Drawing = {
   id: string;
-  kind: Exclude<DrawTool, "cursor" | "zoom">;
+  kind: Exclude<DrawTool, "cursor" | "zoom" | "eraser">;
   points: Point[];
   text?: string;
+  name?: string;
   color: string;
+  fill?: string;
+  fillOpacity?: number;
+  borderOpacity?: number;
+  borderVisible?: boolean;
+  fillVisible?: boolean;
   width?: number;
   dash?: LineDash;
+  textStyle?: DrawingTextStyle;
+  center?: CenterLineStyle;
+  levelColors?: string[];
+  visibility?: DrawingVisibility;
   locked: boolean;
   hidden?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
 };
+
+export const BOX_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
+export type BoxHandle = (typeof BOX_HANDLES)[number];
 
 export const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 1] as const;
 export const FIB_EXTENSION_RATIOS = [0, 0.618, 1, 1.272, 1.618] as const;
 export const FIB_TIME_RATIOS = [0, 1, 2, 3, 5, 8] as const;
 export const DRAW_COLORS = ["#D4AF37", "#089981", "#F23645", "#F0B90B", "#F8FAFC"] as const;
+export const DRAW_PALETTE = [
+  "#FFFFFF", "#D1D4DC", "#9598A1", "#5D606B", "#363A45", "#131722",
+  "#F23645", "#FF9800", "#FFEB3B", "#4CAF50", "#089981", "#00BCD4",
+  "#2962FF", "#673AB7", "#9C27B0", "#E91E63", "#D4AF37", "#F48FB1",
+  "#FCCBCD", "#FFE0B2", "#FFF9C4", "#C8E6C9", "#BBDEFB", "#E1BEE7",
+] as const;
+export const LINE_WIDTHS = [1, 2, 3, 4, 5] as const;
+export const GANN_RATIOS = [0, 0.25, 0.382, 0.5, 0.618, 0.75, 1] as const;
+export const GANN_FAN = [[1, 8], [1, 4], [1, 3], [1, 2], [1, 1], [2, 1], [3, 1], [4, 1], [8, 1]] as const;
+export const FIB_FAN_RATIOS = [0.382, 0.5, 0.618] as const;
+export const FIB_CHANNEL_RATIOS = [0, 0.382, 0.618, 1, 1.618] as const;
 const STORAGE_VERSION = 1;
 
 export function pointsNeeded(tool: DrawTool) {
-  if (tool === "cursor" || tool === "zoom") return 0;
-  if (tool === "channel" || tool === "triangle" || tool === "long" || tool === "short") return 3;
-  if (tool === "path" || tool === "brush") return Infinity;
-  if (tool === "hline" || tool === "hray" || tool === "vline" || tool === "text" || tool === "note" || tool === "price" || tool === "callout" || tool === "marker" || tool === "avwap") return 1;
+  if (tool === "cursor" || tool === "zoom" || tool === "eraser") return 0;
+  if (tool === "xabcd" || tool === "headshoulders" || tool === "elliott") return 5;
+  if (tool === "channel" || tool === "triangle" || tool === "long" || tool === "short" || tool === "rrect" || tool === "arc" || tool === "curve" || tool === "pitchfork" || tool === "schiff" || tool === "modschiff" || tool === "fibchannel" || tool === "elliottabc") return 3;
+  if (tool === "dcurve") return 4;
+  if (tool === "path" || tool === "polyline" || tool === "brush" || tool === "highlighter") return Infinity;
+  if (tool === "hline" || tool === "hray" || tool === "vline" || tool === "crossline" || tool === "text" || tool === "note" || tool === "price" || tool === "callout" || tool === "marker" || tool === "avwap" || tool === "arrowmark" || tool === "arrowup" || tool === "arrowdown" || tool === "arrowleft" || tool === "arrowright") return 1;
   return 2;
+}
+
+export function isHexColor(value: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+export function regressionLine(points: Array<{ time: number; price: number }>) {
+  const n = points.length;
+  if (n < 2) return null;
+  const meanT = points.reduce((sum, point) => sum + point.time, 0) / n;
+  const meanP = points.reduce((sum, point) => sum + point.price, 0) / n;
+  let cov = 0;
+  let varT = 0;
+  for (const point of points) {
+    cov += (point.time - meanT) * (point.price - meanP);
+    varT += (point.time - meanT) ** 2;
+  }
+  const slope = varT ? cov / varT : 0;
+  const at = (time: number) => meanP + slope * (time - meanT);
+  const deviation = Math.sqrt(points.reduce((sum, point) => sum + (point.price - at(point.time)) ** 2, 0) / n);
+  return { at, deviation };
+}
+
+export function pitchforkOrigin(kind: "pitchfork" | "schiff" | "modschiff", a: Point, b: Point): Point {
+  if (kind === "schiff") return { time: a.time, price: (a.price + b.price) / 2 };
+  if (kind === "modschiff") return { time: (a.time + b.time) / 2, price: (a.price + b.price) / 2 };
+  return a;
+}
+
+export function levelColor(drawing: { color: string; levelColors?: string[] }, index: number) {
+  return drawing.levelColors?.[index] || drawing.color;
 }
 
 export function fibLevels(start: number, end: number, ratios: readonly number[] = FIB_RATIOS) {
@@ -210,8 +297,160 @@ export function shiftDrawing(drawing: Drawing, dt: number, dp: number, pointInde
   return { ...drawing, points: drawing.points.map(move) };
 }
 
+export function isBoxHandle(value: string): value is BoxHandle {
+  return (BOX_HANDLES as readonly string[]).includes(value);
+}
+
+export function isClosedShape(kind: Drawing["kind"]) {
+  return kind === "rect" || kind === "ellipse" || kind === "circle";
+}
+
+export function dragBox(start: Point, end: Point): [Point, Point] | null {
+  if (start.time === end.time && start.price === end.price) return null;
+  return [start, end];
+}
+
+export function centerPrice(top: number, bottom: number) {
+  return (top + bottom) / 2;
+}
+
+export function centerSegment(points: Point[]): [Point, Point] | null {
+  if (points.length < 2) return null;
+  const price = centerPrice(points[0].price, points[1].price);
+  return [
+    { time: Math.min(points[0].time, points[1].time), price },
+    { time: Math.max(points[0].time, points[1].time), price },
+  ];
+}
+
+export function resizeBox(drawing: Drawing, handle: BoxHandle, point: Point): Drawing {
+  if (drawing.locked || drawing.points.length < 2) return drawing;
+  const [first, second] = drawing.points;
+  let timeStart = Math.min(first.time, second.time);
+  let timeEnd = Math.max(first.time, second.time);
+  let priceLow = Math.min(first.price, second.price);
+  let priceHigh = Math.max(first.price, second.price);
+  if (handle === "w" || handle === "nw" || handle === "sw") timeStart = point.time;
+  if (handle === "e" || handle === "ne" || handle === "se") timeEnd = point.time;
+  if (handle === "s" || handle === "sw" || handle === "se") priceLow = point.price;
+  if (handle === "n" || handle === "nw" || handle === "ne") priceHigh = point.price;
+  return { ...drawing, points: [{ time: timeStart, price: priceHigh }, { time: timeEnd, price: priceLow }], updatedAt: Date.now() };
+}
+
+export function drawingVisible(drawing: Drawing, span: string) {
+  if (drawing.hidden) return false;
+  const rule = drawing.visibility;
+  if (!rule || rule.mode === "all" || rule.spans.length === 0) return true;
+  const listed = rule.spans.includes(span);
+  return rule.mode === "only" ? listed : !listed;
+}
+
+export function duplicateDrawing(drawing: Drawing, id: string): Drawing {
+  const shift = Math.abs(drawing.points[0]?.price ?? 1) * 0.002 || 0.01;
+  return {
+    ...drawing,
+    id,
+    locked: false,
+    name: drawing.name ? `${drawing.name} copy` : undefined,
+    points: drawing.points.map((point) => ({ time: point.time, price: point.price + shift })),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+export function moveDrawing(drawings: Drawing[], id: string, direction: "forward" | "backward") {
+  const index = drawings.findIndex((drawing) => drawing.id === id);
+  if (index < 0) return drawings;
+  const target = direction === "forward" ? Math.min(drawings.length - 1, index + 1) : Math.max(0, index - 1);
+  if (target === index) return drawings;
+  const next = drawings.slice();
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item);
+  return next;
+}
+
+export function hexAlpha(color: string, opacity: number) {
+  const hex = color.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return color;
+  const alpha = Math.round(Math.max(0, Math.min(1, opacity)) * 255).toString(16).padStart(2, "0");
+  return `#${hex}${alpha}`;
+}
+
+export function defaultTextStyle(color = "#F8FAFC"): DrawingTextStyle {
+  return { size: 12, bold: false, italic: false, color, align: "center", valign: "middle", visible: true };
+}
+
+const TEMPLATE_KEY = "td-draw-templates";
+
+export type DrawingTemplate = {
+  id: string;
+  name: string;
+  kind: Drawing["kind"];
+  preferred?: boolean;
+  color: string;
+  fill: string;
+  fillOpacity: number;
+  width: number;
+  dash: LineDash;
+  borderVisible: boolean;
+  fillVisible: boolean;
+  center?: CenterLineStyle;
+};
+
+export function loadTemplates(): DrawingTemplate[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(TEMPLATE_KEY) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is DrawingTemplate => !!item && typeof item === "object" && typeof (item as DrawingTemplate).kind === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveTemplates(templates: DrawingTemplate[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(TEMPLATE_KEY, JSON.stringify(templates));
+}
+
+export function preferredTemplate(kind: Drawing["kind"]) {
+  return loadTemplates().find((template) => template.kind === kind && template.preferred) ?? null;
+}
+
 export function drawingKey(symbol: string) {
   return `td-draw:${symbol}`;
+}
+
+function normalizeTextStyle(value: Drawing["textStyle"]): DrawingTextStyle | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const align = value.align === "left" || value.align === "right" || value.align === "center" ? value.align : "center";
+  const valign = value.valign === "top" || value.valign === "bottom" || value.valign === "middle" ? value.valign : "middle";
+  return {
+    size: typeof value.size === "number" ? value.size : 12,
+    bold: Boolean(value.bold),
+    italic: Boolean(value.italic),
+    color: typeof value.color === "string" ? value.color : "#F8FAFC",
+    align,
+    valign,
+    visible: value.visible === false ? false : true,
+  };
+}
+
+function normalizeCenter(value: Drawing["center"]): CenterLineStyle | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const dash = value.dash === "dashed" || value.dash === "dotted" || value.dash === "solid" ? value.dash : "dashed";
+  return {
+    color: typeof value.color === "string" ? value.color : RECTANGLE_CENTER.color,
+    width: typeof value.width === "number" ? value.width : 1,
+    dash,
+    visible: value.visible === false ? false : true,
+  };
+}
+
+function normalizeVisibility(value: Drawing["visibility"]): DrawingVisibility | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const mode = value.mode === "only" || value.mode === "hide" || value.mode === "all" ? value.mode : "all";
+  const spans = Array.isArray(value.spans) ? value.spans.filter((span): span is string => typeof span === "string") : [];
+  return { mode, spans };
 }
 
 export function normalizeDrawing(value: unknown): Drawing | null {
@@ -225,11 +464,23 @@ export function normalizeDrawing(value: unknown): Drawing | null {
     kind: row.kind as Drawing["kind"],
     points,
     text: typeof row.text === "string" ? row.text : undefined,
+    name: typeof row.name === "string" ? row.name : undefined,
     color: typeof row.color === "string" ? row.color : "#D4AF37",
+    fill: typeof row.fill === "string" ? row.fill : undefined,
+    fillOpacity: typeof row.fillOpacity === "number" ? row.fillOpacity : undefined,
+    borderOpacity: typeof row.borderOpacity === "number" ? row.borderOpacity : undefined,
+    borderVisible: row.borderVisible === false ? false : undefined,
+    fillVisible: row.fillVisible === false ? false : undefined,
     width: typeof row.width === "number" ? row.width : 1.5,
     dash: row.dash === "dashed" || row.dash === "dotted" ? row.dash : "solid",
+    textStyle: normalizeTextStyle(row.textStyle),
+    center: normalizeCenter(row.center),
+    levelColors: Array.isArray(row.levelColors) ? row.levelColors.filter((item): item is string => typeof item === "string").slice(0, 12) : undefined,
+    visibility: normalizeVisibility(row.visibility),
     locked: Boolean(row.locked),
     hidden: Boolean(row.hidden),
+    createdAt: typeof row.createdAt === "number" ? row.createdAt : undefined,
+    updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : undefined,
   };
 }
 
