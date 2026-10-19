@@ -12,6 +12,8 @@ import {
 
 function slot(partial: Partial<LiveAccount> & Pick<LiveAccount, "id" | "connection">): LiveAccount {
   return {
+    target: null,
+    family: null,
     slot: 1,
     nickname: partial.id,
     maskedId: null,

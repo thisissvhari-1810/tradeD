@@ -895,11 +895,16 @@ model BrokerAccount {
   lastSyncAt        DateTime?
   lastError         String              @default("")
   lastErrorAt       DateTime?
+  /// Public static IP registered with Dhan for this holder; orders for this account leave from it.
+  staticIp          String              @default("")
+  /// Set when the owner confirms the IP above is registered as this holder's primary IP in Dhan.
+  ipConfirmedAt     DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
 
   credential BrokerCredential?
   orders     BrokerOrder[]
+  consents   BrokerConsent[]
 
   @@unique([ownerId, slot])
   @@index([ownerId])
@@ -968,4 +973,18 @@ model TradingAuditEvent {
   @@index([accountId, createdAt])
   @@index([correlationId])
   @@index([createdAt])
+}
+
+/// A Dhan consent login in progress. The holder signs in on Dhan's page; Dhan redirects back with a
+/// single-use tokenId, which is accepted only for a recent, unused consent of the same account.
+model BrokerConsent {
+  id        String        @id
+  accountId String
+  account   BrokerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  @@index([accountId, createdAt])
 }

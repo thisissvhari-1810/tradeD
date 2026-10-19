@@ -6,7 +6,7 @@ import type { SessionUser } from "../src/server/auth";
 /** In-memory stand-in for the four broker tables, enforcing the same unique constraints as Postgres. */
 const db = vi.hoisted(() => {
   type Row = Record<string, unknown> & { id: string };
-  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, seq: 0, failAudit: false };
+  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, consents: [] as Array<Record<string, unknown>>, seq: 0, failAudit: false };
   const unique = () => Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
   const withCredential = (row: Row, include?: unknown) => {
     const copy = { ...row };
@@ -54,6 +54,19 @@ const db = vi.hoisted(() => {
       },
       deleteMany: async ({ where }: { where: { accountId: string } }) => {
         state.credentials = state.credentials.filter((item) => item.accountId !== where.accountId);
+      },
+    },
+    brokerConsent: {
+      create: async ({ data }: { data: Record<string, unknown> }) => void state.consents.push({ usedAt: null, createdAt: new Date(), ...data }),
+      findMany: async ({ where }: { where: { usedAt: null; expiresAt: { gt: Date }; accountId?: string } }) =>
+        state.consents
+          .filter((item) => item.usedAt === null && (item.expiresAt as Date) > where.expiresAt.gt && (!where.accountId || item.accountId === where.accountId))
+          .reverse(),
+      updateMany: async ({ where, data }: { where: { id: string; usedAt: null }; data: Record<string, unknown> }) => {
+        const row = state.consents.find((item) => item.id === where.id && item.usedAt === null);
+        if (!row) return { count: 0 };
+        Object.assign(row, data);
+        return { count: 1 };
       },
     },
     brokerOrder: {
@@ -108,6 +121,7 @@ beforeEach(() => {
   db.state.credentials = [];
   db.state.orders = [];
   db.state.audit = [];
+  db.state.consents = [];
   db.state.failAudit = false;
   auth.user = null;
   resetRateLimits();
@@ -270,12 +284,12 @@ describe("broker account routes", () => {
     expect((await itemRoute.GET(req("GET"), params("../../etc"))).status).toBe(404);
   });
 
-  it("connect explains that broker authorization is not configured", async () => {
+  it("connect asks for the API key before starting Dhan's login", async () => {
     auth.user = alice;
-    const mine = await service.createBrokerAccount(alice, { nickname: "A", relationship: "SELF" }, ctx);
+    const mine = await service.createBrokerAccount(alice, { nickname: "A", relationship: "SPOUSE" }, ctx);
     const res = await itemRoute.POST(req("POST", { action: "connect" }), params(mine.id));
-    expect(res.status).toBe(501);
-    expect((await res.json()).code).toBe("BROKER_AUTH_NOT_CONFIGURED");
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("ACCOUNT_NOT_CONFIGURED");
   });
 
   it("rate limits repeated refreshes", async () => {
@@ -283,5 +297,85 @@ describe("broker account routes", () => {
     const mine = await service.createBrokerAccount(alice, { nickname: "A", relationship: "SELF" }, ctx);
     for (let i = 0; i < 6; i += 1) expect((await itemRoute.POST(req("POST", { action: "refresh" }), params(mine.id))).status).toBe(200);
     expect((await itemRoute.POST(req("POST", { action: "refresh" }), params(mine.id))).status).toBe(429);
+  });
+});
+
+describe("family account consent flow", () => {
+  const configure = { clientId: "1100012345", appId: "app-key-123", appSecret: "app-secret-xyz", staticIp: "13.50.1.2", ipConfirmed: true };
+  const family = () => service.createBrokerAccount(alice, { nickname: "Amma", relationship: "DEPENDENT_PARENT" }, ctx);
+  function dhan(routes: { consent?: string; token?: string; clientId?: string; profileClient?: string }) {
+    return vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = String(input);
+      const headers = (init.headers ?? {}) as Record<string, string>;
+      if (url.includes("/app/generate-consent")) {
+        expect(init.method).toBe("POST");
+        expect(headers.app_id).toBe("app-key-123");
+        expect(headers.app_secret).toBe("app-secret-xyz");
+        expect(url).toContain("client_id=1100012345");
+        return new Response(JSON.stringify({ consentAppId: routes.consent ?? "consent-abc-123", status: "success" }), { status: 200 });
+      }
+      if (url.includes("/app/consumeApp-consent")) {
+        expect(init.method).toBe("GET");
+        return new Response(JSON.stringify({ dhanClientId: routes.clientId ?? "1100012345", accessToken: routes.token ?? FUTURE, expiryTime: "2100-01-01T00:00:00" }), { status: 200 });
+      }
+      if (url.endsWith("/profile")) return new Response(JSON.stringify({ dhanClientId: routes.profileClient ?? "1100012345" }), { status: 200 });
+      return new Response("{}", { status: 404 });
+    });
+  }
+
+  it("stores the API secret encrypted and refuses an IP Dhan would reject", async () => {
+    const account = await family();
+    const view = await service.configureBrokerAccount(alice, account.id, configure, ctx, { ...process.env, DHAN_STATIC_IP: "13.49.97.101" });
+    expect(view).toMatchObject({ connection: "AUTH_REQUIRED", staticIp: "13.50.1.2", ipConfirmed: true, maskedClientId: "••••••2345" });
+    expect(String(db.state.credentials[0]?.ciphertext)).not.toMatch(/app-secret-xyz|app-key-123|1100012345/);
+    expect(JSON.stringify(db.state.audit)).not.toMatch(/app-secret-xyz/);
+
+    const other = await service.createBrokerAccount(alice, { nickname: "Appa", relationship: "DEPENDENT_PARENT" }, ctx);
+    await expect(service.configureBrokerAccount(alice, other.id, { ...configure, clientId: "1100099999" }, ctx)).rejects.toMatchObject({ code: "STATIC_IP_IN_USE" });
+    await expect(service.configureBrokerAccount(alice, other.id, { ...configure, clientId: "1100099999", staticIp: "13.49.97.101" }, ctx, { ...process.env, DHAN_STATIC_IP: "13.49.97.101" })).rejects.toMatchObject({ code: "STATIC_IP_IN_USE" });
+    await expect(service.configureBrokerAccount(alice, other.id, { ...configure, clientId: "1100099999", staticIp: "999.1.1.1" }, ctx)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(service.configureBrokerAccount(bob, account.id, configure, ctx)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("keeps the saved secret when it is left blank on a later edit", async () => {
+    const account = await family();
+    await service.configureBrokerAccount(alice, account.id, configure, ctx);
+    await expect(service.configureBrokerAccount(alice, account.id, { ...configure, appSecret: "" }, ctx)).resolves.toMatchObject({ staticIp: "13.50.1.2" });
+    const fetch = dhan({});
+    await service.startBrokerConsent(alice, account.id, ctx, { fetch });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("connects only after the holder signs in on Dhan, and each link works once", async () => {
+    const account = await family();
+    await service.configureBrokerAccount(alice, account.id, configure, ctx);
+    const fetch = dhan({});
+    const started = await service.startBrokerConsent(alice, account.id, ctx, { fetch });
+    expect(started.url).toBe("https://auth.dhan.co/login/consentApp-login?consentAppId=consent-abc-123");
+
+    const done = await service.completeBrokerConsent("token-id-0001", account.id, ctx, { fetch });
+    expect(done).toEqual({ nickname: "Amma", connection: "CONNECTED" });
+    const view = await service.getBrokerAccount(alice, account.id);
+    expect(view.connection).toBe("CONNECTED");
+    expect(String(db.state.credentials[0]?.ciphertext)).not.toContain(FUTURE);
+
+    await expect(service.completeBrokerConsent("token-id-0001", account.id, ctx, { fetch })).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+  });
+
+  it("rejects an expired consent and a sign-in to a different Dhan account", async () => {
+    const account = await family();
+    await service.configureBrokerAccount(alice, account.id, configure, ctx);
+    await service.startBrokerConsent(alice, account.id, ctx, { fetch: dhan({}) });
+    const later = { ...ctx, now: new Date(Date.now() + 11 * 60_000) };
+    await expect(service.completeBrokerConsent("token-id-0002", account.id, later, { fetch: dhan({}) })).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+
+    await service.startBrokerConsent(alice, account.id, ctx, { fetch: dhan({ consent: "consent-second-1" }) });
+    await expect(service.completeBrokerConsent("token-id-0003", account.id, ctx, { fetch: dhan({ clientId: "1999999999" }) })).rejects.toMatchObject({ code: "CONSENT_CLIENT_MISMATCH" });
+    expect((await service.getBrokerAccount(alice, account.id)).connection).toBe("ERROR");
+  });
+
+  it("refuses malformed callback tokens without touching the database", async () => {
+    await expect(service.completeBrokerConsent("x", null, ctx)).rejects.toMatchObject({ code: "CONSENT_INVALID" });
+    await expect(service.completeBrokerConsent("token-id-0004", null, ctx)).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
   });
 });

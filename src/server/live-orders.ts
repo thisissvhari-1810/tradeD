@@ -1,4 +1,4 @@
-import type { BrokerOrder, BrokerOrderStatus } from "@prisma/client";
+import type { BrokerAccount, BrokerOrder, BrokerOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { recordAudit } from "@/lib/audit/trail";
@@ -7,9 +7,12 @@ import { readFunds } from "@/lib/dhan/funds";
 import { estimatePaise, FINAL_STATUSES, newCorrelationId, readBrokerOrder, validateIntent, workerOrder, type LiveOrderIntent } from "@/lib/dhan/orders";
 import { parseFunds } from "@/lib/multi-account/live";
 import { assertOwnsAccount } from "@/lib/security/authorization";
+import { liveSwitchOn, staticIpReady } from "@/lib/security/flags";
+import { executeLegs } from "@/lib/multi-account/executor";
 import { fingerprint } from "@/lib/security/crypto";
 import { maskTail } from "@/lib/security/redact";
 import type { SessionUser } from "@/server/auth";
+import { loadAccountCredentials } from "@/server/broker-accounts";
 import { callWorker, ExecutionUncertainError } from "@/server/execution-client";
 import { gateFor, tradesServerAccount } from "@/server/live-gate";
 import { getDhanAccessToken, getDhanClientId } from "@/server/settings";
@@ -106,24 +109,55 @@ export async function ensureServerAccount(user: SessionUser, env: NodeJS.Process
   throw new AppError("The account was linked at the same time by another request. Try again.", 409, "ACCOUNT_BUSY");
 }
 
-async function assertLiveAllowed(user: SessionUser, env: NodeJS.ProcessEnv) {
-  const gate = await gateFor(user, env);
-  if (!gate.enabled) {
-    throw new AppError("Live orders are locked for this account.", 403, "LIVE_LOCKED", { details: { unmet: gate.requirements.filter((item) => !item.met).map((item) => item.label) } });
-  }
+function locked(unmet: string[]): never {
+  throw new AppError("Live orders are locked for this account.", 403, "LIVE_LOCKED", { details: { unmet } });
 }
 
-/** Validation, value estimate and funds check. Sends nothing. */
-export async function previewLiveOrder(user: SessionUser, intent: LiveOrderIntent, deps: Deps = {}) {
-  const env = deps.env ?? process.env;
-  const gate = await gateFor(user, env);
+export type Target = { account: BrokerAccount; credentials: DhanCredentials; server: boolean };
+
+function isServerAccount(account: Pick<BrokerAccount, "clientFingerprint">, serverClientId: string, env: NodeJS.ProcessEnv) {
+  return Boolean(serverClientId && account.clientFingerprint && account.clientFingerprint === fingerprint(serverClientId, "broker-client-id", env));
+}
+
+/**
+ * Resolves where an order may go and with which credentials. "server" is the holder's own server-configured
+ * Dhan account; anything else is a family BrokerAccount the user owns, which must be connected through
+ * Dhan's consent login and have its own registered static IP.
+ */
+export async function resolveTarget(user: SessionUser, accountId: string, env: NodeJS.ProcessEnv = process.env): Promise<Target> {
+  if (accountId === "server") {
+    const gate = await gateFor(user, env);
+    if (!gate.enabled) locked(gate.requirements.filter((item) => !item.met).map((item) => item.label));
+    return { account: await ensureServerAccount(user, env), credentials: await serverCredentials(), server: true };
+  }
+  const account = assertOwnsAccount(user, await prisma.brokerAccount.findUnique({ where: { id: accountId } }));
+  if (isServerAccount(account, await getDhanClientId(), env)) return resolveTarget(user, "server", env);
+  const unmet: string[] = [];
+  if (!liveSwitchOn(env)) unmet.push("Live orders switched on by the operator");
+  if (!staticIpReady(env)) unmet.push("Execution server configured");
+  if (user.status !== "ACTIVE" || !user.tradingEnabled) unmet.push("Your TradeD user may trade");
+  if (!account.staticIp || !account.ipConfirmedAt) unmet.push("This holder's static IP is registered with Dhan");
+  if (account.connection !== "CONNECTED" || !account.tokenExpiresAt || account.tokenExpiresAt.getTime() <= Date.now()) unmet.push("This holder signed in through Dhan today");
+  const credentials = unmet.length ? null : await loadAccountCredentials(account.id);
+  if (!credentials) locked(unmet.length ? unmet : ["This holder signed in through Dhan today"]);
+  return { account, credentials, server: false };
+}
+
+async function credentialsForAccount(account: BrokerAccount, env: NodeJS.ProcessEnv): Promise<DhanCredentials> {
+  if (isServerAccount(account, await getDhanClientId(), env)) return serverCredentials();
+  const credentials = await loadAccountCredentials(account.id);
+  if (!credentials) throw new AppError("This account is not connected. Sign in through Dhan again to check its orders.", 409, "ACCOUNT_NOT_CONNECTED");
+  return credentials;
+}
+
+async function checkIntent(intent: LiveOrderIntent, credentials: DhanCredentials | null, deps: Deps) {
   const problems = validateIntent(intent);
   const estimate = estimatePaise(intent);
   let availablePaise: number | null = null;
   let fundsError: string | null = null;
-  if (tradesServerAccount(user, env)) {
+  if (credentials) {
     try {
-      const funds = parseFunds(await readFunds(createDhanClient(await serverCredentials(), { fetch: deps.fetch })));
+      const funds = parseFunds(await readFunds(createDhanClient(credentials, { fetch: deps.fetch })));
       availablePaise = funds?.availablePaise ?? null;
       fundsError = funds?.error ?? null;
     } catch (error) {
@@ -131,14 +165,22 @@ export async function previewLiveOrder(user: SessionUser, intent: LiveOrderInten
     }
   }
   if (intent.side === "BUY" && estimate != null && availablePaise != null && estimate > availablePaise) problems.push("Estimated value is above the available funds reported by Dhan.");
-  return { problems, estimatePaise: estimate, availablePaise, fundsError, gate, eligible: gate.enabled && problems.length === 0 };
+  return { problems, estimatePaise: estimate, availablePaise, fundsError };
 }
 
-export async function placeLiveOrder(user: SessionUser, input: { key: string; intent: LiveOrderIntent }, ctx: Ctx, deps: Deps = {}) {
+/** Validation, value estimate and funds check for the server account. Sends nothing. */
+export async function previewLiveOrder(user: SessionUser, intent: LiveOrderIntent, deps: Deps = {}) {
   const env = deps.env ?? process.env;
-  await assertLiveAllowed(user, env);
-  const preview = await previewLiveOrder(user, input.intent, deps);
-  const account = await ensureServerAccount(user, env);
+  const gate = await gateFor(user, env);
+  const checked = await checkIntent(intent, tradesServerAccount(user, env) ? await serverCredentials().catch(() => null) : null, deps);
+  return { ...checked, gate, eligible: gate.enabled && checked.problems.length === 0 };
+}
+
+export async function placeLiveOrder(user: SessionUser, input: { key: string; intent: LiveOrderIntent; accountId?: string }, ctx: Ctx, deps: Deps = {}) {
+  const env = deps.env ?? process.env;
+  const target = await resolveTarget(user, input.accountId ?? "server", env);
+  const preview = await checkIntent(input.intent, target.credentials, deps);
+  const account = target.account;
 
   const already = await prisma.brokerOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: account.id, idempotencyKey: input.key } } });
   if (already) return { order: toView(already), duplicate: true };
@@ -180,7 +222,7 @@ export async function placeLiveOrder(user: SessionUser, input: { key: string; in
 
   let update: Partial<BrokerOrder>;
   try {
-    const result = await callWorker("/v1/orders/place", { credentials: await serverCredentials(), order: workerOrder(intent, correlationId) }, { env, fetch: deps.fetch });
+    const result = await callWorker("/v1/orders/place", { credentials: target.credentials, order: workerOrder(intent, correlationId) }, { env, fetch: deps.fetch });
     if (result.outcome === "ACCEPTED") {
       const mapped = readBrokerOrder({ orderId: result.orderId, orderStatus: result.orderStatus });
       update = { brokerOrderId: result.orderId, status: mapped && mapped.status !== "UNKNOWN" ? mapped.status : "PENDING", brokerStatus: result.orderStatus, submittedAt: new Date() };
@@ -200,7 +242,7 @@ export async function placeLiveOrder(user: SessionUser, input: { key: string; in
 }
 
 async function ownedOrder(user: SessionUser, orderId: string) {
-  const row = await prisma.brokerOrder.findUnique({ where: { id: orderId }, include: { account: { select: { ownerId: true } } } });
+  const row = await prisma.brokerOrder.findUnique({ where: { id: orderId }, include: { account: true } });
   if (!row) throw new AppError("Order not found.", 404, "ORDER_NOT_FOUND");
   assertOwnsAccount(user, row.account);
   return row;
@@ -212,7 +254,7 @@ export async function reconcileLiveOrder(user: SessionUser, orderId: string, ctx
   if (FINAL_STATUSES.has(row.status) && row.brokerOrderId) return { order: toView(row), changed: false };
   if (row.status === "REJECTED" && !row.brokerOrderId) return { order: toView(row), changed: false };
   const now = deps.now ?? new Date();
-  const client = createDhanClient(await serverCredentials(), { fetch: deps.fetch });
+  const client = createDhanClient(await credentialsForAccount(row.account, deps.env ?? process.env), { fetch: deps.fetch });
   let broker: ReturnType<typeof readBrokerOrder> = null;
   try {
     broker = readBrokerOrder(row.brokerOrderId ? await client.get(`/orders/${encodeURIComponent(row.brokerOrderId)}`) : await client.get(`/orders/external/${encodeURIComponent(row.correlationId)}`));
@@ -245,13 +287,13 @@ export async function reconcileLiveOrder(user: SessionUser, orderId: string, ctx
 
 export async function cancelLiveOrder(user: SessionUser, orderId: string, ctx: Ctx, deps: Deps = {}) {
   const env = deps.env ?? process.env;
-  await assertLiveAllowed(user, env);
   const row = await ownedOrder(user, orderId);
+  const target = await resolveTarget(user, row.accountId, env);
   if (!row.brokerOrderId || (row.status !== "PENDING" && row.status !== "PARTIAL")) throw new AppError("Only an open order can be cancelled.", 409, "ORDER_NOT_OPEN");
   await recordAudit({ userId: user.id, accountId: row.accountId, action: "live.order.cancel", correlationId: row.correlationId, outcome: "SUCCESS", detail: { orderId: row.id, brokerOrderId: row.brokerOrderId }, ip: ctx.ip }, { required: true });
   let message: string | undefined;
   try {
-    const result = await callWorker("/v1/orders/cancel", { credentials: await serverCredentials(), orderId: row.brokerOrderId }, { env, fetch: deps.fetch });
+    const result = await callWorker("/v1/orders/cancel", { credentials: target.credentials, orderId: row.brokerOrderId }, { env, fetch: deps.fetch });
     if (result.outcome === "REJECTED") throw new AppError(`Dhan refused the cancellation: ${result.message}`, 409, "CANCEL_REJECTED");
     if (result.outcome === "UNKNOWN") message = result.message;
   } catch (error) {
@@ -269,3 +311,20 @@ export async function listLiveOrders(user: SessionUser) {
   return rows.map(toView);
 }
 
+export type LegResult = { accountId: string; ok: boolean; order?: LiveOrderView; duplicate?: boolean; error?: { message: string; code: string } };
+
+/**
+ * Places the same contract on several accounts, each with its own quantity. Every leg settles on its own:
+ * one account's rejection or uncertainty never cancels, retries or changes another. Not atomic across accounts.
+ */
+export async function placeLiveOrders(user: SessionUser, input: { key: string; intent: Omit<LiveOrderIntent, "quantity">; legs: Array<{ accountId: string; quantity: number }> }, ctx: Ctx, deps: Deps = {}): Promise<LegResult[]> {
+  const ids = new Set(input.legs.map((leg) => leg.accountId));
+  if (ids.size !== input.legs.length) throw new AppError("Each account can appear once per order.", 400, "DUPLICATE_ACCOUNT");
+  const settled = await executeLegs(input.legs, (leg) => placeLiveOrder(user, { key: input.key, accountId: leg.accountId, intent: { ...input.intent, quantity: leg.quantity } }, ctx, deps));
+  return settled.map((item, index) => {
+    const accountId = input.legs[index]!.accountId;
+    if (item.status === "fulfilled") return { accountId, ok: item.value.order.status !== "REJECTED", order: item.value.order, duplicate: item.value.duplicate };
+    const error = item.reason instanceof AppError ? { message: item.reason.message, code: item.reason.code } : { message: "The order could not be placed.", code: "INTERNAL" };
+    return { accountId, ok: false, error };
+  });
+}

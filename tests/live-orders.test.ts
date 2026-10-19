@@ -19,7 +19,7 @@ const db = vi.hoisted(() => {
       const composite = where.accountId_idempotencyKey as { accountId: string; idempotencyKey: string } | undefined;
       const row = composite ? state.orders.find((item) => item.accountId === composite.accountId && item.idempotencyKey === composite.idempotencyKey) : state.orders.find((item) => item.id === where.id);
       if (!row) return null;
-      return include ? { ...row, account: { ownerId: state.accounts.find((item) => item.id === row.accountId)?.ownerId } } : { ...row };
+      return include ? { ...row, account: { ...state.accounts.find((item) => item.id === row.accountId) } } : { ...row };
     },
     findMany: async ({ where }: { where: Record<string, unknown> }) => state.orders.filter((row) => match(row, where)).map((row) => ({ ...row })).reverse(),
     count: async ({ where }: { where: Record<string, unknown> }) => state.orders.filter((row) => match(row, where)).length,
@@ -37,7 +37,7 @@ const db = vi.hoisted(() => {
   };
   const client = {
     brokerAccount: {
-      findUnique: async ({ where }: { where: { clientFingerprint: string } }) => state.accounts.find((item) => item.clientFingerprint === where.clientFingerprint) ?? null,
+      findUnique: async ({ where }: { where: { clientFingerprint?: string; id?: string } }) => state.accounts.find((item) => (where.id ? item.id === where.id : item.clientFingerprint === where.clientFingerprint)) ?? null,
       findMany: async ({ where }: { where: { ownerId: string } }) => state.accounts.filter((item) => item.ownerId === where.ownerId),
       create: async ({ data }: { data: Record<string, unknown> }) => {
         if (state.accounts.some((item) => item.clientFingerprint === data.clientFingerprint)) throw unique();
@@ -200,7 +200,7 @@ describe("order ownership and cancellation", () => {
     const fetch = router({ worker: () => reply(200, { outcome: "ACCEPTED", orderId: "42", orderStatus: "PENDING" }) });
     const placed = await service.placeLiveOrder(owner, { key: randomUUID(), intent }, ctx, { fetch, env });
     await expect(service.reconcileLiveOrder(stranger, placed.order.id, ctx, { fetch, env })).rejects.toMatchObject({ status: 404 });
-    await expect(service.cancelLiveOrder(stranger, placed.order.id, ctx, { fetch, env })).rejects.toMatchObject({ code: "LIVE_LOCKED" });
+    await expect(service.cancelLiveOrder(stranger, placed.order.id, ctx, { fetch, env })).rejects.toMatchObject({ status: 404 });
     expect(await service.listLiveOrders(stranger)).toEqual([]);
     expect(await service.listLiveOrders(owner)).toHaveLength(1);
   });

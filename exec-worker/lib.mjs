@@ -3,6 +3,8 @@
 // TradeD sends the token with each signed request and the worker never stores or logs it.
 
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { request as httpsRequest } from "node:https";
+import { networkInterfaces } from "node:os";
 
 export const MAX_SKEW_MS = 30_000;
 export const MAX_BODY_BYTES = 16 * 1024;
@@ -84,20 +86,53 @@ export function validateCancel(input, config) {
   return null;
 }
 
+/**
+ * Sends one request to Dhan from the source address mapped to this client, so each holder's orders
+ * leave from the static IP registered for that holder. Unmapped clients use the default route.
+ */
 async function dhan(config, credentials, method, path, body) {
-  const response = await config.fetch(`${config.dhanApi}${path}`, {
-    method,
-    headers: {
-      Accept: "application/json",
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      "access-token": credentials.accessToken,
-      "client-id": credentials.clientId,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(config.timeoutMs),
+  const headers = {
+    Accept: "application/json",
+    ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    "access-token": credentials.accessToken,
+    "client-id": credentials.clientId,
+  };
+  const localAddress = config.routes.get(credentials.clientId);
+  return config.transport({ method, url: `${config.dhanApi}${path}`, headers, body: body === undefined ? undefined : JSON.stringify(body), localAddress, timeoutMs: config.timeoutMs });
+}
+
+/** Default transport: node:https with an explicit source address. */
+export function httpsTransport({ method, url, headers, body, localAddress, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequest(url, { method, headers, localAddress, timeout: timeoutMs }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        let payload = null;
+        try {
+          payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          payload = null;
+        }
+        const status = res.statusCode ?? 0;
+        resolve({ status, ok: status >= 200 && status < 300, payload });
+      });
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(Object.assign(new Error("timeout"), { name: "TimeoutError" })));
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
   });
-  const payload = await response.json().catch(() => null);
-  return { status: response.status, ok: response.ok, payload };
+}
+
+/** Transport over fetch, used by tests; records the source address it would have used. */
+export function fetchTransport(fetchImpl) {
+  return async ({ method, url, headers, body, localAddress, timeoutMs }) => {
+    const response = await fetchImpl(url, { method, headers, body, localAddress, signal: AbortSignal.timeout(timeoutMs) });
+    const payload = await response.json().catch(() => null);
+    return { status: response.status, ok: response.ok, payload };
+  };
 }
 
 function brokerMessage(payload, status) {
@@ -165,25 +200,43 @@ export async function cancelOrder(input, config) {
   return { outcome: "UNKNOWN", message: "Dhan did not confirm the cancellation. Check the order status." };
 }
 
-export function loadConfig(env, fetchImpl = fetch) {
+function localAddresses() {
+  return new Set(Object.values(networkInterfaces()).flat().filter(Boolean).map((item) => item.address));
+}
+
+/**
+ * CLIENT_ROUTES maps each Dhan client to the private IP whose Elastic IP is registered for that holder:
+ *   CLIENT_ROUTES=1114171746=172.31.40.31,1100012345=172.31.40.50
+ * ALLOWED_CLIENT_IDS (older form) allows clients on the default route.
+ */
+export function loadConfig(env, fetchImpl, addresses = fetchImpl ? null : localAddresses()) {
   const secret = (env.EXECUTION_SERVICE_SECRET ?? "").trim();
   if (!/^[A-Za-z0-9_-]{32,128}$/.test(secret)) throw new Error(`EXECUTION_SERVICE_SECRET must be 32-128 letters, digits, - or _ (found ${secret.length} characters).`);
-  const allowed = (env.ALLOWED_CLIENT_IDS ?? "").split(",").map((item) => item.trim()).filter((item) => /^\d{4,20}$/.test(item));
-  if (allowed.length === 0) throw new Error("ALLOWED_CLIENT_IDS must list at least one Dhan client id.");
+  const routes = new Map();
+  for (const entry of (env.CLIENT_ROUTES ?? "").split(",").map((item) => item.trim()).filter(Boolean)) {
+    const match = /^(\d{4,20})=(\d{1,3}(?:\.\d{1,3}){3})$/.exec(entry);
+    if (!match) throw new Error(`CLIENT_ROUTES entry "${entry}" must look like 1100012345=172.31.40.50.`);
+    if (addresses && !addresses.has(match[2])) throw new Error(`CLIENT_ROUTES: ${match[2]} is not configured on this server. Run add-ips.sh after assigning it in AWS.`);
+    if ([...routes.values()].includes(match[2])) throw new Error(`CLIENT_ROUTES: ${match[2]} is mapped to two clients; Dhan needs a unique IP per holder.`);
+    routes.set(match[1], match[2]);
+  }
+  const allowed = new Set([...(env.ALLOWED_CLIENT_IDS ?? "").split(",").map((item) => item.trim()).filter((item) => /^\d{4,20}$/.test(item)), ...routes.keys()]);
+  if (allowed.size === 0) throw new Error("Set CLIENT_ROUTES (or ALLOWED_CLIENT_IDS) to at least one Dhan client id.");
   return {
     secret,
-    allowedClientIds: new Set(allowed),
+    allowedClientIds: allowed,
+    routes,
     ordersEnabled: env.ORDERS_ENABLED === "true",
     maxQuantity: Number(env.MAX_ORDER_QUANTITY ?? 1800),
     dhanApi: env.DHAN_API ?? "https://api.dhan.co/v2",
     timeoutMs: 10_000,
-    fetch: fetchImpl,
+    transport: fetchImpl ? fetchTransport(fetchImpl) : httpsTransport,
   };
 }
 
 /** Handles one request. Pure apart from the broker calls, so it is tested without a socket. */
 export async function handle({ method, path, headers, body }, config, nonces, now = Date.now()) {
-  if (method === "GET" && path === "/health") return { status: 200, json: { ok: true, ordersEnabled: config.ordersEnabled } };
+  if (method === "GET" && path === "/health") return { status: 200, json: { ok: true, ordersEnabled: config.ordersEnabled, clients: config.allowedClientIds.size } };
   if (method !== "POST" || (path !== "/v1/orders/place" && path !== "/v1/orders/cancel")) return { status: 404, json: { error: "Not found." } };
   const problem = verifyRequest({ secret: config.secret, headers, method, path, body, now, nonces });
   if (problem) return { status: 401, json: { error: "Unauthorized." }, log: problem };

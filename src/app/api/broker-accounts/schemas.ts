@@ -13,4 +13,14 @@ export const createBody = z.object({ nickname, relationship }).strict();
 
 export const updateBody = z.object({ nickname: nickname.optional(), relationship: relationship.optional() }).strict().refine((value) => value.nickname !== undefined || value.relationship !== undefined, "Nothing to change.");
 
-export const actionBody = z.object({ action: z.enum(["refresh", "disconnect", "connect"]) }).strict();
+export const actionBody = z.discriminatedUnion("action", [
+  z.object({ action: z.enum(["refresh", "disconnect", "connect"]) }).strict(),
+  z.object({
+    action: z.literal("configure"),
+    clientId: z.string().trim().regex(/^\d{4,20}$/, "Dhan client id must be 4 to 20 digits."),
+    appId: z.string().trim().min(4, "Paste the API key.").max(200),
+    appSecret: z.string().trim().max(400).optional(),
+    staticIp: z.string().trim().max(15),
+    ipConfirmed: z.boolean(),
+  }).strict(),
+]);

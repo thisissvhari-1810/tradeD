@@ -29,7 +29,7 @@ export function StateChip({ state, syncing }: { state: ConnectionState; syncing?
 const UNDERLYINGS = [...new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", ...FEATURED_INDICES.map((item) => item.symbol)])];
 
 type LiveOrderRow = { id: string; symbol: string; side: "BUY" | "SELL"; quantity: number; orderType: string; pricePaise: number | null; status: string; brokerStatus: string; filledQuantity: number; avgPricePaise: number | null; reason: string; createdAt: string; final: boolean; brokerOrderId: string | null };
-type PlaceResult = { order: LiveOrderRow; duplicate: boolean };
+type LegResult = { accountId: string; ok: boolean; order?: LiveOrderRow; duplicate?: boolean; error?: { message: string; code: string } };
 
 const STATUS_TONE: Record<string, Tone> = { SUBMITTING: "info", PENDING: "info", PARTIAL: "warning", FILLED: "profit", REJECTED: "loss", CANCELLED: "neutral", EXPIRED: "neutral", UNKNOWN: "warning" };
 const STATUS_LABEL: Record<string, string> = { SUBMITTING: "Sending", PENDING: "Open", PARTIAL: "Part filled", FILLED: "Filled", REJECTED: "Rejected", CANCELLED: "Cancelled", EXPIRED: "Expired", UNKNOWN: "Unconfirmed" };
@@ -116,38 +116,43 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
   const [understood, setUnderstood] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
-  const [result, setResult] = useState<PlaceResult | null>(null);
+  const [results, setResults] = useState<LegResult[] | null>(null);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [accountLots, setAccountLots] = useState<Record<string, number>>({});
   const [ordersReload, setOrdersReload] = useState(0);
   const lotSize = chain?.lotSize ?? null;
   const row = chain?.strikes.find((item) => item.strike === strike) ?? null;
   const leg = chain?.available && chain.expiry === expiry ? (right === "CE" ? row?.ce : row?.pe) ?? null : null;
   const ltpPaise = leg?.ltp != null && leg.ltp > 0 ? Math.round(leg.ltp * 100) : null;
-  const eligible = accounts.filter((account) => account.tradingReady);
+  const eligible = accounts.filter((account) => account.tradingReady && account.target);
+  const legs = eligible.filter((account) => picked[account.target!] !== false).map((account) => ({ account, lots: accountLots[account.target!] ?? lots }));
   const quantity = lotSize ? lots * lotSize : null;
+  const totalQuantity = lotSize ? legs.reduce((sum, item) => sum + item.lots * lotSize, 0) : null;
   const limitPaise = orderType === "LIMIT" ? rupeesToPaise(limitText) : null;
   const unitPaise = limitPaise ?? ltpPaise;
-  const estimate = quantity && unitPaise ? unitPaise * quantity : null;
+  const estimate = totalQuantity && unitPaise ? unitPaise * totalQuantity : null;
   const ready = Boolean(chain?.available && expiry && strike != null && lotSize && leg?.securityId && (orderType === "MARKET" || limitPaise));
   const label = strike != null ? contractLabel({ underlying, expiry, strike, right }) : "Choose a contract";
   const live = gate.enabled && eligible.length > 0;
-  const summary = `${side} ${quantity ?? "—"} × ${label}${orderType === "LIMIT" ? ` @ ₹${limitText || "—"}` : " at market"}`;
+  const summary = `${side} ${label}${orderType === "LIMIT" ? ` @ ₹${limitText || "—"}` : " at market"} · ${legs.length} ${legs.length === 1 ? "account" : "accounts"}`;
+  const nameOf = (target: string) => accounts.find((account) => account.target === target)?.nickname ?? target;
 
   const openReview = () => {
     // One key per review: a double click or a retry after a lost response cannot create a second order.
     setRequestKey(crypto.randomUUID());
     setUnderstood(false);
     setSendError("");
-    setResult(null);
+    setResults(null);
     setReviewing(true);
   };
 
   const send = async () => {
-    if (!leg?.securityId || !quantity) return;
+    if (!leg?.securityId || !lotSize || legs.length === 0) return;
     setSending(true);
     setSendError("");
     try {
-      const placed = await api<PlaceResult>("/api/live-orders", {
-        action: "place",
+      const placed = await api<{ results: LegResult[] }>("/api/live-orders", {
+        action: "placeMany",
         key: requestKey,
         confirmed: true,
         intent: {
@@ -157,13 +162,13 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
           side,
           productType: product,
           orderType,
-          quantity,
           lotSize,
           pricePaise: orderType === "LIMIT" ? limitPaise : null,
           referencePaise: ltpPaise,
         },
+        legs: legs.map((item) => ({ accountId: item.account.target!, quantity: item.lots * lotSize })),
       });
-      setResult(placed);
+      setResults(placed.results);
       setOrdersReload((value) => value + 1);
     } catch (caught) {
       setSendError(caught instanceof Error ? caught.message : "The order could not be sent.");
@@ -211,29 +216,45 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
         </div>
         {orderType === "LIMIT" ? <label className={LABEL}>Limit (₹)<input className={FIELD} inputMode="decimal" value={limitText} onChange={(event) => setLimitText(event.target.value)} /></label> : <div className={LABEL}>Quantity<p className="num flex h-8 items-center text-dense text-text">{quantity ?? "Unavailable"}</p></div>}
       </div>
+      {eligible.length > 0 ? (
+        <fieldset className="flex flex-col gap-1.5 rounded-input border border-border-soft p-2.5">
+          <legend className="px-1 text-micro font-medium uppercase tracking-[0.05em] text-muted">Accounts · lots each</legend>
+          {eligible.map((account) => {
+            const id = account.target!;
+            const on = picked[id] !== false;
+            return (
+              <div key={id} className="flex items-center gap-2 text-data">
+                <input type="checkbox" className="h-4 w-4" checked={on} onChange={(event) => setPicked((current) => ({ ...current, [id]: event.target.checked }))} aria-label={`Include ${account.nickname}`} />
+                <span className="min-w-0 flex-1 truncate">{account.nickname}<span className="num ml-1 text-micro text-muted">{account.maskedId ?? ""}</span></span>
+                <input type="number" min={1} max={100} className={cx(FIELD, "h-7 w-16 text-right")} disabled={!on} value={accountLots[id] ?? lots} onChange={(event) => setAccountLots((current) => ({ ...current, [id]: Math.max(1, Math.min(100, Math.floor(Number(event.target.value) || 1))) }))} aria-label={`Lots for ${account.nickname}`} />
+              </div>
+            );
+          })}
+        </fieldset>
+      ) : null}
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-input border border-border-soft bg-sunken px-3 py-2.5 text-data" aria-label="Order summary">
         <dt className="text-muted">Contract</dt><dd className="truncate text-right font-semibold">{label}</dd>
         <dt className="text-muted">Last price · chain</dt><dd className="num text-right">{ltpPaise != null ? inr(ltpPaise) : <span className="text-muted">Unavailable</span>}</dd>
         <dt className="text-muted">Lot size · qty</dt><dd className="num text-right">{lotSize ?? <span className="text-muted">Unavailable</span>}{quantity ? ` · ${quantity}` : ""}</dd>
-        <dt className="text-muted">Eligible accounts</dt><dd className="num text-right">{eligible.length}</dd>
+        <dt className="text-muted">Accounts · total qty</dt><dd className="num text-right">{legs.length} · {totalQuantity ?? "—"}</dd>
         <dt className="text-muted">Est. value</dt><dd className="num text-right">{estimate != null ? `≈ ${inr(estimate)}` : <span className="text-muted">Unavailable</span>}</dd>
       </dl>
-      <Button size="lg" block variant={side === "BUY" ? "buy" : "sell"} disabled={!ready} onClick={openReview}>{side === "BUY" ? "Review Buy Order" : "Review Sell Order"}</Button>
+      <Button size="lg" block variant={side === "BUY" ? "buy" : "sell"} disabled={!ready || (live && legs.length === 0)} onClick={openReview}>{side === "BUY" ? "Review Buy Order" : "Review Sell Order"}</Button>
       <LiveOrdersList reloadToken={reloadToken + ordersReload} enabled={live} />
 
       <Drawer open={reviewing} onClose={() => setReviewing(false)} modal label="Review live order" title="Review Order" subtitle={`${label}${expiry ? ` · ${expiryLabel(expiry)}` : ""}`} width="w-[500px]" footer={
         <div className="flex flex-col gap-2">
-          {result ? (
+          {results ? (
             <Button block variant="secondary" onClick={() => setReviewing(false)}>Done</Button>
           ) : live ? (
             <>
               <label className="flex items-start gap-2 text-data text-text">
                 <input type="checkbox" className="mt-0.5 h-4 w-4" checked={understood} onChange={(event) => setUnderstood(event.target.checked)} />
-                <span>I understand this places a <strong>real order with real money</strong> in my Dhan account.</span>
+                <span>I understand this places <strong>real orders with real money</strong> in {legs.length === 1 ? "this Dhan account" : `these ${legs.length} Dhan accounts`}, each settling separately.</span>
               </label>
               <div className="flex gap-2">
                 <Button variant="secondary" onClick={() => setReviewing(false)} disabled={sending}>Back</Button>
-                <Button className="flex-1" variant={side === "BUY" ? "buy" : "sell"} disabled={!understood || sending || !ready} onClick={() => void send()}>{sending ? "Sending…" : `Place ${summary}`}</Button>
+                <Button className="flex-1" variant={side === "BUY" ? "buy" : "sell"} disabled={!understood || sending || !ready || legs.length === 0} onClick={() => void send()}>{sending ? "Sending…" : `Place ${summary}`}</Button>
               </div>
             </>
           ) : (
@@ -267,12 +288,20 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
             </tbody>
           </table>
           {sendError ? <Notice tone="loss">{sendError}</Notice> : null}
-          {result ? (
-            <div className={cx("rounded-input border px-3 py-2.5 text-data", result.order.status === "REJECTED" ? "border-loss/40 bg-loss-soft" : result.order.status === "UNKNOWN" ? "border-warning/40 bg-warning-soft" : "border-profit/40 bg-profit-soft")} role="status">
-              <p className="font-semibold text-text">{result.duplicate ? "Already sent · " : ""}{STATUS_LABEL[result.order.status] ?? result.order.status}{result.order.brokerOrderId ? ` · Dhan order ${result.order.brokerOrderId}` : ""}</p>
-              {result.order.reason ? <p className="mt-0.5 text-text-2">{result.order.reason}</p> : null}
-              {result.order.status === "UNKNOWN" ? <p className="mt-0.5 text-text-2">Do not place it again. Use Status under the ticket to check with Dhan.</p> : null}
-            </div>
+          {results ? (
+            <ul className="flex flex-col gap-1.5" role="status" aria-label="Results per account">
+              {results.map((item) => {
+                const status = item.order?.status;
+                const tone = !item.ok || status === "REJECTED" ? "border-loss/40 bg-loss-soft" : status === "UNKNOWN" ? "border-warning/40 bg-warning-soft" : "border-profit/40 bg-profit-soft";
+                return (
+                  <li key={item.accountId} className={cx("rounded-input border px-3 py-2 text-data", tone)}>
+                    <p className="font-semibold text-text">{nameOf(item.accountId)} · {item.order ? `${item.duplicate ? "Already sent · " : ""}${STATUS_LABEL[item.order.status] ?? item.order.status}${item.order.brokerOrderId ? ` · Dhan ${item.order.brokerOrderId}` : ""}` : "Not placed"}</p>
+                    {item.error ? <p className="mt-0.5 text-text-2">{item.error.message}</p> : item.order?.reason ? <p className="mt-0.5 text-text-2">{item.order.reason}</p> : null}
+                    {status === "UNKNOWN" ? <p className="mt-0.5 text-text-2">Do not place it again. Use Status under the ticket to check with Dhan.</p> : null}
+                  </li>
+                );
+              })}
+            </ul>
           ) : null}
         </div>
       </Drawer>

@@ -116,3 +116,22 @@ describe("worker placement", () => {
     expect(JSON.stringify(result.json)).not.toContain("eyJ");
   });
 });
+
+describe("per-holder source IP routing", () => {
+  it("sends each holder's order from that holder's mapped address", async () => {
+    const fetchImpl = vi.fn(async () => reply(200, { orderId: "9", orderStatus: "PENDING" }));
+    const cfg = loadConfig({ EXECUTION_SERVICE_SECRET: SECRET, CLIENT_ROUTES: "1114171746=172.31.40.31,1100012345=172.31.40.50", ORDERS_ENABLED: "true" }, fetchImpl as unknown as typeof fetch);
+    await placeOrder({ credentials: { clientId: "1100012345", accessToken: TOKEN }, order }, cfg);
+    await placeOrder({ credentials, order }, cfg);
+    const sources = fetchImpl.mock.calls.map((call) => (call as unknown as [string, RequestInit & { localAddress?: string }])[1].localAddress);
+    expect(sources).toEqual(["172.31.40.50", "172.31.40.31"]);
+    expect(validatePlace({ credentials: { clientId: "1100012345", accessToken: TOKEN }, order }, cfg)).toBeNull();
+  });
+
+  it("refuses to start with an address the server does not have or one shared by two holders", () => {
+    const env = { EXECUTION_SERVICE_SECRET: SECRET, ORDERS_ENABLED: "true" };
+    expect(() => loadConfig({ ...env, CLIENT_ROUTES: "1100012345=172.31.40.99" }, undefined, new Set(["172.31.40.31"]))).toThrow(/not configured on this server/);
+    expect(() => loadConfig({ ...env, CLIENT_ROUTES: "1100012345=172.31.40.31,1100099999=172.31.40.31" }, vi.fn() as unknown as typeof fetch)).toThrow(/unique IP/);
+    expect(() => loadConfig({ ...env, CLIENT_ROUTES: "bad" }, vi.fn() as unknown as typeof fetch)).toThrow(/must look like/);
+  });
+});

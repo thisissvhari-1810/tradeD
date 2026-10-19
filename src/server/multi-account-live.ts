@@ -6,6 +6,12 @@ import { brokerAccountView } from "@/server/dhan-account";
 import { getDhanClientId } from "@/server/settings";
 import { liveSwitchOn, staticIpReady } from "@/lib/security/flags";
 import { ownsServerAccount, tradesServerAccount } from "@/server/live-gate";
+import type { BrokerAccount } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { BrokerError, createDhanClient } from "@/lib/dhan/client";
+import { readFunds, readHoldings, readOrders, readPositions } from "@/lib/dhan/funds";
+import { encryptionConfigured, fingerprint } from "@/lib/security/crypto";
+import { loadAccountCredentials, RELATIONSHIP_LABEL } from "@/server/broker-accounts";
 
 /**
  * Live account view. The broker connection TradeD has is the single server-configured account, shown
@@ -13,16 +19,24 @@ import { ownsServerAccount, tradesServerAccount } from "@/server/live-gate";
  * Tokens and full client IDs never leave the server. Orders go through server/live-orders, not here.
  */
 
-/** Why slots 2 to 8 cannot be connected yet. */
+/** What each family member needs before their slot can trade. */
 export const LIVE_MISSING = [
-  "Each additional holder must authorize their own Dhan account through Dhan's consent login. That flow needs Dhan partner access or each holder's own API key, which is not set up.",
-  "Each holder needs their own static IP registered with Dhan; the execution server's IP is registered for the primary holder only.",
-  "Accounts must belong to you or your family (self, spouse, dependent children, dependent parents).",
+  "The account belongs to you or your family: spouse, dependent child or dependent parent.",
+  "The holder creates their own API key in Dhan (web.dhan.co > My Profile > Access DhanHQ APIs) with TradeD's redirect URL, and you save the client id, API key and secret here.",
+  "The holder has their own static IP registered as primary in their Dhan account. Dhan requires a unique IP per person; it is an extra Elastic IP on the execution server.",
+  "The holder signs in through Dhan once a day (Dhan tokens last 24 hours). TradeD never sees their password or OTP.",
 ];
+
+function appOrigin(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.APP_URL?.trim() || (env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${env.VERCEL_PROJECT_PRODUCTION_URL}` : "https://traded-one.vercel.app");
+  return raw.replace(/\/+$/, "");
+}
 
 function emptySlot(slot: number, message: string): LiveAccount {
   return {
     id: `live-${slot}`,
+    target: null,
+    family: null,
     slot,
     nickname: `Live slot ${slot}`,
     maskedId: null,
@@ -60,6 +74,7 @@ export async function serverAccount(now = new Date(), gate: LiveGate = liveGate(
   const connection: ConnectionState = failures === 4 ? "ERROR" : failures > 0 ? "DATA_UNAVAILABLE" : "CONNECTED";
   return {
     ...base,
+    target: "server",
     nickname: "Server connection",
     maskedId,
     connection,
@@ -80,7 +95,83 @@ export async function serverAccount(now = new Date(), gate: LiveGate = liveGate(
   };
 }
 
-export async function liveAccountsView(user: SessionUser, now = new Date()): Promise<LiveView> {
+type Reads = { funds: unknown; positions: unknown; holdings: unknown; orders: unknown; authFailed: boolean };
+
+async function readAll(credentials: { clientId: string; accessToken: string }): Promise<Reads> {
+  const client = createDhanClient(credentials);
+  let authFailed = false;
+  const read = async (fn: (c: typeof client) => Promise<unknown>) => {
+    try {
+      return await fn(client);
+    } catch (error) {
+      if (error instanceof BrokerError && error.failure === "AUTH_EXPIRED") authFailed = true;
+      return { error: error instanceof Error ? error.message : "Account request failed." };
+    }
+  };
+  const [funds, positions, holdings, orders] = await Promise.all([read(readFunds), read(readPositions), read(readHoldings), read(readOrders)]);
+  return { funds, positions, holdings, orders, authFailed };
+}
+
+/** One family account: broker data from that holder's own token, never from anyone else's. */
+async function familyAccount(row: BrokerAccount, now: Date, canTrade: { globalReady: boolean; userReady: boolean }, env: NodeJS.ProcessEnv): Promise<LiveAccount> {
+  const info = {
+    brokerAccountId: row.id,
+    relationship: row.relationship,
+    relationshipLabel: RELATIONSHIP_LABEL[row.relationship],
+    configured: Boolean(row.maskedClientId),
+    staticIp: row.staticIp || null,
+    ipConfirmed: Boolean(row.staticIp && row.ipConfirmedAt),
+    callbackUrl: `${appOrigin(env)}/api/broker-accounts/callback/${row.id}`,
+  };
+  const base: LiveAccount = { ...emptySlot(row.slot, ""), id: row.id, target: row.id, family: info, nickname: row.nickname, maskedId: row.maskedClientId || null, tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null };
+  if (!info.configured) return { ...base, tradingReason: "Not set up.", message: "Add this holder's Dhan client id, API key and static IP." };
+  const credentials = await loadAccountCredentials(row.id).catch(() => null);
+  if (!credentials) return { ...base, connection: "AUTH_REQUIRED", tradingReason: "Not signed in through Dhan.", message: `${row.nickname} needs to sign in through Dhan.` };
+  if (row.tokenExpiresAt && row.tokenExpiresAt.getTime() <= now.getTime()) return { ...base, connection: "EXPIRED", authorized: false, tradingReason: "Authorization expired.", message: `${row.nickname}'s Dhan sign-in expired. Sign in through Dhan again.` };
+  const reads = await readAll(credentials);
+  if (reads.authFailed) return { ...base, connection: "EXPIRED", tradingReason: "Authorization expired.", message: "Dhan rejected this holder's token. Sign in through Dhan again." };
+  const funds = parseFunds(reads.funds);
+  const { positions, error: positionsError } = parsePositions(reads.positions);
+  const { holdings, error: holdingsError } = parseHoldings(reads.holdings);
+  const { orders, error: ordersError } = parseOrders(reads.orders);
+  const failures = [funds?.error, positionsError, holdingsError, ordersError].filter(Boolean).length;
+  const connection: ConnectionState = failures === 4 ? "ERROR" : failures > 0 ? "DATA_UNAVAILABLE" : "CONNECTED";
+  const unmet = [
+    !canTrade.globalReady ? "live orders are switched off on the server" : "",
+    !canTrade.userReady ? "your TradeD user may not trade" : "",
+    !info.ipConfirmed ? "this holder's static IP is not confirmed" : "",
+    failures === 4 ? "broker reads failed" : "",
+  ].filter(Boolean);
+  const ready = unmet.length === 0;
+  return {
+    ...base,
+    connection,
+    authorized: true,
+    lastSyncAt: failures === 4 ? null : now.toISOString(),
+    tradingReady: ready,
+    tradingReason: ready ? `Ready: orders leave from ${info.staticIp} after you confirm them.` : `Order placement locked: ${unmet.join("; ")}.`,
+    message: failures === 4 ? "Every account read failed." : "",
+    funds,
+    positions,
+    positionsError,
+    holdings,
+    holdingsError,
+    orders,
+    ordersError,
+    totals: liveTotals(positions, orders, holdings),
+  };
+}
+
+async function familyAccounts(user: SessionUser, now: Date, env: NodeJS.ProcessEnv): Promise<LiveAccount[]> {
+  if (!encryptionConfigured(env)) return [];
+  const serverClient = await getDhanClientId().catch(() => "");
+  const serverPrint = serverClient ? fingerprint(serverClient, "broker-client-id", env) : null;
+  const rows = await prisma.brokerAccount.findMany({ where: { ownerId: user.id }, orderBy: { slot: "asc" } });
+  const canTrade = { globalReady: liveSwitchOn(env) && staticIpReady(env), userReady: user.status === "ACTIVE" && user.tradingEnabled };
+  return Promise.all(rows.filter((row) => !serverPrint || row.clientFingerprint !== serverPrint).map((row) => familyAccount(row, now, canTrade, env)));
+}
+
+export async function liveAccountsView(user: SessionUser, now = new Date(), env: NodeJS.ProcessEnv = process.env): Promise<LiveView> {
   const owner = ownsServerAccount(user);
   const broker = owner ? await brokerAccountView() : null;
   const gate = liveGate({
@@ -89,28 +180,32 @@ export async function liveAccountsView(user: SessionUser, now = new Date()): Pro
     authorized: Boolean(broker && broker.clientConfigured && broker.token.source !== "missing" && !broker.token.expired),
     switchedOn: liveSwitchOn(),
   });
-  const first = owner && broker ? await serverAccount(now, gate, broker) : null;
-  const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => (index === 0 && first ? first : emptySlot(index + 1, "No broker account is connected to this slot.")));
-  const reads = first && (first.connection === "CONNECTED" || first.connection === "DATA_UNAVAILABLE");
+  const [first, family] = await Promise.all([owner && broker ? serverAccount(now, gate, broker) : Promise.resolve(null), familyAccounts(user, now, env)]);
+  const filled = [...(first ? [first] : []), ...family].slice(0, LIVE_SLOTS);
+  const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => {
+    const account = filled[index];
+    return account ? { ...account, slot: index + 1 } : emptySlot(index + 1, "No broker account is connected to this slot.");
+  });
+  const linked = slots.filter((item) => item.connection === "CONNECTED" || item.connection === "DATA_UNAVAILABLE");
   return {
     accounts: slots,
     capabilities: {
-      readFunds: Boolean(reads && first?.funds && !first.funds.error),
-      readPositions: Boolean(reads && first?.positions),
-      readOrders: Boolean(reads && first?.orders),
-      readHoldings: Boolean(reads && first?.holdings),
-      placeOrders: Boolean(reads && gate.enabled),
-      cancelOrders: Boolean(reads && gate.enabled),
-      connectAccounts: false,
+      readFunds: linked.some((item) => item.funds && !item.funds.error),
+      readPositions: linked.some((item) => item.positions),
+      readOrders: linked.some((item) => item.orders),
+      readHoldings: linked.some((item) => item.holdings),
+      placeOrders: slots.some((item) => item.tradingReady),
+      cancelOrders: slots.some((item) => item.tradingReady),
+      connectAccounts: encryptionConfigured(env),
     },
     missing: LIVE_MISSING,
     viewerOwnsConnection: owner,
     gate,
-    notice: !owner
-      ? "No broker account is connected to your TradeD user. The server connection belongs to its holder and is not shown to other users."
-      : gate.enabled
-        ? "Your Dhan account is connected. Orders are sent from the registered static IP only after you review and confirm them."
-        : "Read-only. Funds, positions and orders are read from your Dhan account. Order placement stays locked until every live-trading requirement is met.",
+    notice: !owner && family.length === 0
+      ? "No broker account is connected to your TradeD user yet."
+      : slots.some((item) => item.tradingReady)
+        ? "Orders go to Dhan only after you review and confirm them. Each holder's orders leave from that holder's own static IP."
+        : "Read-only. Funds, positions and orders are read from Dhan. Order placement stays locked until every live-trading requirement is met.",
     syncedAt: now.toISOString(),
   };
 }

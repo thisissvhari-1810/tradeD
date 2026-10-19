@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
 import { istStamp } from "@/components/api";
@@ -8,6 +8,7 @@ import { ACCOUNT_GRID } from "@/components/multi-account/accounts";
 import { expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
 import { ComplianceChecklist } from "@/components/multi-account/live-compliance";
 import { LiveOrderPanel, StateChip } from "@/components/multi-account/live-order-panel";
+import { FamilyAccountDrawer } from "@/components/multi-account/family-account-drawer";
 import { Badge, Button, cx, Drawer, EmptyState, Notice, Section, SegmentedControl, Skeleton, Tabs, TONE_TEXT, Tooltip, type Tone } from "@/components/ui";
 import type { LiveGate } from "@/lib/multi-account/compliance";
 import { combineLive, type LiveAccount, type LiveOrder, type LiveOrderStatus, type LiveView } from "@/lib/multi-account/live";
@@ -75,15 +76,24 @@ function latestOrder(account: LiveAccount): LiveOrder | null {
   return [...account.orders].sort((left, right) => (right.createdAt ?? "").localeCompare(left.createdAt ?? ""))[0] ?? null;
 }
 
-function AccountAction({ account, owner, onConnect }: { account: LiveAccount; owner: boolean; onConnect: () => void }) {
-  if (account.connection === "NOT_CONNECTED") return <Button size="sm" variant="secondary" icon={<Link2 className="h-3.5 w-3.5" />} onClick={onConnect}>Connect broker account</Button>;
+type Manage = (account: LiveAccount | null) => void;
+
+function AccountAction({ account, owner, onManage, canConnect }: { account: LiveAccount; owner: boolean; onManage: Manage; canConnect: boolean }) {
+  if (!account.target) {
+    return canConnect ? <Button size="sm" variant="secondary" icon={<Plus className="h-3.5 w-3.5" />} onClick={() => onManage(null)}>Add family account</Button> : null;
+  }
+  if (account.family) {
+    const needsSignIn = account.connection === "AUTH_REQUIRED" || account.connection === "EXPIRED" || account.connection === "ERROR";
+    const label = !account.family.configured ? "Finish setup" : needsSignIn ? "Sign in with Dhan" : "Manage";
+    return <Button size="sm" variant={needsSignIn || !account.family.configured ? "primary" : "secondary"} icon={needsSignIn ? <KeyRound className="h-3.5 w-3.5" /> : <Link2 className="h-3.5 w-3.5" />} onClick={() => onManage(account)}>{label}</Button>;
+  }
   if ((account.connection === "AUTH_REQUIRED" || account.connection === "EXPIRED" || account.connection === "ERROR") && owner) {
     return <Link href="/admin" className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-border bg-elevated px-2.5 text-data font-medium text-text hover:bg-hover"><KeyRound className="h-3.5 w-3.5" aria-hidden />Reconnect in Admin</Link>;
   }
   return null;
 }
 
-export function LiveAccountCard({ account, owner, syncing, onConnect }: { account: LiveAccount; owner: boolean; syncing: boolean; onConnect: () => void }) {
+export function LiveAccountCard({ account, owner, syncing, onManage, canConnect }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean }) {
   const live = connected(account);
   const last = latestOrder(account);
   return (
@@ -122,12 +132,12 @@ export function LiveAccountCard({ account, owner, syncing, onConnect }: { accoun
       ) : (
         <p className="text-data text-muted">{account.message}</p>
       )}
-      <AccountAction account={account} owner={owner} onConnect={onConnect} />
+      <AccountAction account={account} owner={owner} onManage={onManage} canConnect={canConnect} />
     </article>
   );
 }
 
-function LiveAccountTable({ accounts, owner, onConnect }: { accounts: LiveAccount[]; owner: boolean; onConnect: () => void }) {
+function LiveAccountTable({ accounts, owner, onManage, canConnect }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border-soft">
       <table className="ui-table dense w-full min-w-[900px] border-separate border-spacing-0 text-data" aria-label="Live accounts">
@@ -147,7 +157,7 @@ function LiveAccountTable({ accounts, owner, onConnect }: { accounts: LiveAccoun
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.totals.realizedPaise} tone broker /> : "—"}</td>
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.totals.unrealizedPaise} tone broker /> : "—"}</td>
               <td className="num border-b border-border-soft">{account.lastSyncAt ? istStamp(account.lastSyncAt) : "—"}</td>
-              <td className="border-b border-border-soft text-right"><AccountAction account={account} owner={owner} onConnect={onConnect} /></td>
+              <td className="border-b border-border-soft text-right"><AccountAction account={account} owner={owner} onManage={onManage} canConnect={canConnect} /></td>
             </tr>
           ))}
         </tbody>
@@ -310,24 +320,21 @@ function LiveHoldings({ accounts }: { accounts: LiveAccount[] }) {
   );
 }
 
-function ConnectDrawer({ open, onClose, view }: { open: boolean; onClose: () => void; view: LiveView }) {
-  return (
-    <Drawer open={open} onClose={onClose} modal label="Connect broker account" title="Connect broker account" width="w-[480px]" footer={<Button block variant="secondary" onClick={onClose}>Close</Button>}>
-      <div className="flex flex-col gap-3 text-dense">
-        <Notice tone="warning">Only your own Dhan account (slot 1) can be connected today. TradeD will never ask for a broker password, OTP or token in a form.</Notice>
-        <p className="text-text-2">Connecting more accounts still needs:</p>
-        <ul className="flex flex-col gap-2">
-          {view.missing.map((item) => <li key={item} className="flex gap-2 rounded-input border border-border-soft bg-sunken p-2.5 text-data text-text-2"><CircleX className="mt-0.5 h-3.5 w-3.5 shrink-0 text-loss" aria-hidden />{item}</li>)}
-        </ul>
-        {view.viewerOwnsConnection ? <p className="text-data text-muted">The existing server connection is managed in <Link href="/admin" className="text-primary underline-offset-2 hover:underline">Admin</Link>, where the market-data token can be replaced when it expires.</p> : null}
-      </div>
-    </Drawer>
-  );
-}
-
-export function LiveDesk({ view, error, syncing, layout, accountView, onAccountView, reloadToken, gate }: { view: LiveView | null; error: string; syncing: boolean; layout: Layout; accountView: "grid" | "table"; onAccountView: (next: "grid" | "table") => void; reloadToken: number; gate: LiveGate }) {
+export function LiveDesk({ view, error, syncing, layout, accountView, onAccountView, reloadToken, gate, onReload }: { view: LiveView | null; error: string; syncing: boolean; layout: Layout; accountView: "grid" | "table"; onAccountView: (next: "grid" | "table") => void; reloadToken: number; gate: LiveGate; onReload: () => void }) {
   const [tab, setTab] = useState<"orders" | "positions" | "holdings" | "rules">("orders");
-  const [connectOpen, setConnectOpen] = useState(false);
+  const [manage, setManage] = useState<{ open: boolean; account: LiveAccount | null; nonce: number }>({ open: false, account: null, nonce: 0 });
+  const [banner, setBanner] = useState<{ tone: "info" | "loss"; text: string } | null>(null);
+  useEffect(() => {
+    // Dhan's consent login redirects back here with the outcome in the query string.
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("connected");
+    const failed = params.get("connectError");
+    if (!connected && !failed) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    const timer = window.setTimeout(() => setBanner(failed ? { tone: "loss", text: failed } : { tone: "info", text: `${connected} signed in through Dhan${params.get("state") === "CONNECTED" ? " and is connected." : ". Checking the connection…"}` }), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const onManage: Manage = (account) => setManage((current) => ({ open: true, account, nonce: current.nonce + 1 }));
   const [sheetOpen, setSheetOpen] = useState(false);
   if (!view && !error) {
     return (
@@ -342,6 +349,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
   const panelNote = view.gate.enabled ? "Live: confirmed orders go to Dhan." : "Review only. Live placement is locked.";
   return (
     <>
+      {banner ? <Notice tone={banner.tone}>{banner.text}</Notice> : null}
       {error ? <Notice tone="warning">Showing the last sync from {istStamp(view.syncedAt)}. {error}</Notice> : null}
       <Notice tone="neutral">{view.notice}</Notice>
       <LiveSummary view={view} />
@@ -351,8 +359,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
             <SegmentedControl label="Account layout" size="sm" value={accountView} onChange={onAccountView} options={[{ id: "grid", label: <span className="inline-flex items-center gap-1"><LayoutGrid className="h-3.5 w-3.5" aria-hidden />Grid</span> }, { id: "table", label: <span className="inline-flex items-center gap-1"><Rows3 className="h-3.5 w-3.5" aria-hidden />Table</span> }]} />
           }>
             {accountView === "table"
-              ? <LiveAccountTable accounts={view.accounts} owner={view.viewerOwnsConnection} onConnect={() => setConnectOpen(true)} />
-              : <div className={ACCOUNT_GRID}>{view.accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onConnect={() => setConnectOpen(true)} />)}</div>}
+              ? <LiveAccountTable accounts={view.accounts} owner={view.viewerOwnsConnection} onManage={onManage} canConnect={view.capabilities.connectAccounts} />
+              : <div className={ACCOUNT_GRID}>{view.accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onManage={onManage} canConnect={view.capabilities.connectAccounts} />)}</div>}
           </Section>
           {layout === "medium" ? <div id="ma-live-order" className="scroll-mt-20"><Section title="Order entry" description={panelNote}>{panel}</Section></div> : null}
           <Section flush>
@@ -390,7 +398,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
           </aside>
         ) : null}
       </div>
-      <ConnectDrawer open={connectOpen} onClose={() => setConnectOpen(false)} view={view} />
+      <FamilyAccountDrawer key={manage.nonce} open={manage.open} account={manage.account} requirements={view.missing} onClose={() => setManage((current) => ({ ...current, open: false }))} onChanged={onReload} />
       {layout !== "wide" ? (
         <button type="button" onClick={() => (layout === "narrow" ? setSheetOpen(true) : document.getElementById("ma-live-order")?.scrollIntoView({ behavior: "smooth", block: "start" }))} className="fixed bottom-[calc(var(--tabbar)+env(safe-area-inset-bottom)+16px)] right-4 z-30 inline-flex h-11 items-center gap-2 rounded-pill bg-primary px-5 text-dense font-semibold text-on-primary shadow-e2 transition hover:bg-primary-hover lg:bottom-6">
           <Plus className="h-4 w-4" aria-hidden />New order

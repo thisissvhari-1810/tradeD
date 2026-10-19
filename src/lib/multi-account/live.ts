@@ -64,8 +64,23 @@ export type LiveTotals = {
   holdingsCount: number | null;
 };
 
+/** Family account details shown to its owner. Secrets never appear here. */
+export type FamilyInfo = {
+  brokerAccountId: string;
+  relationship: "SELF" | "SPOUSE" | "DEPENDENT_CHILD" | "DEPENDENT_PARENT";
+  relationshipLabel: string;
+  configured: boolean;
+  staticIp: string | null;
+  ipConfirmed: boolean;
+  /** Redirect URL to enter when the holder creates their Dhan API key. */
+  callbackUrl: string;
+};
+
 export type LiveAccount = {
   id: string;
+  /** What to send as accountId when ordering: "server", a broker account id, or null for an empty slot. */
+  target: string | null;
+  family: FamilyInfo | null;
   slot: number;
   nickname: string;
   maskedId: string | null;
@@ -86,7 +101,7 @@ export type LiveAccount = {
   totals: LiveTotals;
 };
 
-export type LiveCapabilities = { readFunds: boolean; readPositions: boolean; readOrders: boolean; readHoldings: boolean; placeOrders: boolean; cancelOrders: boolean; connectAccounts: false };
+export type LiveCapabilities = { readFunds: boolean; readPositions: boolean; readOrders: boolean; readHoldings: boolean; placeOrders: boolean; cancelOrders: boolean; connectAccounts: boolean };
 
 export type LiveView = {
   accounts: LiveAccount[];

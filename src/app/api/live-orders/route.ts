@@ -4,7 +4,7 @@ import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
 import { mutation, query } from "@/server/http";
 import { gateFor } from "@/server/live-gate";
-import { cancelLiveOrder, listLiveOrders, placeLiveOrder, previewLiveOrder, reconcileLiveOrder } from "@/server/live-orders";
+import { cancelLiveOrder, listLiveOrders, placeLiveOrder, placeLiveOrders, previewLiveOrder, reconcileLiveOrder } from "@/server/live-orders";
 
 export const maxDuration = 30;
 
@@ -21,11 +21,19 @@ const intent = z.object({
   pricePaise: paise.nullable(),
   referencePaise: paise.nullable(),
 }).strict();
+const target = z.union([z.literal("server"), z.string().regex(/^c[a-z0-9]{20,32}$/, "Unknown account.")]);
 const orderId = z.string().regex(/^c[a-z0-9]{20,32}$/, "Unknown order.");
 
 const body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("preview"), intent }).strict(),
   z.object({ action: z.literal("place"), key: z.string().uuid("Missing request key."), intent, confirmed: z.literal(true, { message: "Confirm the order first." }) }).strict(),
+  z.object({
+    action: z.literal("placeMany"),
+    key: z.string().uuid("Missing request key."),
+    intent: intent.omit({ quantity: true }),
+    legs: z.array(z.object({ accountId: target, quantity: z.number().int().positive().max(100_000) }).strict()).min(1, "Select at least one account.").max(8),
+    confirmed: z.literal(true, { message: "Confirm the order first." }),
+  }).strict(),
   z.object({ action: z.literal("reconcile"), orderId }).strict(),
   z.object({ action: z.literal("cancel"), orderId, confirmed: z.literal(true, { message: "Confirm the cancellation first." }) }).strict(),
 ]);
@@ -48,6 +56,9 @@ export const POST = mutation(async (request) => {
       // Dhan caps orders at 10 per second; a person confirming orders by hand needs far fewer.
       rateLimit(`live:place:${user.id}`, 10, 60_000);
       return Response.json(await placeLiveOrder(user, { key: input.key, intent: input.intent }, ctx));
+    case "placeMany":
+      rateLimit(`live:place:${user.id}`, 10, 60_000);
+      return Response.json({ results: await placeLiveOrders(user, { key: input.key, intent: input.intent, legs: input.legs }, ctx) });
     case "reconcile":
       rateLimit(`live:reconcile:${user.id}`, 60, 60_000);
       return Response.json(await reconcileLiveOrder(user, input.orderId, ctx));
