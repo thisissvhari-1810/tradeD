@@ -39,9 +39,14 @@ const db = vi.hoisted(() => {
     brokerAccount: {
       findUnique: async ({ where }: { where: { clientFingerprint?: string; id?: string } }) => state.accounts.find((item) => (where.id ? item.id === where.id : item.clientFingerprint === where.clientFingerprint)) ?? null,
       findMany: async ({ where }: { where: { ownerId: string } }) => state.accounts.filter((item) => item.ownerId === where.ownerId),
+      update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const row = state.accounts.find((item) => item.id === where.id)!;
+        Object.assign(row, data);
+        return { ...row };
+      },
       create: async ({ data }: { data: Record<string, unknown> }) => {
         if (state.accounts.some((item) => item.clientFingerprint === data.clientFingerprint)) throw unique();
-        const row: Row = { id: id(), ...data };
+        const row: Row = { id: id(), enabled: true, ...data };
         state.accounts.push(row);
         return { ...row };
       },
@@ -223,5 +228,24 @@ describe("order ownership and cancellation", () => {
     const partial = router({ lookup: () => reply(200, { orderId: "43", orderStatus: "PART_TRADED", filledQty: 75, remainingQuantity: 75, averageTradedPrice: 99 }) });
     const result = await service.reconcileLiveOrder(owner, placed.order.id, ctx, { fetch: partial, env });
     expect(result.order).toMatchObject({ status: "PARTIAL", filledQuantity: 75, remainingQuantity: 75, final: false });
+  });
+});
+
+describe("account switch", () => {
+  it("refuses a switched-off account before anything is sent, and allows it again when switched on", async () => {
+    const fetch = router({ worker: () => reply(200, { outcome: "ACCEPTED", orderId: "77", orderStatus: "PENDING" }) });
+    await service.setAccountEnabled(owner, "server", false, ctx, env);
+    await expect(service.placeLiveOrder(owner, { key: randomUUID(), intent }, ctx, { fetch, env })).rejects.toMatchObject({ code: "LIVE_LOCKED", details: { unmet: ["Account switched on for trading in TradeD"] } });
+    expect(workerCalls(fetch)).toHaveLength(0);
+    expect(db.state.audit.some((row) => row.action === "broker.account.disable")).toBe(true);
+    await service.setAccountEnabled(owner, "server", true, ctx, env);
+    await expect(service.placeLiveOrder(owner, { key: randomUUID(), intent }, ctx, { fetch, env })).resolves.toMatchObject({ order: { status: "PENDING" } });
+  });
+
+  it("does not let another user switch an account", async () => {
+    await service.setAccountEnabled(owner, "server", true, ctx, env);
+    const id = String(db.state.accounts[0]!.id);
+    await expect(service.setAccountEnabled(stranger, id, false, ctx, env)).rejects.toMatchObject({ status: 404 });
+    await expect(service.setAccountEnabled(stranger, "server", false, ctx, env)).rejects.toMatchObject({ status: 404 });
   });
 });

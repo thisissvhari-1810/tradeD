@@ -81,6 +81,8 @@ export type LiveAccount = {
   /** What to send as accountId when ordering: "server", a broker account id, or null for an empty slot. */
   target: string | null;
   family: FamilyInfo | null;
+  /** Owner's switch: included in orders. */
+  enabled: boolean;
   slot: number;
   nickname: string;
   maskedId: string | null;
@@ -244,6 +246,8 @@ function sumOrNull(values: Array<number | null>): number | null {
 export function parseHoldings(raw: unknown): { holdings: LiveHolding[] | null; error: string | null } {
   if (raw == null) return { holdings: null, error: null };
   const error = errorOf(raw);
+  // Dhan answers an account with no holdings with an error rather than an empty list.
+  if (error && /no\s+holdings?/i.test(error)) return { holdings: [], error: null };
   if (error) return { holdings: null, error };
   const list = listOf(raw);
   if (!list) return { holdings: null, error: "The broker returned holdings in an unexpected format." };

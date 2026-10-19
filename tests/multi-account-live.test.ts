@@ -14,6 +14,7 @@ function slot(partial: Partial<LiveAccount> & Pick<LiveAccount, "id" | "connecti
   return {
     target: null,
     family: null,
+    enabled: true,
     slot: 1,
     nickname: partial.id,
     maskedId: null,
@@ -222,5 +223,12 @@ describe("live integration boundaries", () => {
   it("does not mix the demo ledger into live reads", () => {
     const source = readFileSync("src/server/multi-account-live.ts", "utf8");
     expect(source).not.toMatch(/multi\.demo|virtualAccount|submitDemoOrder|defaultDoc/);
+  });
+});
+
+describe("empty broker books", () => {
+  it("treats Dhan's 'No holdings available' as zero holdings, not a failed read", () => {
+    expect(parseHoldings({ error: "No holdings available" })).toEqual({ holdings: [], error: null });
+    expect(parseHoldings({ error: "Dhan returned 500." }).error).toBe("Dhan returned 500.");
   });
 });

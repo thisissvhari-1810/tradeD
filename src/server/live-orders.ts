@@ -1,7 +1,7 @@
 import type { BrokerAccount, BrokerOrder, BrokerOrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
-import { recordAudit } from "@/lib/audit/trail";
+import { newCorrelationId as newAuditId, recordAudit } from "@/lib/audit/trail";
 import { BrokerError, createDhanClient, type DhanCredentials } from "@/lib/dhan/client";
 import { readFunds } from "@/lib/dhan/funds";
 import { estimatePaise, FINAL_STATUSES, newCorrelationId, readBrokerOrder, validateIntent, workerOrder, type LiveOrderIntent } from "@/lib/dhan/orders";
@@ -113,6 +113,16 @@ function locked(unmet: string[]): never {
   throw new AppError("Live orders are locked for this account.", 403, "LIVE_LOCKED", { details: { unmet } });
 }
 
+const SWITCHED_OFF = "Account switched on for trading in TradeD";
+
+/** The owner's per-account switch. Off means the account is left out of orders and the server refuses them. */
+export async function setAccountEnabled(user: SessionUser, target: string, enabled: boolean, ctx: Ctx, env: NodeJS.ProcessEnv = process.env) {
+  const account = target === "server" ? await ensureServerAccount(user, env) : assertOwnsAccount(user, await prisma.brokerAccount.findUnique({ where: { id: target } }));
+  await prisma.brokerAccount.update({ where: { id: account.id }, data: { enabled } });
+  await recordAudit({ userId: user.id, accountId: account.id, action: enabled ? "broker.account.enable" : "broker.account.disable", correlationId: newAuditId(), outcome: "SUCCESS", ip: ctx.ip });
+  return { target, enabled };
+}
+
 export type Target = { account: BrokerAccount; credentials: DhanCredentials; server: boolean };
 
 function isServerAccount(account: Pick<BrokerAccount, "clientFingerprint">, serverClientId: string, env: NodeJS.ProcessEnv) {
@@ -128,11 +138,14 @@ export async function resolveTarget(user: SessionUser, accountId: string, env: N
   if (accountId === "server") {
     const gate = await gateFor(user, env);
     if (!gate.enabled) locked(gate.requirements.filter((item) => !item.met).map((item) => item.label));
-    return { account: await ensureServerAccount(user, env), credentials: await serverCredentials(), server: true };
+    const account = await ensureServerAccount(user, env);
+    if (account.enabled === false) locked([SWITCHED_OFF]);
+    return { account, credentials: await serverCredentials(), server: true };
   }
   const account = assertOwnsAccount(user, await prisma.brokerAccount.findUnique({ where: { id: accountId } }));
   if (isServerAccount(account, await getDhanClientId(), env)) return resolveTarget(user, "server", env);
   const unmet: string[] = [];
+  if (account.enabled === false) unmet.push(SWITCHED_OFF);
   if (!liveSwitchOn(env)) unmet.push("Live orders switched on by the operator");
   if (!staticIpReady(env)) unmet.push("Execution server configured");
   if (user.status !== "ACTIVE" || !user.tradingEnabled) unmet.push("Your TradeD user may trade");

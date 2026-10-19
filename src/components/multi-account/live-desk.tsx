@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
-import { istStamp } from "@/components/api";
+import { api, istStamp } from "@/components/api";
 import { ACCOUNT_GRID } from "@/components/multi-account/accounts";
 import { expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
 import { ComplianceChecklist } from "@/components/multi-account/live-compliance";
@@ -77,6 +77,17 @@ function latestOrder(account: LiveAccount): LiveOrder | null {
 }
 
 type Manage = (account: LiveAccount | null) => void;
+type Toggle = (account: LiveAccount, enabled: boolean) => void;
+
+/** The owner's switch for one account: included in orders or not. Saved on the server. */
+function EnableSwitch({ account, onToggle }: { account: LiveAccount; onToggle: Toggle }) {
+  if (!account.target) return <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" disabled checked={false} readOnly aria-label={`${account.nickname}: no account linked`} />;
+  return (
+    <Tooltip content={account.enabled ? "Included in orders. Untick to switch this account off." : "Switched off: left out of orders. Tick to include it."}>
+      <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--color-primary,currentColor)]" checked={account.enabled} onChange={(event) => onToggle(account, event.target.checked)} aria-label={`Include ${account.nickname} in orders`} />
+    </Tooltip>
+  );
+}
 
 function AccountAction({ account, owner, onManage, canConnect }: { account: LiveAccount; owner: boolean; onManage: Manage; canConnect: boolean }) {
   if (!account.target) {
@@ -93,15 +104,13 @@ function AccountAction({ account, owner, onManage, canConnect }: { account: Live
   return null;
 }
 
-export function LiveAccountCard({ account, owner, syncing, onManage, canConnect }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean }) {
+export function LiveAccountCard({ account, owner, syncing, onManage, canConnect, onToggle }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle }) {
   const live = connected(account);
   const last = latestOrder(account);
   return (
     <article aria-label={account.nickname} className={cx("flex min-w-0 flex-col gap-2 rounded-md border p-2.5", live ? "border-border-soft bg-panel" : "border-dashed border-border bg-sunken")}>
       <div className="flex items-start gap-2">
-        <Tooltip content={account.tradingReason}>
-          <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" disabled checked={false} aria-label={`Select ${account.nickname}: not eligible. ${account.tradingReason}`} readOnly />
-        </Tooltip>
+        <EnableSwitch account={account} onToggle={onToggle} />
         <div className="min-w-0 flex-1">
           <p className={cx("truncate text-dense font-semibold", live ? "text-text" : "text-text-2")}>{account.nickname}</p>
           <p className="num text-micro text-muted">{account.maskedId ?? "No account linked"}</p>
@@ -109,6 +118,7 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect 
       </div>
       <div className="flex flex-wrap gap-1">
         <StateChip state={account.connection} syncing={syncing} />
+        {account.target && !account.enabled ? <Badge tone="neutral"><Minus className="h-3 w-3" aria-hidden />Switched off</Badge> : null}
         {account.authorized ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Authorized</Badge> : null}
         {account.connection !== "NOT_CONNECTED" ? <Tooltip content={account.tradingReason}><span tabIndex={0}>{account.tradingReady ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Trading ready</Badge> : <Badge tone="warning"><Lock className="h-3 w-3" aria-hidden />Trading restricted</Badge>}</span></Tooltip> : null}
       </div>
@@ -137,7 +147,7 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect 
   );
 }
 
-function LiveAccountTable({ accounts, owner, onManage, canConnect }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean }) {
+function LiveAccountTable({ accounts, owner, onManage, canConnect, onToggle }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border-soft">
       <table className="ui-table dense w-full min-w-[900px] border-separate border-spacing-0 text-data" aria-label="Live accounts">
@@ -149,7 +159,7 @@ function LiveAccountTable({ accounts, owner, onManage, canConnect }: { accounts:
         <tbody>
           {accounts.map((account) => (
             <tr key={account.id}>
-              <td className="border-b border-border-soft"><span className="block font-semibold text-text">{account.nickname}</span><span className="num text-micro text-muted">{account.maskedId ?? "No account linked"}</span></td>
+              <td className="border-b border-border-soft"><span className="flex items-center gap-2"><EnableSwitch account={account} onToggle={onToggle} /><span className="block font-semibold text-text">{account.nickname}</span></span><span className="num text-micro text-muted">{account.maskedId ?? "No account linked"}</span></td>
               <td className="border-b border-border-soft"><StateChip state={account.connection} /></td>
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.funds?.availablePaise} broker /> : "—"}</td>
               <td className="border-b border-border-soft text-right">{connected(account) ? <Money value={account.funds?.usedMarginPaise} broker /> : "—"}</td>
@@ -335,6 +345,18 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
     return () => window.clearTimeout(timer);
   }, []);
   const onManage: Manage = (account) => setManage((current) => ({ open: true, account, nonce: current.nonce + 1 }));
+  const [switches, setSwitches] = useState<Record<string, boolean>>({});
+  const onToggle: Toggle = (account, enabled) => {
+    const target = account.target;
+    if (!target) return;
+    setSwitches((current) => ({ ...current, [target]: enabled }));
+    api("/api/broker-accounts/select", { target, enabled })
+      .then(() => onReload())
+      .catch((caught: unknown) => {
+        setSwitches((current) => ({ ...current, [target]: !enabled }));
+        setBanner({ tone: "loss", text: caught instanceof Error ? caught.message : "The switch was not saved." });
+      });
+  };
   const [sheetOpen, setSheetOpen] = useState(false);
   if (!view && !error) {
     return (
@@ -345,7 +367,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
     );
   }
   if (!view) return <Section><EmptyState icon={<Unplug />} title="Live accounts could not be loaded" body={error} /></Section>;
-  const panel = <LiveOrderPanel accounts={view.accounts} reloadToken={reloadToken} gate={view.gate} />;
+  const accounts = view.accounts.map((account) => (account.target && account.target in switches ? { ...account, enabled: switches[account.target]! } : account));
+  const panel = <LiveOrderPanel accounts={accounts} reloadToken={reloadToken} gate={view.gate} />;
   const panelNote = view.gate.enabled ? "Live: confirmed orders go to Dhan." : "Review only. Live placement is locked.";
   return (
     <>
@@ -359,8 +382,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
             <SegmentedControl label="Account layout" size="sm" value={accountView} onChange={onAccountView} options={[{ id: "grid", label: <span className="inline-flex items-center gap-1"><LayoutGrid className="h-3.5 w-3.5" aria-hidden />Grid</span> }, { id: "table", label: <span className="inline-flex items-center gap-1"><Rows3 className="h-3.5 w-3.5" aria-hidden />Table</span> }]} />
           }>
             {accountView === "table"
-              ? <LiveAccountTable accounts={view.accounts} owner={view.viewerOwnsConnection} onManage={onManage} canConnect={view.capabilities.connectAccounts} />
-              : <div className={ACCOUNT_GRID}>{view.accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onManage={onManage} canConnect={view.capabilities.connectAccounts} />)}</div>}
+              ? <LiveAccountTable accounts={accounts} owner={view.viewerOwnsConnection} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} />
+              : <div className={ACCOUNT_GRID}>{accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onManage={onManage} canConnect={view.capabilities.connectAccounts} onToggle={onToggle} />)}</div>}
           </Section>
           {layout === "medium" ? <div id="ma-live-order" className="scroll-mt-20"><Section title="Order entry" description={panelNote}>{panel}</Section></div> : null}
           <Section flush>

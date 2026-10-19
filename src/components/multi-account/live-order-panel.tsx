@@ -124,7 +124,7 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
   const row = chain?.strikes.find((item) => item.strike === strike) ?? null;
   const leg = chain?.available && chain.expiry === expiry ? (right === "CE" ? row?.ce : row?.pe) ?? null : null;
   const ltpPaise = leg?.ltp != null && leg.ltp > 0 ? Math.round(leg.ltp * 100) : null;
-  const eligible = accounts.filter((account) => account.tradingReady && account.target);
+  const eligible = accounts.filter((account) => account.tradingReady && account.target && account.enabled);
   const legs = eligible.filter((account) => picked[account.target!] !== false).map((account) => ({ account, lots: accountLots[account.target!] ?? lots }));
   const quantity = lotSize ? lots * lotSize : null;
   const totalQuantity = lotSize ? legs.reduce((sum, item) => sum + item.lots * lotSize, 0) : null;

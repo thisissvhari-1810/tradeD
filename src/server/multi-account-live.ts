@@ -37,6 +37,7 @@ function emptySlot(slot: number, message: string): LiveAccount {
     id: `live-${slot}`,
     target: null,
     family: null,
+    enabled: false,
     slot,
     nickname: `Live slot ${slot}`,
     maskedId: null,
@@ -123,7 +124,7 @@ async function familyAccount(row: BrokerAccount, now: Date, canTrade: { globalRe
     ipConfirmed: Boolean(row.staticIp && row.ipConfirmedAt),
     callbackUrl: `${appOrigin(env)}/api/broker-accounts/callback/${row.id}`,
   };
-  const base: LiveAccount = { ...emptySlot(row.slot, ""), id: row.id, target: row.id, family: info, nickname: row.nickname, maskedId: row.maskedClientId || null, tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null };
+  const base: LiveAccount = { ...emptySlot(row.slot, ""), id: row.id, target: row.id, family: info, enabled: row.enabled, nickname: row.nickname, maskedId: row.maskedClientId || null, tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null };
   if (!info.configured) return { ...base, tradingReason: "Not set up.", message: "Add this holder's Dhan client id, API key and static IP." };
   const credentials = await loadAccountCredentials(row.id).catch(() => null);
   if (!credentials) return { ...base, connection: "AUTH_REQUIRED", tradingReason: "Not signed in through Dhan.", message: `${row.nickname} needs to sign in through Dhan.` };
@@ -162,13 +163,18 @@ async function familyAccount(row: BrokerAccount, now: Date, canTrade: { globalRe
   };
 }
 
-async function familyAccounts(user: SessionUser, now: Date, env: NodeJS.ProcessEnv): Promise<LiveAccount[]> {
-  if (!encryptionConfigured(env)) return [];
+/** The viewer's broker account rows, split into the server account's row (if any) and family accounts. */
+async function ownedRows(user: SessionUser, env: NodeJS.ProcessEnv) {
+  if (!encryptionConfigured(env)) return { serverRow: null, familyRows: [] as BrokerAccount[] };
   const serverClient = await getDhanClientId().catch(() => "");
   const serverPrint = serverClient ? fingerprint(serverClient, "broker-client-id", env) : null;
   const rows = await prisma.brokerAccount.findMany({ where: { ownerId: user.id }, orderBy: { slot: "asc" } });
+  return { serverRow: rows.find((row) => serverPrint && row.clientFingerprint === serverPrint) ?? null, familyRows: rows.filter((row) => !serverPrint || row.clientFingerprint !== serverPrint) };
+}
+
+async function familyAccounts(user: SessionUser, rows: BrokerAccount[], now: Date, env: NodeJS.ProcessEnv): Promise<LiveAccount[]> {
   const canTrade = { globalReady: liveSwitchOn(env) && staticIpReady(env), userReady: user.status === "ACTIVE" && user.tradingEnabled };
-  return Promise.all(rows.filter((row) => !serverPrint || row.clientFingerprint !== serverPrint).map((row) => familyAccount(row, now, canTrade, env)));
+  return Promise.all(rows.map((row) => familyAccount(row, now, canTrade, env)));
 }
 
 export async function liveAccountsView(user: SessionUser, now = new Date(), env: NodeJS.ProcessEnv = process.env): Promise<LiveView> {
@@ -180,7 +186,10 @@ export async function liveAccountsView(user: SessionUser, now = new Date(), env:
     authorized: Boolean(broker && broker.clientConfigured && broker.token.source !== "missing" && !broker.token.expired),
     switchedOn: liveSwitchOn(),
   });
-  const [first, family] = await Promise.all([owner && broker ? serverAccount(now, gate, broker) : Promise.resolve(null), familyAccounts(user, now, env)]);
+  const { serverRow, familyRows } = await ownedRows(user, env);
+  const [server, family] = await Promise.all([owner && broker ? serverAccount(now, gate, broker) : Promise.resolve(null), familyAccounts(user, familyRows, now, env)]);
+  // The server account has no row until it is first used; it counts as switched on until then.
+  const first = server ? { ...server, enabled: serverRow?.enabled ?? true } : null;
   const filled = [...(first ? [first] : []), ...family].slice(0, LIVE_SLOTS);
   const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => {
     const account = filled[index];
