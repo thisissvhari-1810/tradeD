@@ -45,7 +45,7 @@ describe("worker request signing", () => {
   });
 
   it("refuses to start with a weak secret or no allowed client", () => {
-    expect(() => loadConfig({ EXECUTION_SERVICE_SECRET: "short", ALLOWED_CLIENT_IDS: "1114171746" })).toThrow(/at least 32/);
+    expect(() => loadConfig({ EXECUTION_SERVICE_SECRET: "short", ALLOWED_CLIENT_IDS: "1114171746" })).toThrow(/32-128 letters/);
     expect(() => loadConfig({ EXECUTION_SERVICE_SECRET: SECRET, ALLOWED_CLIENT_IDS: "" })).toThrow(/ALLOWED_CLIENT_IDS/);
   });
 

@@ -166,8 +166,8 @@ export async function cancelOrder(input, config) {
 }
 
 export function loadConfig(env, fetchImpl = fetch) {
-  const secret = env.EXECUTION_SERVICE_SECRET ?? "";
-  if (secret.length < 32) throw new Error("EXECUTION_SERVICE_SECRET must be at least 32 characters.");
+  const secret = (env.EXECUTION_SERVICE_SECRET ?? "").trim();
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(secret)) throw new Error(`EXECUTION_SERVICE_SECRET must be 32-128 letters, digits, - or _ (found ${secret.length} characters).`);
   const allowed = (env.ALLOWED_CLIENT_IDS ?? "").split(",").map((item) => item.trim()).filter((item) => /^\d{4,20}$/.test(item));
   if (allowed.length === 0) throw new Error("ALLOWED_CLIENT_IDS must list at least one Dhan client id.");
   return {

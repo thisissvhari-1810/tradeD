@@ -27,7 +27,12 @@ if [ ! -f "$ENV_FILE" ]; then
   # Read from the terminal even when this script is piped into bash.
   read -r -s -p "Paste EXECUTION_SERVICE_SECRET (input hidden): " SECRET < /dev/tty; echo
   read -r -p "Dhan client id(s) allowed, comma separated: " CLIENTS < /dev/tty
-  if [ "${#SECRET}" -lt 32 ]; then echo "Secret must be at least 32 characters." >&2; exit 1; fi
+  SECRET="${SECRET//$'\r'/}"
+  if ! [[ "$SECRET" =~ ^[A-Za-z0-9_-]{32,128}$ ]]; then
+    echo "That is not the secret: paste only the value between the quotes (letters, digits, - and _, at least 32 characters)." >&2
+    exit 1
+  fi
+  if ! [[ "$CLIENTS" =~ ^[0-9]{4,20}(,[0-9]{4,20})*$ ]]; then echo "Client ids must be digits, comma separated." >&2; exit 1; fi
   umask 077
   cat > "$ENV_FILE" <<EOF
 EXECUTION_SERVICE_SECRET=$SECRET
