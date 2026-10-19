@@ -2,38 +2,19 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { CircleAlert, CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Plus, RefreshCw, Rows3, ShieldAlert, TrendingDown, TrendingUp, Unplug } from "lucide-react";
+import { CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
 import { istStamp } from "@/components/api";
 import { ACCOUNT_GRID } from "@/components/multi-account/accounts";
-import { contractLabel, expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
+import { expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
 import { ComplianceChecklist } from "@/components/multi-account/live-compliance";
-import { useChain } from "@/components/multi-account/use-chain";
+import { LiveOrderPanel, StateChip } from "@/components/multi-account/live-order-panel";
 import { Badge, Button, cx, Drawer, EmptyState, Notice, Section, SegmentedControl, Skeleton, Tabs, TONE_TEXT, Tooltip, type Tone } from "@/components/ui";
-import { FEATURED_INDICES } from "@/lib/market/indices";
 import type { LiveGate } from "@/lib/multi-account/compliance";
-import { combineLive, type ConnectionState, type LiveAccount, type LiveOrder, type LiveOrderStatus, type LiveView } from "@/lib/multi-account/live";
+import { combineLive, type LiveAccount, type LiveOrder, type LiveOrderStatus, type LiveView } from "@/lib/multi-account/live";
 import type { Layout } from "@/components/multi-account/use-layout";
-
-const CONNECTION: Record<ConnectionState, { label: string; tone: Tone; icon: typeof Link2 }> = {
-  NOT_CONNECTED: { label: "Not connected", tone: "neutral", icon: Link2Off },
-  AUTH_REQUIRED: { label: "Authentication required", tone: "warning", icon: KeyRound },
-  EXPIRED: { label: "Authorization expired", tone: "loss", icon: Clock },
-  CONNECTED: { label: "Connected", tone: "profit", icon: Link2 },
-  DATA_UNAVAILABLE: { label: "Partly synced", tone: "warning", icon: CircleAlert },
-  ERROR: { label: "Connection error", tone: "loss", icon: Unplug },
-};
 
 const ORDER_TONE: Record<LiveOrderStatus, Tone> = { PENDING: "info", PARTIAL: "warning", FILLED: "profit", REJECTED: "loss", CANCELLED: "neutral", EXPIRED: "neutral", UNKNOWN: "warning" };
 const ORDER_LABEL: Record<LiveOrderStatus, string> = { PENDING: "Pending", PARTIAL: "Part filled", FILLED: "Filled", REJECTED: "Rejected", CANCELLED: "Cancelled", EXPIRED: "Expired", UNKNOWN: "Unknown" };
-
-const UNDERLYINGS = [...new Set(["NIFTY", "BANKNIFTY", "FINNIFTY", ...FEATURED_INDICES.map((item) => item.symbol)])];
-
-function StateChip({ state, syncing }: { state: ConnectionState; syncing?: boolean }) {
-  if (syncing && (state === "CONNECTED" || state === "DATA_UNAVAILABLE")) return <Badge tone="info"><RefreshCw className="h-3 w-3 animate-spin" aria-hidden />Synchronising</Badge>;
-  const meta = CONNECTION[state];
-  const Icon = meta.icon;
-  return <Badge tone={meta.tone}><Icon className="h-3 w-3" aria-hidden />{meta.label}</Badge>;
-}
 
 function Money({ value, tone = false, broker = false }: { value: number | null | undefined; tone?: boolean; broker?: boolean }) {
   if (value == null) return <span className="text-muted">Unavailable</span>;
@@ -76,7 +57,7 @@ export function LiveSummary({ view }: { view: LiveView }) {
       </section>
       <div className="grid grid-cols-2 content-start gap-2 sm:grid-cols-4">
         {metric("Connected", `${combined.connected} / ${view.accounts.length}`, `${combined.authorized} authorized`)}
-        {metric("Trading eligible", combined.eligible, "order placement locked")}
+        {metric("Trading eligible", combined.eligible, view.gate.enabled ? "live orders on" : "order placement locked")}
         {metric("Available funds", combined.availablePaise == null ? "Unavailable" : inr(combined.availablePaise), "broker-reported")}
         {metric("Used margin", combined.usedMarginPaise == null ? "Unavailable" : inr(combined.usedMarginPaise), "broker-reported")}
         {metric("Holdings at cost", combined.holdingsCostPaise == null ? "Unavailable" : inr(combined.holdingsCostPaise), "equity book, not P&L")}
@@ -119,7 +100,7 @@ export function LiveAccountCard({ account, owner, syncing, onConnect }: { accoun
       <div className="flex flex-wrap gap-1">
         <StateChip state={account.connection} syncing={syncing} />
         {account.authorized ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Authorized</Badge> : null}
-        {account.connection !== "NOT_CONNECTED" ? <Tooltip content={account.tradingReason}><span tabIndex={0}><Badge tone="warning"><Lock className="h-3 w-3" aria-hidden />Trading restricted</Badge></span></Tooltip> : null}
+        {account.connection !== "NOT_CONNECTED" ? <Tooltip content={account.tradingReason}><span tabIndex={0}>{account.tradingReady ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Trading ready</Badge> : <Badge tone="warning"><Lock className="h-3 w-3" aria-hidden />Trading restricted</Badge>}</span></Tooltip> : null}
       </div>
       {live ? (
         <>
@@ -329,107 +310,12 @@ function LiveHoldings({ accounts }: { accounts: LiveAccount[] }) {
   );
 }
 
-export function LiveOrderPanel({ accounts, reloadToken }: { accounts: LiveAccount[]; reloadToken: number }) {
-  const { underlying, expiry, strike, setUnderlying, setExpiry, setStrike, chain, chainError, chainLoading } = useChain(reloadToken);
-  const [right, setRight] = useState<"CE" | "PE">("CE");
-  const [side, setSide] = useState<"BUY" | "SELL">("BUY");
-  const [orderType, setOrderType] = useState<"MARKET" | "LIMIT">("MARKET");
-  const [product, setProduct] = useState<"INTRADAY" | "MARGIN">("INTRADAY");
-  const [limitText, setLimitText] = useState("");
-  const [lots, setLots] = useState(1);
-  const [reviewing, setReviewing] = useState(false);
-  const lotSize = chain?.lotSize ?? null;
-  const row = chain?.strikes.find((item) => item.strike === strike) ?? null;
-  const ltp = chain?.available && chain.expiry === expiry ? (right === "CE" ? row?.ce?.ltp : row?.pe?.ltp) ?? null : null;
-  const eligible = accounts.filter((account) => account.tradingReady);
-  const quantity = lotSize ? lots * lotSize : null;
-  const estimate = ltp != null && ltp > 0 && quantity ? Math.round(ltp * 100) * quantity * eligible.length : null;
-  const ready = Boolean(chain?.available && expiry && strike != null && lotSize);
-  const label = strike != null ? contractLabel({ underlying, expiry, strike, right }) : "Choose a contract";
-  const confirmLabel = `Confirm ${side} ${label} · ${eligible.length} ${eligible.length === 1 ? "account" : "accounts"}`;
-
-  return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <Notice tone="warning"><Lock className="mr-1 inline h-3.5 w-3.5" aria-hidden />Live order placement is locked. You can build and review an order, but it cannot be sent.</Notice>
-      <div className="grid grid-cols-3 gap-2">
-        <label className={LABEL}>Underlying
-          <select className={FIELD} value={underlying} onChange={(event) => setUnderlying(event.target.value)}>{UNDERLYINGS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}</select>
-        </label>
-        <label className={LABEL}>Expiry
-          <select className={FIELD} value={expiry} onChange={(event) => setExpiry(event.target.value)} disabled={!chain?.expiries.length}>
-            {!chain?.expiries.length ? <option value="">{chainLoading ? "Loading…" : "None listed"}</option> : null}
-            {chain?.expiries.map((day) => <option key={day} value={day}>{expiryLabel(day)}</option>)}
-          </select>
-        </label>
-        <label className={LABEL}>Strike
-          <select className={FIELD} value={strike ?? ""} onChange={(event) => setStrike(Number(event.target.value))} disabled={!chain?.strikes.length}>
-            {!chain?.strikes.length ? <option value="">{chainLoading ? "Loading…" : "None listed"}</option> : null}
-            {chain?.strikes.map((item) => <option key={item.strike} value={item.strike}>{item.strike}{item.strike === chain.atmStrike ? " · ATM" : ""}</option>)}
-          </select>
-        </label>
-      </div>
-      {chainError ? <Notice tone="warning">{chainError}</Notice> : null}
-      <div className="grid grid-cols-2 gap-2">
-        <SegmentedControl label="Option type" block value={right} onChange={setRight} options={[{ id: "CE", label: "CE · Call" }, { id: "PE", label: "PE · Put" }]} />
-        <SegmentedControl label="Side" block value={side} onChange={setSide} options={[{ id: "BUY", label: "BUY", tone: "profit" }, { id: "SELL", label: "SELL", tone: "loss" }]} />
-        <SegmentedControl label="Order type" block size="sm" value={orderType} onChange={setOrderType} options={[{ id: "MARKET", label: "Market" }, { id: "LIMIT", label: "Limit" }]} />
-        <SegmentedControl label="Product" block size="sm" value={product} onChange={setProduct} options={[{ id: "INTRADAY", label: "Intraday" }, { id: "MARGIN", label: "Carry" }]} />
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className={LABEL}>Lots
-          <div className="inline-flex h-8 items-stretch overflow-hidden rounded-input border border-border bg-sunken">
-            <button type="button" aria-label="Decrease lots" disabled={lots <= 1} onClick={() => setLots(lots - 1)} className="grid w-8 place-items-center hover:bg-hover disabled:opacity-40"><Minus className="h-3.5 w-3.5" aria-hidden /></button>
-            <span className="num grid flex-1 place-items-center border-x border-border-soft text-dense font-semibold text-text" aria-live="polite">{lots}</span>
-            <button type="button" aria-label="Increase lots" onClick={() => setLots(lots + 1)} className="grid w-8 place-items-center hover:bg-hover"><Plus className="h-3.5 w-3.5" aria-hidden /></button>
-          </div>
-        </div>
-        {orderType === "LIMIT" ? <label className={LABEL}>Limit (₹)<input className={FIELD} inputMode="decimal" value={limitText} onChange={(event) => setLimitText(event.target.value)} /></label> : <div className={LABEL}>Quantity<p className="num flex h-8 items-center text-dense text-text">{quantity ?? "Unavailable"}</p></div>}
-      </div>
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-input border border-border-soft bg-sunken px-3 py-2.5 text-data" aria-label="Order summary">
-        <dt className="text-muted">Contract</dt><dd className="truncate text-right font-semibold">{label}</dd>
-        <dt className="text-muted">Last price · chain</dt><dd className="num text-right">{ltp != null && ltp > 0 ? inr(Math.round(ltp * 100)) : <span className="text-muted">Unavailable</span>}</dd>
-        <dt className="text-muted">Lot size</dt><dd className="num text-right">{lotSize ?? <span className="text-muted">Unavailable</span>}</dd>
-        <dt className="text-muted">Eligible accounts</dt><dd className="num text-right">{eligible.length}</dd>
-        <dt className="text-muted">Est. value</dt><dd className="num text-right">{estimate != null && estimate > 0 ? `≈ ${inr(estimate)}` : <span className="text-muted">Unavailable</span>}</dd>
-      </dl>
-      <Button size="lg" block variant={side === "BUY" ? "buy" : "sell"} disabled={!ready} onClick={() => setReviewing(true)}>{side === "BUY" ? "Review Buy Order" : "Review Sell Order"}</Button>
-
-      <Drawer open={reviewing} onClose={() => setReviewing(false)} modal label="Review live order" title="Review Order" subtitle={`${label}${expiry ? ` · ${expiryLabel(expiry)}` : ""}`} width="w-[500px]" footer={
-        <div className="flex flex-col gap-2">
-          <p className="text-micro text-muted">{eligible.length === 0 ? "No account is eligible: live order placement is not available in TradeD." : confirmLabel}</p>
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={() => setReviewing(false)}>Close</Button>
-            <Button className="flex-1" variant="danger" disabled icon={<Lock className="h-3.5 w-3.5" />}>Live order placement locked</Button>
-          </div>
-        </div>
-      }>
-        <div className="flex flex-col gap-3 text-dense">
-          <div className="flex items-center gap-2 rounded-input border border-loss/40 bg-loss-soft px-3 py-2 text-data font-semibold text-loss"><ShieldAlert className="h-4 w-4" aria-hidden />LIVE · nothing will be sent from this review</div>
-          <div className="flex flex-wrap gap-1.5"><Badge tone={side === "BUY" ? "profit" : "loss"}>{side}</Badge><Badge>{orderType === "LIMIT" ? `Limit ₹${limitText || "—"}` : "Market"}</Badge><Badge>{product === "INTRADAY" ? "Intraday" : "Carry"}</Badge><Badge>{lots} {lots === 1 ? "lot" : "lots"} · qty {quantity ?? "—"}</Badge></div>
-          <table className="w-full text-data" aria-label="Per-account eligibility">
-            <thead><tr className="text-micro text-muted"><th scope="col" className="py-1 text-left font-medium">Account</th><th scope="col" className="text-left font-medium">Connection</th><th scope="col" className="text-left font-medium">Eligibility</th></tr></thead>
-            <tbody>
-              {accounts.map((account) => (
-                <tr key={account.id} className="border-t border-border-soft align-top">
-                  <td className="py-1.5">{account.nickname}<span className="num block text-micro text-muted">{account.maskedId ?? ""}</span></td>
-                  <td className="py-1.5"><StateChip state={account.connection} /></td>
-                  <td className="py-1.5 text-loss"><CircleX className="mr-1 inline h-3.5 w-3.5" aria-hidden />{account.tradingReason}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Drawer>
-    </div>
-  );
-}
-
 function ConnectDrawer({ open, onClose, view }: { open: boolean; onClose: () => void; view: LiveView }) {
   return (
     <Drawer open={open} onClose={onClose} modal label="Connect broker account" title="Connect broker account" width="w-[480px]" footer={<Button block variant="secondary" onClick={onClose}>Close</Button>}>
       <div className="flex flex-col gap-3 text-dense">
-        <Notice tone="warning">Connecting additional broker accounts is not available yet. TradeD will never ask for a broker password, OTP or token in a form.</Notice>
-        <p className="text-text-2">A genuine connection needs every item below. None of them exists in this application today:</p>
+        <Notice tone="warning">Only your own Dhan account (slot 1) can be connected today. TradeD will never ask for a broker password, OTP or token in a form.</Notice>
+        <p className="text-text-2">Connecting more accounts still needs:</p>
         <ul className="flex flex-col gap-2">
           {view.missing.map((item) => <li key={item} className="flex gap-2 rounded-input border border-border-soft bg-sunken p-2.5 text-data text-text-2"><CircleX className="mt-0.5 h-3.5 w-3.5 shrink-0 text-loss" aria-hidden />{item}</li>)}
         </ul>
@@ -452,7 +338,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
     );
   }
   if (!view) return <Section><EmptyState icon={<Unplug />} title="Live accounts could not be loaded" body={error} /></Section>;
-  const panel = <LiveOrderPanel accounts={view.accounts} reloadToken={reloadToken} />;
+  const panel = <LiveOrderPanel accounts={view.accounts} reloadToken={reloadToken} gate={view.gate} />;
+  const panelNote = view.gate.enabled ? "Live: confirmed orders go to Dhan." : "Review only. Live placement is locked.";
   return (
     <>
       {error ? <Notice tone="warning">Showing the last sync from {istStamp(view.syncedAt)}. {error}</Notice> : null}
@@ -467,7 +354,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
               ? <LiveAccountTable accounts={view.accounts} owner={view.viewerOwnsConnection} onConnect={() => setConnectOpen(true)} />
               : <div className={ACCOUNT_GRID}>{view.accounts.map((account) => <LiveAccountCard key={account.id} account={account} owner={view.viewerOwnsConnection} syncing={syncing} onConnect={() => setConnectOpen(true)} />)}</div>}
           </Section>
-          {layout === "medium" ? <div id="ma-live-order" className="scroll-mt-20"><Section title="Order entry" description="Review only. Live placement is locked.">{panel}</Section></div> : null}
+          {layout === "medium" ? <div id="ma-live-order" className="scroll-mt-20"><Section title="Order entry" description={panelNote}>{panel}</Section></div> : null}
           <Section flush>
             <div className="border-b border-border-soft px-4 pt-2">
               <Tabs label="Live views" value={tab} onChange={setTab} items={[
@@ -491,7 +378,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
                       ))}
                     </ul>
                   </div>
-                  <ComplianceChecklist gate={gate} />
+                  <ComplianceChecklist gate={view.gate ?? gate} />
                 </div>
               ) : null}
             </div>
@@ -499,7 +386,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
         </div>
         {layout === "wide" ? (
           <aside className="no-scrollbar sticky top-[68px] max-h-[calc(100dvh-var(--topbar)-84px)] overflow-y-auto rounded-card" aria-label="Order entry">
-            <Section title="CE / PE order" description="Review only. Live placement is locked.">{panel}</Section>
+            <Section title="CE / PE order" description={panelNote}>{panel}</Section>
           </aside>
         ) : null}
       </div>
@@ -510,7 +397,7 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
         </button>
       ) : null}
       {layout === "narrow" ? (
-        <Drawer open={sheetOpen} onClose={() => setSheetOpen(false)} modal label="Review CE / PE order" title="Review CE / PE order" subtitle="Review only. Live placement is locked.">
+        <Drawer open={sheetOpen} onClose={() => setSheetOpen(false)} modal label="Review CE / PE order" title="CE / PE order" subtitle={panelNote}>
           {panel}
         </Drawer>
       ) : null}

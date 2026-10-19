@@ -166,7 +166,7 @@ export function MultiAccountDesk() {
 
       <div className="flex flex-col gap-4 pt-4">
         {live ? (
-          <LiveDesk view={liveView} error={liveError} syncing={liveSyncing} layout={layout} accountView={accountView} onAccountView={setAccountView} reloadToken={reload} gate={liveGate()} />
+          <LiveDesk view={liveView} error={liveError} syncing={liveSyncing} layout={layout} accountView={accountView} onAccountView={setAccountView} reloadToken={reload} gate={liveView?.gate ?? liveGate()} />
         ) : !view && !loadError ? (
           <LoadingState view={accountView} />
         ) : !view || !doc ? (

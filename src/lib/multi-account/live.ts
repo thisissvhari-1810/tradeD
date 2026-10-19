@@ -1,3 +1,5 @@
+import type { LiveGate } from "@/lib/multi-account/compliance";
+
 /**
  * Read-only broker account normalisation. Values are taken only from broker payloads;
  * anything missing or malformed becomes null and is shown as Unavailable, never zero.
@@ -71,7 +73,7 @@ export type LiveAccount = {
   authorized: boolean;
   tokenExpiresAt: string | null;
   lastSyncAt: string | null;
-  tradingReady: false;
+  tradingReady: boolean;
   tradingReason: string;
   message: string;
   funds: LiveFunds | null;
@@ -84,13 +86,15 @@ export type LiveAccount = {
   totals: LiveTotals;
 };
 
-export type LiveCapabilities = { readFunds: boolean; readPositions: boolean; readOrders: boolean; readHoldings: boolean; placeOrders: false; cancelOrders: false; connectAccounts: false };
+export type LiveCapabilities = { readFunds: boolean; readPositions: boolean; readOrders: boolean; readHoldings: boolean; placeOrders: boolean; cancelOrders: boolean; connectAccounts: false };
 
 export type LiveView = {
   accounts: LiveAccount[];
   capabilities: LiveCapabilities;
   missing: string[];
   viewerOwnsConnection: boolean;
+  /** Live execution gate computed on the server for this viewer. */
+  gate: LiveGate;
   notice: string;
   syncedAt: string;
 };

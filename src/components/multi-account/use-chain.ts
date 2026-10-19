@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/components/api";
 
-type ChainSideView = { ltp: number | null } | null;
+type ChainSideView = { ltp: number | null; securityId?: string | null } | null;
 export type ChainView = { symbol: string; available: boolean; message: string; asOf: string; expiry: string | null; expiries: string[]; lotSize: number | null; atmStrike: number | null; strikes: Array<{ strike: number; ce: ChainSideView; pe: ChainSideView }> };
 
 /** Contract picker backed by the existing option-chain route: expiries, strikes and lot size come from market data only. */

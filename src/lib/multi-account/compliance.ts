@@ -1,52 +1,70 @@
 /**
- * Live multi-account execution gate. TradeD has no code that submits broker orders, so this gate
- * only explains why live mode stays locked. Every requirement must be met before any live adapter exists.
+ * Live execution gate. Each requirement is computed on the server from real configuration; the browser
+ * only receives the result. Live orders stay locked until every requirement is met.
  */
 
 export type LiveRequirement = { id: string; label: string; detail: string; met: boolean; source: string };
 
-export const COMPLIANCE_CHECKED_ON = "2026-10-18";
+export const COMPLIANCE_CHECKED_ON = "2026-10-19";
 
-export function liveRequirements(): LiveRequirement[] {
+/** What the server has verified. Every field defaults to false, which keeps the gate locked. */
+export type GateState = {
+  /** EXECUTION_SERVICE_URL and secret are set and DHAN_STATIC_IP names the IP registered with Dhan. */
+  staticIp: boolean;
+  /** The account being traded belongs to the viewer (DHAN_ACCOUNT_OWNER_EMAIL), i.e. the holder trades their own account. */
+  ownAccount: boolean;
+  /** A broker token is configured and not expired. */
+  authorized: boolean;
+  /** LIVE_ORDERS_ENABLED is on. */
+  switchedOn: boolean;
+};
+
+export const LOCKED: GateState = { staticIp: false, ownAccount: false, authorized: false, switchedOn: false };
+
+export function liveRequirements(state: GateState = LOCKED): LiveRequirement[] {
   return [
     {
       id: "static-ip",
-      label: "Static IP registered per account holder",
-      detail: "Orders placed through broker APIs must come from a static IP whitelisted for that client. One IP can be shared only within a family (self, spouse, dependent children, dependent parents). TradeD runs on Vercel, which has no fixed outbound IP.",
-      met: false,
-      source: "SEBI circular on safer participation of retail investors in algorithmic trading (4 Feb 2025); NSE retail algo implementation standards; broker static IP requirement",
+      label: "Orders leave from a static IP registered with Dhan",
+      detail: "Orders are sent by TradeD's execution server, whose fixed IP is registered as this account's primary IP in Dhan. Vercel itself has no fixed outbound IP and never sends orders.",
+      met: state.staticIp,
+      source: "SEBI circular on safer participation of retail investors in algorithmic trading (4 Feb 2025); NSE retail algo implementation standards; Dhan static IP requirement",
     },
     {
       id: "family-only",
-      label: "Accounts belong to you or your family",
-      detail: "A retail client's own or registered algo may be used for the client and family only. Placing orders for friends' accounts makes the operator an algo provider, which needs broker empanelment and exchange registration.",
-      met: false,
+      label: "Only your own account can trade",
+      detail: "A retail client's own API orders are limited to self and family. TradeD trades only the account of the TradeD user named as its holder; it never trades friends' accounts.",
+      met: state.ownAccount,
       source: "SEBI retail algo framework; NSE implementation standards for retail algorithmic trading",
     },
     {
       id: "own-authorization",
-      label: "Each holder authorizes their own account",
-      detail: "Every holder must sign in to their broker, complete 2FA and create their own API access. Access tokens expire within 24 hours. TradeD will never ask for another person's password, OTP or token.",
-      met: false,
-      source: "Broker API terms; SEBI requirement for OAuth and 2FA on API access",
+      label: "The holder's own access token is valid",
+      detail: "The holder generates their own Dhan access token (valid 24 hours). TradeD never asks for a password or OTP.",
+      met: state.authorized,
+      source: "Dhan API authentication; SEBI requirement for 2FA on API access",
     },
     {
-      id: "broker-adapter",
-      label: "Reviewed order adapter with per-account server-side credentials",
-      detail: "TradeD reads broker market data only. No order adapter, credential vault or per-client consent flow exists in this application.",
-      met: false,
-      source: "TradeD architecture",
+      id: "switch",
+      label: "Live orders switched on by the operator",
+      detail: "LIVE_ORDERS_ENABLED is set on the server, and the execution server has orders enabled.",
+      met: state.switchedOn,
+      source: "TradeD configuration",
     },
   ];
 }
 
-export type LiveGate = { enabled: false; checkedOn: string; requirements: LiveRequirement[]; message: string };
+export type LiveGate = { enabled: boolean; checkedOn: string; requirements: LiveRequirement[]; message: string };
 
-export function liveGate(): LiveGate {
+export function liveGate(state: GateState = LOCKED): LiveGate {
+  const requirements = liveRequirements(state);
+  const enabled = requirements.every((item) => item.met);
   return {
-    enabled: false,
+    enabled,
     checkedOn: COMPLIANCE_CHECKED_ON,
-    requirements: liveRequirements(),
-    message: "Live multi-account trading is locked. Current SEBI and exchange rules do not permit one person to place API orders across friends' accounts from a shared server. Demo mode is fully available.",
+    requirements,
+    message: enabled
+      ? "Live orders are enabled for your own account. Every order is reviewed and confirmed before it is sent, and each result comes from Dhan."
+      : "Live trading is locked until every requirement below is met. Demo mode is fully available.",
   };
 }

@@ -1,23 +1,23 @@
+import { liveGate, type LiveGate } from "@/lib/multi-account/compliance";
 import { maskId } from "@/lib/multi-account/engine";
 import { LIVE_SLOTS, liveTotals, parseFunds, parseHoldings, parseOrders, parsePositions, type ConnectionState, type LiveAccount, type LiveView } from "@/lib/multi-account/live";
 import type { SessionUser } from "@/server/auth";
 import { brokerAccountView } from "@/server/dhan-account";
 import { getDhanClientId } from "@/server/settings";
+import { liveSwitchOn, staticIpReady } from "@/lib/security/flags";
+import { ownsServerAccount, tradesServerAccount } from "@/server/live-gate";
 
 /**
- * Read-only live account view. The only broker connection TradeD has is the single server-configured
- * account, so it is shown to the super admin who configured it and to nobody else.
- * Tokens and full client IDs never leave the server; there is no order or cancel path here.
+ * Live account view. The broker connection TradeD has is the single server-configured account, shown
+ * only to its holder (DHAN_ACCOUNT_OWNER_EMAIL, or the super admin when unset) and to nobody else.
+ * Tokens and full client IDs never leave the server. Orders go through server/live-orders, not here.
  */
 
-const TRADING_LOCKED = "Order placement is not available: the connection is read-only and static-IP order routing is not set up.";
-
+/** Why slots 2 to 8 cannot be connected yet. */
 export const LIVE_MISSING = [
-  "A per-holder broker authorization flow (each holder signs in and grants API access themselves). The broker API app key, secret and redirect URL for that flow are not configured.",
-  "Per-account server-side credential storage with expiry and refresh tracking. TradeD stores one market-data token only.",
-  "An order adapter with idempotent placement, cancellation and status reconciliation. No order endpoint is implemented, by design.",
-  "A static IP registered for each account holder, required for API order placement since 1 April 2026. The current hosting has no fixed outbound IP.",
-  "Family-only use: accounts must belong to you or your family (self, spouse, dependent children, dependent parents).",
+  "Each additional holder must authorize their own Dhan account through Dhan's consent login. That flow needs Dhan partner access or each holder's own API key, which is not set up.",
+  "Each holder needs their own static IP registered with Dhan; the execution server's IP is registered for the primary holder only.",
+  "Accounts must belong to you or your family (self, spouse, dependent children, dependent parents).",
 ];
 
 function emptySlot(slot: number, message: string): LiveAccount {
@@ -44,8 +44,8 @@ function emptySlot(slot: number, message: string): LiveAccount {
   };
 }
 
-export async function serverAccount(now = new Date()): Promise<LiveAccount> {
-  const [broker, clientId] = await Promise.all([brokerAccountView(), getDhanClientId()]);
+export async function serverAccount(now = new Date(), gate: LiveGate = liveGate(), prefetched?: Awaited<ReturnType<typeof brokerAccountView>>): Promise<LiveAccount> {
+  const [broker, clientId] = await Promise.all([prefetched ?? brokerAccountView(), getDhanClientId()]);
   const base = emptySlot(1, broker.reason);
   const maskedId = clientId ? maskId(clientId) : null;
   const tokenExpiresAt = broker.token.expiresAt;
@@ -66,7 +66,8 @@ export async function serverAccount(now = new Date()): Promise<LiveAccount> {
     authorized: true,
     tokenExpiresAt,
     lastSyncAt: failures === 4 ? null : now.toISOString(),
-    tradingReason: TRADING_LOCKED,
+    tradingReady: gate.enabled,
+    tradingReason: gate.enabled ? "Ready: orders are sent from the registered static IP after you confirm them." : `Order placement locked: ${gate.requirements.filter((item) => !item.met).map((item) => item.label.toLowerCase()).join("; ")}.`,
     message: failures === 4 ? "Every account read failed. Check the token and client ID on the server." : broker.reason,
     funds,
     positions,
@@ -80,8 +81,15 @@ export async function serverAccount(now = new Date()): Promise<LiveAccount> {
 }
 
 export async function liveAccountsView(user: SessionUser, now = new Date()): Promise<LiveView> {
-  const owner = user.role === "SUPER_ADMIN";
-  const first = owner ? await serverAccount(now) : null;
+  const owner = ownsServerAccount(user);
+  const broker = owner ? await brokerAccountView() : null;
+  const gate = liveGate({
+    staticIp: staticIpReady(),
+    ownAccount: tradesServerAccount(user),
+    authorized: Boolean(broker && broker.clientConfigured && broker.token.source !== "missing" && !broker.token.expired),
+    switchedOn: liveSwitchOn(),
+  });
+  const first = owner && broker ? await serverAccount(now, gate, broker) : null;
   const slots = Array.from({ length: LIVE_SLOTS }, (_, index) => (index === 0 && first ? first : emptySlot(index + 1, "No broker account is connected to this slot.")));
   const reads = first && (first.connection === "CONNECTED" || first.connection === "DATA_UNAVAILABLE");
   return {
@@ -91,15 +99,18 @@ export async function liveAccountsView(user: SessionUser, now = new Date()): Pro
       readPositions: Boolean(reads && first?.positions),
       readOrders: Boolean(reads && first?.orders),
       readHoldings: Boolean(reads && first?.holdings),
-      placeOrders: false,
-      cancelOrders: false,
+      placeOrders: Boolean(reads && gate.enabled),
+      cancelOrders: Boolean(reads && gate.enabled),
       connectAccounts: false,
     },
     missing: LIVE_MISSING,
     viewerOwnsConnection: owner,
-    notice: owner
-      ? "Read-only. Funds, positions and orders are read from the server-configured broker connection. Orders cannot be placed from TradeD."
-      : "No broker account is connected to your TradeD user. The server connection belongs to the administrator and is not shown to other users.",
+    gate,
+    notice: !owner
+      ? "No broker account is connected to your TradeD user. The server connection belongs to its holder and is not shown to other users."
+      : gate.enabled
+        ? "Your Dhan account is connected. Orders are sent from the registered static IP only after you review and confirm them."
+        : "Read-only. Funds, positions and orders are read from your Dhan account. Order placement stays locked until every live-trading requirement is met.",
     syncedAt: now.toISOString(),
   };
 }
