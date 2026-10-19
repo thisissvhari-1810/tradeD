@@ -1,5 +1,5 @@
 /*
-  Obsidian Pulse design tokens.
+  Graphite design tokens: neutral surfaces, one blue accent, finance-tuned profit/loss.
   Colour values must stay in sync with LIGHT_TOKENS and DARK_TOKENS
   in src/lib/color/appearance.ts, which writes the user's active theme inline at runtime.
 */
@@ -8,31 +8,31 @@
 @theme static {
   --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-input: 8px;
-  --radius-md: 10px;
-  --radius-card: 12px;
-  --radius-lg: 14px;
+  --radius-input: 10px;
+  --radius-md: 12px;
+  --radius-card: 16px;
+  --radius-lg: 18px;
   --radius-xl: 18px;
-  --radius-sheet: 18px;
+  --radius-sheet: 22px;
   --radius-2xl: 24px;
   --radius-pill: 999px;
 
   --text-micro: 11px;
   --text-micro--line-height: 14px;
-  --text-data: 12px;
-  --text-data--line-height: 16px;
-  --text-dense: 13px;
-  --text-dense--line-height: 18px;
+  --text-data: 12.5px;
+  --text-data--line-height: 17px;
+  --text-dense: 13.5px;
+  --text-dense--line-height: 19px;
   --text-body: 14px;
   --text-body--line-height: 20px;
   --text-title: 16px;
   --text-title--line-height: 22px;
-  --text-section: 19px;
+  --text-section: 20px;
   --text-section--line-height: 26px;
-  --text-hero: 26px;
-  --text-hero--line-height: 32px;
-  --text-page: 26px;
-  --text-page--line-height: 32px;
+  --text-hero: 30px;
+  --text-hero--line-height: 36px;
+  --text-page: 28px;
+  --text-page--line-height: 34px;
   --text-display: 44px;
   --text-display--line-height: 50px;
 
@@ -41,7 +41,8 @@
   --shadow-e3: var(--shadow-3);
   --shadow-overlay: var(--shadow-4);
 
-  --ease-ui: cubic-bezier(0.2, 0, 0, 1);
+  --ease-ui: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 :root {
@@ -49,9 +50,9 @@
   --control-md: 34px;
   --control-lg: 40px;
   --dur-press: 90ms;
-  --dur-fast: 140ms;
-  --dur-base: 170ms;
-  --dur-slow: 200ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
   --topbar: 56px;
   --tabbar: 60px;
   --rail: 84px;
@@ -59,108 +60,108 @@
 
 :root,
 [data-theme="light"] {
-  --background: #f3f6fa;
+  --background: #f5f5f7;
   --panel: #ffffff;
   --elevated: #ffffff;
   --overlay: #ffffff;
-  --sunken: #eef2f7;
-  --hover: #f1f4f9;
-  --primary: #315fde;
-  --primary-hover: #254cc0;
-  --primary-soft: #e8eeff;
+  --sunken: #f0f0f3;
+  --hover: #f2f2f5;
+  --primary: #1f5fea;
+  --primary-hover: #1a50c8;
+  --primary-soft: #eaf1fe;
   --on-primary: #ffffff;
   --on-signal: #ffffff;
-  --profit: #087f5b;
-  --profit-soft: #e1f7ed;
-  --loss: #c73750;
-  --loss-soft: #fce8ec;
-  --warning: #9a6500;
-  --warning-soft: #fef6e6;
-  --info: #1769aa;
-  --info-soft: #e3f0fb;
+  --profit: #0b8457;
+  --profit-soft: #e7f6ef;
+  --loss: #d92d3a;
+  --loss-soft: #fdecee;
+  --warning: #a15c00;
+  --warning-soft: #fff4e0;
+  --info: #0b6bcb;
+  --info-soft: #e6f1fc;
   --star: #b7791f;
-  --demo: #7047c8;
-  --demo-soft: #efe8fc;
-  --text: #172033;
-  --text-2: #46546a;
-  --muted: #66758a;
-  --disabled: #a3aebd;
-  --border: #e0e6ef;
-  --border-soft: #e9edf3;
-  --border-strong: #c5cfdd;
-  --grid: #eef1f6;
-  --cream: #f6f8fb;
-  --focus: #315fde;
-  --focus-ring: #315fde;
-  --scrim: rgba(15, 23, 42, 0.36);
+  --demo: #6d4ac8;
+  --demo-soft: #f1ecfc;
+  --text: #1c1c1e;
+  --text-2: #3c3c43;
+  --muted: #6e6e73;
+  --disabled: #aeaeb2;
+  --border: #e3e3e8;
+  --border-soft: #ececf0;
+  --border-strong: #c7c7cc;
+  --grid: #f0f0f3;
+  --cream: #fafafb;
+  --focus: #1f5fea;
+  --focus-ring: #1f5fea;
+  --scrim: rgba(10, 10, 12, 0.32);
   --highlight: rgba(255, 255, 255, 0.9);
-  --hero-glow: rgba(49, 95, 222, 0.1);
-  --hero-glow-2: rgba(112, 71, 200, 0.07);
-  --shadow-1: 0 1px 2px rgba(23, 32, 51, 0.05), 0 0 0 1px rgba(23, 32, 51, 0.02);
-  --shadow-2: 0 4px 14px rgba(23, 32, 51, 0.07);
-  --shadow-3: 0 12px 32px rgba(23, 32, 51, 0.1);
-  --shadow-4: 0 24px 60px rgba(23, 32, 51, 0.16);
+  --hero-glow: rgba(31, 95, 234, 0.08);
+  --hero-glow-2: rgba(109, 74, 200, 0.05);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(0, 0, 0, 0.03);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.03);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.09);
+  --shadow-4: 0 24px 64px rgba(0, 0, 0, 0.14);
   --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 
-  --chart-up: #089981;
-  --chart-down: #f23645;
-  --chart-grid: #eef1f6;
-  --chart-axis: #46546a;
-  --chart-crosshair: #8593a8;
-  --chart-price-line: #315fde;
+  --chart-up: #0e9f6e;
+  --chart-down: #e5484d;
+  --chart-grid: #f0f0f3;
+  --chart-axis: #3c3c43;
+  --chart-crosshair: #8e8e93;
+  --chart-price-line: #1f5fea;
   color-scheme: light;
 }
 
 [data-theme="dark"] {
-  --background: #090c12;
-  --panel: #101620;
-  --elevated: #18212d;
-  --overlay: #202b39;
-  --sunken: #0c1119;
-  --hover: #161e29;
-  --primary: #648cff;
-  --primary-hover: #82a3ff;
-  --primary-soft: #19294a;
-  --on-primary: #0a1020;
-  --on-signal: #05110c;
-  --profit: #35d39a;
-  --profit-soft: #12382f;
-  --loss: #ff7185;
-  --loss-soft: #411f2a;
-  --warning: #f4be5e;
-  --warning-soft: #3a2e14;
-  --info: #67b7ff;
-  --info-soft: #132c45;
-  --star: #e8b34a;
-  --demo: #b89aff;
-  --demo-soft: #2a2148;
-  --text: #f1f5fb;
-  --text-2: #b4c0d0;
-  --muted: #8492a6;
-  --disabled: #4f5c6e;
-  --border: #283444;
-  --border-soft: #1d2735;
-  --border-strong: #3a4a5f;
-  --grid: #18202b;
-  --cream: #141c27;
-  --focus: #8ba8ff;
-  --focus-ring: #8ba8ff;
-  --scrim: rgba(3, 6, 12, 0.62);
-  --highlight: rgba(255, 255, 255, 0.045);
-  --hero-glow: rgba(100, 140, 255, 0.16);
-  --hero-glow-2: rgba(184, 154, 255, 0.09);
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.22);
-  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.24);
-  --shadow-3: 0 14px 40px rgba(0, 0, 0, 0.32);
-  --shadow-4: 0 24px 64px rgba(0, 0, 0, 0.44);
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --background: #0a0a0b;
+  --panel: #111113;
+  --elevated: #18181b;
+  --overlay: #1f1f23;
+  --sunken: #0d0d0f;
+  --hover: #1a1a1e;
+  --primary: #4e86ff;
+  --primary-hover: #6b9bff;
+  --primary-soft: #142347;
+  --on-primary: #ffffff;
+  --on-signal: #ffffff;
+  --profit: #2ebd85;
+  --profit-soft: #0f2a21;
+  --loss: #f6465d;
+  --loss-soft: #33161c;
+  --warning: #f0b90b;
+  --warning-soft: #2e2510;
+  --info: #4aa3ff;
+  --info-soft: #10233a;
+  --star: #f0b90b;
+  --demo: #a78bfa;
+  --demo-soft: #231c3d;
+  --text: #f5f5f7;
+  --text-2: #c7c7cc;
+  --muted: #8e8e93;
+  --disabled: #48484a;
+  --border: #26262b;
+  --border-soft: #1c1c20;
+  --border-strong: #3a3a40;
+  --grid: #1a1a1e;
+  --cream: #151518;
+  --focus: #6b9bff;
+  --focus-ring: #6b9bff;
+  --scrim: rgba(0, 0, 0, 0.6);
+  --highlight: rgba(255, 255, 255, 0.04);
+  --hero-glow: rgba(78, 134, 255, 0.14);
+  --hero-glow-2: rgba(167, 139, 250, 0.08);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.03);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.45);
+  --shadow-4: 0 28px 72px rgba(0, 0, 0, 0.55);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 
-  --chart-up: #089981;
-  --chart-down: #f23645;
-  --chart-grid: #161e29;
-  --chart-axis: #b4c0d0;
-  --chart-crosshair: #5d6b80;
-  --chart-price-line: #648cff;
+  --chart-up: #2ebd85;
+  --chart-down: #f6465d;
+  --chart-grid: #1a1a1e;
+  --chart-axis: #c7c7cc;
+  --chart-crosshair: #6e6e73;
+  --chart-price-line: #4e86ff;
   color-scheme: dark;
 }
 

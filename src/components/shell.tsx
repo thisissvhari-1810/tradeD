@@ -79,9 +79,9 @@ const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: House },
   { href: "/chart", label: "Chart", icon: CandlestickChart },
   { href: "/options", label: "Options", icon: GitBranch },
+  { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound },
   { href: "/positions", label: "Positions", icon: Layers },
   { href: "/orders", label: "Orders", icon: ClipboardList },
-  { href: "/multi-account", label: "Multi-Acct", title: "Multi-Account Trading", icon: UsersRound, accent: true },
   { href: "/holdings", label: "Portfolio", icon: PieChart },
   { href: "/funds", label: "Money", icon: Wallet },
   { href: "/markets", label: "Markets", icon: LineChart },
@@ -277,16 +277,16 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <DeskContext.Provider value={value}>
       <div className="flex h-dvh min-h-0 bg-background">
-        <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft bg-sunken lg:flex" aria-label="Primary">
+        <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft/60 bg-background lg:flex" aria-label="Primary">
           <div className="flex h-[var(--topbar)] shrink-0 items-center justify-center">
             <BrandMark />
           </div>
           <nav className="no-scrollbar flex min-h-0 flex-1 flex-col items-stretch gap-0.5 overflow-y-auto px-2 pb-3 pt-1" aria-label="Main">
-            {links.map(({ href, label, icon: Icon, title, accent }) => {
+            {links.map(({ href, label, icon: Icon, title }) => {
               const current = active(href);
               return (
                 <Fragment key={href}>
-                  {href === "/markets" || href === "/admin" ? <div className="mx-3 my-1.5 h-px bg-border-soft" aria-hidden /> : null}
+                  {href === "/positions" || href === "/markets" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft" aria-hidden /> : null}
                   <Link
                     href={href}
                     aria-current={current ? "page" : undefined}
@@ -300,10 +300,9 @@ export function Shell({ children }: { children: ReactNode }) {
                     {current ? <span className="absolute -left-2 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden /> : null}
                     <span className={cx(
                       "relative grid h-8 w-11 place-items-center rounded-input transition-colors duration-150",
-                      current ? "bg-primary-soft text-primary" : accent ? "bg-info-soft text-info group-hover:brightness-110" : "group-hover:bg-hover",
+                      current ? "bg-primary-soft text-primary" : "group-hover:bg-hover",
                     )}>
-                      <Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
-                      {accent ? <span className="absolute right-1.5 top-1 h-1.5 w-1.5 rounded-full bg-warning" aria-hidden /> : null}
+                      <Icon className="h-5 w-5 shrink-0" aria-hidden />
                     </span>
                     <span className="max-w-full truncate">{label}</span>
                   </Link>
@@ -321,7 +320,7 @@ export function Shell({ children }: { children: ReactNode }) {
         </aside>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft bg-background/85 px-2 backdrop-blur-md sm:gap-3 sm:px-4">
+          <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
             <div className="lg:hidden"><BrandMark /></div>
             <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Index prices">
               {indices.length === 0 ? (

@@ -48,13 +48,18 @@ body {
   font-family: var(--font-ui), "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   line-height: 1.45;
-  letter-spacing: -0.003em;
-  font-feature-settings: "cv11" 1, "ss01" 1;
+  letter-spacing: -0.006em;
+  font-feature-settings: "cv11" 1, "ss01" 1, "ss03" 1;
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-h1, h2, h3 { letter-spacing: -0.012em; }
+h1, h2, h3 { letter-spacing: -0.02em; }
+
+/* Icons: one calm stroke weight everywhere (lucide renders class="lucide"). */
+svg.lucide { stroke-width: 1.6; }
 
 button, input, select, textarea { font: inherit; color: inherit; }
 
@@ -205,7 +210,8 @@ input.oc-check {
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--focus-ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 22%, transparent); }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible, summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
-.num { font-family: var(--font-num), ui-monospace, monospace; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1, "zero" 0; letter-spacing: -0.01em; }
+/* Numbers use the UI face with tabular figures, as finance apps do; mono stays for ids and code only. */
+.num { font-family: var(--font-ui), -apple-system, "Segoe UI Variable", system-ui, sans-serif; font-variant-numeric: tabular-nums slashed-zero; font-feature-settings: "tnum" 1, "zero" 1, "cv11" 1; letter-spacing: -0.01em; }
 .tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
 
 @keyframes flash-up { from { background-color: color-mix(in srgb, var(--profit) 26%, transparent); } to { background-color: transparent; } }

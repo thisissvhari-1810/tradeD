@@ -65,21 +65,21 @@ export type Appearance = {
 
 /* Keep in sync with src/app/tokens.css. */
 const LIGHT_TOKENS: AppTokens = {
-  background: "#F3F6FA", panel: "#FFFFFF", elevated: "#FFFFFF", primary: "#315FDE", onPrimary: "#FFFFFF",
-  profit: "#087F5B", loss: "#C73750", warning: "#9A6500", info: "#1769AA", demo: "#7047C8",
-  text: "#172033", muted: "#66758A", border: "#E0E6EF", grid: "#EEF1F6",
+  background: "#F5F5F7", panel: "#FFFFFF", elevated: "#FFFFFF", primary: "#1F5FEA", onPrimary: "#FFFFFF",
+  profit: "#0B8457", loss: "#D92D3A", warning: "#A15C00", info: "#0B6BCB", demo: "#6D4AC8",
+  text: "#1C1C1E", muted: "#6E6E73", border: "#E3E3E8", grid: "#F0F0F3",
 };
 
 const DARK_TOKENS: AppTokens = {
-  background: "#090C12", panel: "#101620", elevated: "#18212D", primary: "#648CFF", onPrimary: "#0A1020",
-  profit: "#35D39A", loss: "#FF7185", warning: "#F4BE5E", info: "#67B7FF", demo: "#B89AFF",
-  text: "#F1F5FB", muted: "#8492A6", border: "#283444", grid: "#18202B",
+  background: "#0A0A0B", panel: "#111113", elevated: "#18181B", primary: "#4E86FF", onPrimary: "#FFFFFF",
+  profit: "#2EBD85", loss: "#F6465D", warning: "#F0B90B", info: "#4AA3FF", demo: "#A78BFA",
+  text: "#F5F5F7", muted: "#8E8E93", border: "#26262B", grid: "#1A1A1E",
 };
 
 /* Keep in sync with the --chart-* variables in src/app/tokens.css. */
 const CHART_TOKENS = {
-  light: { background: "#FFFFFF", grid: "#EEF1F6", crosshair: "#8593A8", text: "#46546A", up: "#089981", down: "#F23645", priceLine: "#315FDE" },
-  dark: { background: "#101620", grid: "#161E29", crosshair: "#5D6B80", text: "#B4C0D0", up: "#089981", down: "#F23645", priceLine: "#648CFF" },
+  light: { background: "#FFFFFF", grid: "#F0F0F3", crosshair: "#8E8E93", text: "#3C3C43", up: "#0E9F6E", down: "#E5484D", priceLine: "#1F5FEA" },
+  dark: { background: "#111113", grid: "#1A1A1E", crosshair: "#6E6E73", text: "#C7C7CC", up: "#2EBD85", down: "#F6465D", priceLine: "#4E86FF" },
 } as const;
 
 const LEGACY_PRESETS = new Set(["midnight", "emerald", "purple", "mono", "ocean", "sunset", "contrast"]);

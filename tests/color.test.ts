@@ -32,8 +32,8 @@ describe("appearance", () => {
     expect(migrated.tokens.panel).toBe(THEME_PRESETS.find((preset) => preset.id === "classic")?.tokens.panel);
     const classic = THEME_PRESETS.find((preset) => preset.id === "classic");
     const light = THEME_PRESETS.find((preset) => preset.id === "light");
-    expect(classic?.chart.bullBody).toBe("#089981");
-    expect(classic?.chart.bearBody).toBe("#F23645");
+    expect(classic?.chart.bullBody).toBe("#2EBD85");
+    expect(classic?.chart.bearBody).toBe("#F6465D");
     expect(light?.chart.background).toBe("#FFFFFF");
     expect(classic?.tokens.profit).not.toBe(classic?.tokens.loss);
   });

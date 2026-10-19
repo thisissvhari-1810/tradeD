@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Check, CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Lock, Minus, Pencil, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
+import { Check, CircleCheck, CircleX, Clock, KeyRound, LayoutGrid, Link2, Link2Off, Minus, Pencil, Plus, Rows3, TrendingDown, TrendingUp, Unplug } from "lucide-react";
 import { api, istStamp } from "@/components/api";
 import { ACCOUNT_GRID } from "@/components/multi-account/accounts";
 import { expiryLabel, FIELD, inr, LABEL, pnl, pnlTone } from "@/components/multi-account/format";
@@ -139,44 +139,70 @@ function AccountAction({ account, owner, onManage, canConnect }: { account: Live
   return null;
 }
 
+const DOT_TONE: Record<Tone, string> = { neutral: "bg-muted", primary: "bg-primary", profit: "bg-profit", loss: "bg-loss", warning: "bg-warning", info: "bg-info", demo: "bg-demo" };
+
+/** One calm status line per account instead of a stack of badges. */
+function accountStatus(account: LiveAccount, syncing: boolean): { tone: Tone; text: string; tip?: string } {
+  if (!account.target) return { tone: "neutral", text: "Empty slot" };
+  if (!account.enabled) return { tone: "neutral", text: "Switched off", tip: "Left out of orders. Tick the box to include it." };
+  if (account.connection === "NOT_CONNECTED") return { tone: "neutral", text: "Not connected" };
+  if (account.connection === "AUTH_REQUIRED") return { tone: "warning", text: "Sign-in needed", tip: account.message || undefined };
+  if (account.connection === "EXPIRED") return { tone: "loss", text: "Sign-in expired", tip: account.message || undefined };
+  if (account.connection === "ERROR") return { tone: "loss", text: "Connection error", tip: account.message || undefined };
+  if (syncing) return { tone: "info", text: "Syncing…" };
+  if (account.tradingReady) return { tone: "profit", text: "Ready to trade", tip: account.tradingReason };
+  return { tone: "warning", text: "Connected · trading locked", tip: account.tradingReason };
+}
+
+function StatusLine({ account, syncing }: { account: LiveAccount; syncing: boolean }) {
+  const status = accountStatus(account, syncing);
+  const line = (
+    <span className="inline-flex items-center gap-1.5 text-data font-medium text-text-2" tabIndex={status.tip ? 0 : undefined}>
+      <span className={cx("h-2 w-2 shrink-0 rounded-full", DOT_TONE[status.tone], status.tone === "profit" && "shadow-[0_0_0_3px_var(--profit-soft)]")} aria-hidden />
+      {status.text}
+    </span>
+  );
+  return status.tip ? <Tooltip content={status.tip}>{line}</Tooltip> : line;
+}
+
 export function LiveAccountCard({ account, owner, syncing, onManage, canConnect, onToggle, onRename }: { account: LiveAccount; owner: boolean; syncing: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle; onRename: Rename }) {
   const live = connected(account);
   const last = latestOrder(account);
+  const synced = account.lastSyncAt ? new Date(account.lastSyncAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : null;
   return (
-    <article aria-label={account.nickname} className={cx("flex min-w-0 flex-col gap-2 rounded-md border p-2.5", live ? "border-border-soft bg-panel" : "border-dashed border-border bg-sunken")}>
-      <div className="flex items-start gap-2">
+    <article aria-label={account.nickname} className={cx("flex min-w-0 flex-col gap-3 rounded-card p-3.5 transition-[box-shadow,opacity] duration-200", live ? "bg-panel shadow-e1 hover:shadow-e2" : "border border-dashed border-border bg-transparent", account.target && !account.enabled && "opacity-70")}>
+      <div className="flex items-start gap-2.5">
         <EnableSwitch account={account} onToggle={onToggle} />
         <div className="min-w-0 flex-1">
-          <AccountName account={account} onRename={onRename} className={cx("text-dense font-semibold", live ? "text-text" : "text-text-2")} />
+          <AccountName account={account} onRename={onRename} className={cx("text-body font-semibold tracking-[-0.01em]", account.target ? "text-text" : "text-muted")} />
           {account.holderName && account.holderName !== account.nickname ? <p className="truncate text-micro text-text-2" title="Holder name from Dhan">{account.holderName}</p> : null}
-          <p className="num text-micro text-muted">{account.clientId ? <>Client ID <span className="text-text-2">{account.clientId}</span></> : account.maskedId ?? "No account linked"}</p>
+          <p className="num truncate text-micro text-muted">{account.clientId ? <>Client ID {account.clientId}</> : account.maskedId ?? "No account linked"}</p>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1">
-        <StateChip state={account.connection} syncing={syncing} />
-        {account.target && !account.enabled ? <Badge tone="neutral"><Minus className="h-3 w-3" aria-hidden />Switched off</Badge> : null}
-        {account.authorized ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Authorized</Badge> : null}
-        {account.connection !== "NOT_CONNECTED" ? <Tooltip content={account.tradingReason}><span tabIndex={0}>{account.tradingReady ? <Badge tone="profit"><CircleCheck className="h-3 w-3" aria-hidden />Trading ready</Badge> : <Badge tone="warning"><Lock className="h-3 w-3" aria-hidden />Trading restricted</Badge>}</span></Tooltip> : null}
-      </div>
+      <StatusLine account={account} syncing={syncing} />
       {live ? (
         <>
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-sm border border-border-soft bg-border-soft">
-            <div className="bg-sunken px-2 py-1.5"><p className="text-micro text-muted">Realised</p><p className="truncate text-dense font-semibold"><Money value={account.totals.realizedPaise} tone broker /></p></div>
-            <div className="bg-sunken px-2 py-1.5"><p className="text-micro text-muted">Unrealised</p><p className="truncate text-dense font-semibold"><Money value={account.totals.unrealizedPaise} tone broker /></p></div>
+          <div>
+            <p className="text-micro text-muted">Available</p>
+            <p className="truncate text-section font-semibold tracking-[-0.02em] text-text"><Money value={account.funds?.availablePaise} broker /></p>
           </div>
-          <dl className="grid grid-cols-2 gap-x-2 gap-y-1 text-data">
-            <div className="min-w-0"><dt className="text-micro text-muted">Available</dt><dd className="truncate"><Money value={account.funds?.availablePaise} broker /></dd></div>
-            <div className="min-w-0 text-right"><dt className="text-micro text-muted">Used margin</dt><dd className="truncate"><Money value={account.funds?.usedMarginPaise} broker /></dd></div>
-            <div className="min-w-0"><dt className="text-micro text-muted">Open positions</dt><dd className="num">{account.totals.openPositions ?? <span className="text-muted">Unavailable</span>}</dd></div>
-            <div className="min-w-0 text-right"><dt className="text-micro text-muted">Last sync</dt><dd className="num">{account.lastSyncAt ? new Date(account.lastSyncAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" }) : "—"}</dd></div>
-          </dl>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-md bg-sunken px-2.5 py-2"><p className="text-micro text-muted">Realised</p><p className="truncate text-dense font-semibold"><Money value={account.totals.realizedPaise} tone broker /></p></div>
+            <div className="rounded-md bg-sunken px-2.5 py-2"><p className="text-micro text-muted">Unrealised</p><p className="truncate text-dense font-semibold"><Money value={account.totals.unrealizedPaise} tone broker /></p></div>
+          </div>
+          <p className="num flex flex-wrap gap-x-2 gap-y-0.5 text-micro text-muted">
+            <span>Margin <span className="text-text-2"><Money value={account.funds?.usedMarginPaise} broker /></span></span>
+            <span aria-hidden>·</span>
+            <span><span className="text-text-2">{account.totals.openPositions ?? "–"}</span> open</span>
+            {synced ? <><span aria-hidden>·</span><span>Synced {synced}</span></> : null}
+          </p>
           {[account.funds?.error, account.positionsError, account.holdingsError, account.ordersError].filter(Boolean).map((error) => <p key={error} className="text-micro text-warning">{error}</p>)}
-          <div className="flex min-h-5 items-center gap-1.5 border-t border-border-soft pt-2 text-micro text-muted">
+          <div className="flex min-h-5 items-center gap-1.5 text-micro text-muted">
             {last ? <><Badge tone={ORDER_TONE[last.status]}>{ORDER_LABEL[last.status]}</Badge><span className="truncate" title={`${last.symbol} ${last.reason}`}>{last.symbol}</span></> : <span>{account.orders ? "No orders today" : "Orders unavailable"}</span>}
           </div>
         </>
       ) : (
-        <p className="text-data text-muted">{account.message}</p>
+        account.message ? <p className="text-data text-muted">{account.message}</p> : null
       )}
       <AccountAction account={account} owner={owner} onManage={onManage} canConnect={canConnect} />
     </article>
