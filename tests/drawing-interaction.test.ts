@@ -94,9 +94,9 @@ describe("drawing settings dialog", () => {
     expect(editor).toMatch(/fixed inset-0 z-50[^>]*style=\{\{ pointerEvents: "auto" \}\}/);
   });
 
-  it("creates TradingView-like shapes: purple, 80% transparent fill, no middle line", () => {
+  it("creates TradingView-like shapes: purple, 80% transparent fill, dashed middle line", () => {
     expect(layer).toContain('export const SHAPE_COLOR = "#9C27B0";');
     expect(layer).toContain("export const SHAPE_FILL_OPACITY = 0.2;");
-    expect(layer).toContain("{ ...RECTANGLE_CENTER, visible: false }");
+    expect(layer).toContain("{ ...RECTANGLE_CENTER, color: SHAPE_COLOR, visible: true }");
   });
 });

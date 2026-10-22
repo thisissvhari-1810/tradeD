@@ -422,9 +422,9 @@ export function DrawingLayer({
     const style = preferredTemplate(kind);
     const now = Date.now();
     const rectangle = kind === "rect";
-    // TradingView-like shapes: purple outline, 80% transparent fill of the same colour, no middle line.
+    // TradingView-like shapes: purple outline, 80% transparent fill of the same colour; rectangles get a dashed middle line.
     const shape = rectangle || kind === "ellipse" || kind === "circle";
-    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (shape ? SHAPE_COLOR : "#D4AF37"), fill: style?.fill ?? (shape ? SHAPE_COLOR : undefined), fillOpacity: style?.fillOpacity ?? (shape ? SHAPE_FILL_OPACITY : undefined), width: style?.width ?? (shape ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER, visible: false }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
+    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (shape ? SHAPE_COLOR : "#D4AF37"), fill: style?.fill ?? (shape ? SHAPE_COLOR : undefined), fillOpacity: style?.fillOpacity ?? (shape ? SHAPE_FILL_OPACITY : undefined), width: style?.width ?? (shape ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER, color: SHAPE_COLOR, visible: true }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
     onDrawingsRef.current([...drawingsRef.current, drawing], true);
     draftRef.current = [];
     previewRef.current = null;
