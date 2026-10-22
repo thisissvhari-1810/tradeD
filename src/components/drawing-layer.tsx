@@ -26,6 +26,9 @@ type Mark = (
   | { id: string; kind: "profile"; x: number; y: number; width: number; color: string; selected: boolean }
 ) & MarkStyle;
 
+export const SHAPE_COLOR = "#9C27B0";
+export const SHAPE_FILL_OPACITY = 0.2;
+
 export function DrawingLayer({
   chartRef,
   seriesRef,
@@ -419,7 +422,9 @@ export function DrawingLayer({
     const style = preferredTemplate(kind);
     const now = Date.now();
     const rectangle = kind === "rect";
-    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (rectangle ? "#F48FB1" : "#D4AF37"), fill: style?.fill ?? (rectangle ? "#F8BBD0" : undefined), fillOpacity: style?.fillOpacity ?? (rectangle ? 0.28 : undefined), width: style?.width ?? (rectangle ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
+    // TradingView-like shapes: purple outline, 80% transparent fill of the same colour, no middle line.
+    const shape = rectangle || kind === "ellipse" || kind === "circle";
+    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (shape ? SHAPE_COLOR : "#D4AF37"), fill: style?.fill ?? (shape ? SHAPE_COLOR : undefined), fillOpacity: style?.fillOpacity ?? (shape ? SHAPE_FILL_OPACITY : undefined), width: style?.width ?? (shape ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER, visible: false }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
     onDrawingsRef.current([...drawingsRef.current, drawing], true);
     draftRef.current = [];
     previewRef.current = null;

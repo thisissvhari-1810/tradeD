@@ -31,7 +31,8 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4" onPointerDown={(event) => event.stopPropagation()}>
+    // Rendered inside the drawing overlay, which ignores the pointer outside drawing tools; the dialog must opt back in.
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4" style={{ pointerEvents: "auto" }} onPointerDown={(event) => event.stopPropagation()}>
       <div className="surface-modal max-h-[86vh] w-full max-w-lg overflow-auto rounded-xl p-5" role="dialog" aria-modal="true" aria-label={`${labelFor(drawing.kind)} properties`}>
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-title font-semibold">{labelFor(drawing.kind)}</h2>

@@ -85,3 +85,18 @@ describe("keyboard editing", () => {
     expect(desk).toContain("historyKeys.current.redo()");
   });
 });
+
+describe("drawing settings dialog", () => {
+  const editor = readFileSync(join(process.cwd(), "src/components/drawing-editor.tsx"), "utf8");
+
+  it("takes clicks even though the drawing overlay ignores the pointer", () => {
+    expect(layer).toContain('style={{ pointerEvents: capturing ? "auto" : "none"');
+    expect(editor).toMatch(/fixed inset-0 z-50[^>]*style=\{\{ pointerEvents: "auto" \}\}/);
+  });
+
+  it("creates TradingView-like shapes: purple, 80% transparent fill, no middle line", () => {
+    expect(layer).toContain('export const SHAPE_COLOR = "#9C27B0";');
+    expect(layer).toContain("export const SHAPE_FILL_OPACITY = 0.2;");
+    expect(layer).toContain("{ ...RECTANGLE_CENTER, visible: false }");
+  });
+});
