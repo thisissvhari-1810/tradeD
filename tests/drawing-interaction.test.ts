@@ -160,3 +160,23 @@ describe("engine fixes from the tool audit", () => {
     expect(desk).not.toContain("saveDrawings(symbol,");
   });
 });
+
+describe("text on any drawing", () => {
+  const bar = readFileSync(join(process.cwd(), "src/components/drawing-edit-bar.tsx"), "utf8");
+  const editor = readFileSync(join(process.cwd(), "src/components/drawing-editor.tsx"), "utf8");
+
+  it("has a T button beside the colour buttons on every drawing's style bar", () => {
+    expect(bar).toContain('label={drawing.text ? "Edit text" : "Add text"}');
+    expect(bar).toContain("<TextPanel drawing={drawing} onPatch={onPatch}");
+    expect(bar).toContain("{!textKind && drawing.text ? (");
+  });
+
+  it("draws the caption for lines, levels and tools that had no text", () => {
+    expect(layer).toContain("pushCaption(next, drawing, xy, series, scale.width());");
+    expect(layer).toContain('const OWN_TEXT = new Set<string>(["text", "note", "price", "callout", "marker", "rect", "ellipse"]);');
+  });
+
+  it("offers the Text tab in Settings for every drawing", () => {
+    expect(editor).toContain("const tabs = TABS;");
+  });
+});

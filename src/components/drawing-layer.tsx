@@ -296,6 +296,7 @@ export function DrawingLayer({
         next[index] = { ...mark, ...tinted, stroke: mark.stroke ?? drawing.width ?? 1.5, pattern: forced ? "dashed" : (mark.pattern ?? drawing.dash ?? "solid") };
       }
       if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
+      pushCaption(next, drawing, xy, series, scale.width());
       if (active && drawing.id !== "preview") {
         if ((drawing.kind === "rect" || drawing.kind === "ellipse") && drawing.points.length >= 2) pushBoxHandles(next, drawing, xy);
         else if ((drawing.kind === "long" || drawing.kind === "short") && drawing.points.length >= 2) {
@@ -1128,6 +1129,51 @@ function pushClosed(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: 
   }
   marks.push({ id: drawing.id, kind: "box", x, y, width, height, fill, color: stroke, selected });
   pushShapeText(marks, drawing, x, y, width, height);
+}
+
+/** Kinds that already draw their own text (text tools, and shapes that write inside the box). */
+const OWN_TEXT = new Set<string>(["text", "note", "price", "callout", "marker", "rect", "ellipse"]);
+
+/**
+ * The text added from the style bar's T button, for every other drawing: above the middle of a
+ * two-point line, beside a single anchor, near the left of a horizontal line, at the top of a vertical one.
+ */
+function pushCaption(marks: Mark[], drawing: Drawing, xy: XYFn, series: ISeriesApi<SeriesType>, width: number) {
+  const label = drawing.text?.replace(/\s+/g, " ").trim();
+  if (!label || drawing.id === "preview" || OWN_TEXT.has(drawing.kind) || !drawing.points[0]) return;
+  const style = drawing.textStyle ?? defaultTextStyle(drawing.color);
+  if (style.visible === false) return;
+  const first = drawing.points[0];
+  let x: number;
+  let y: number;
+  let anchor: "start" | "middle" | "end" = "middle";
+  if (drawing.kind === "hline" || drawing.kind === "hray") {
+    const lineY = series.priceToCoordinate(first.price);
+    if (lineY == null) return;
+    const start = drawing.kind === "hray" ? xy(first)?.x : null;
+    x = start != null ? start + 8 : Math.max(48, width * 0.12);
+    y = lineY - 6;
+    anchor = "start";
+  } else if (drawing.kind === "vline") {
+    const at = xy(first);
+    if (!at) return;
+    x = at.x + 6;
+    y = 18;
+    anchor = "start";
+  } else {
+    const a = xy(first);
+    const b = drawing.points[1] ? xy(drawing.points[1]) : null;
+    if (!a) return;
+    if (b) {
+      x = (a.x + b.x) / 2;
+      y = Math.min(a.y, b.y) === Math.max(a.y, b.y) ? a.y - 8 : (a.y + b.y) / 2 - 8;
+    } else {
+      x = a.x + 8;
+      y = a.y - 8;
+      anchor = "start";
+    }
+  }
+  marks.push({ id: `${drawing.id}-caption`, kind: "text", x, y, text: label, color: style.color, selected: false, size: style.size, bold: style.bold, italic: style.italic, anchor });
 }
 
 function pushShapeText(marks: Mark[], drawing: Drawing, x: number, y: number, width: number, height: number) {

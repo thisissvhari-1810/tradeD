@@ -19,7 +19,7 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
   const visibility = drawing.visibility ?? { mode: "all" as const, spans: [] };
   const hasFill = FILL_KINDS.has(drawing.kind);
   const textOnly = TEXT_KINDS.has(drawing.kind);
-  const tabs = TABS.filter((item) => item !== "Text" || textOnly || drawing.kind === "rect" || drawing.kind === "ellipse");
+  const tabs = TABS;
 
   function patch(next: Partial<Drawing>) {
     setError("");
@@ -123,7 +123,7 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
             <label className="flex items-center gap-2"><input type="checkbox" checked={text.bold} onChange={(event) => patch({ textStyle: { ...text, bold: event.target.checked } })} />Bold</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={text.italic} onChange={(event) => patch({ textStyle: { ...text, italic: event.target.checked } })} />Italic</label>
             <ColorField label="Text color" value={textOnly ? drawing.color : text.color} onChange={(color) => patch(textOnly ? { color } : { textStyle: { ...text, color } })} />
-            {!textOnly ? (
+            {!textOnly && (drawing.kind === "rect" || drawing.kind === "ellipse") ? (
               <>
                 <label>Horizontal
                   <select className="ml-2 py-1" value={text.align} onChange={(event) => patch({ textStyle: { ...text, align: event.target.value as TextAlign } })}>
@@ -139,9 +139,9 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
                     <option value="bottom">Bottom</option>
                   </select>
                 </label>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={text.visible} onChange={(event) => patch({ textStyle: { ...text, visible: event.target.checked } })} />Text visible</label>
               </>
             ) : null}
+            {!textOnly ? <label className="flex items-center gap-2"><input type="checkbox" checked={text.visible} onChange={(event) => patch({ textStyle: { ...text, visible: event.target.checked } })} />Text visible</label> : null}
           </div>
         ) : null}
         {tab === "Coordinates" ? (

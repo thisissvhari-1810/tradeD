@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { Copy, Eye, EyeOff, GripVertical, Layers, Lock, MoreHorizontal, Save, Settings2, SquareStack, Trash2, Unlock } from "lucide-react";
-import { DRAW_PALETTE, LINE_WIDTHS, hexAlpha, isHexColor, loadTemplates, type Drawing, type DrawingTemplate, type LineDash } from "@/components/drawing-model";
+import { Bold, Copy, Eye, EyeOff, GripVertical, Italic, Layers, Lock, MoreHorizontal, Save, Settings2, SquareStack, Trash2, Type, Unlock } from "lucide-react";
+import { DRAW_PALETTE, LINE_WIDTHS, defaultTextStyle, hexAlpha, isHexColor, loadTemplates, type Drawing, type DrawingTemplate, type DrawingTextStyle, type LineDash } from "@/components/drawing-model";
 import { saveDrawingTemplate } from "@/components/drawing-editor";
 import { cx } from "@/components/ui";
 
-type Popover = "line" | "fill" | "text" | "width" | "style" | "more" | null;
+type Popover = "line" | "fill" | "text" | "label" | "width" | "style" | "more" | null;
+const TEXT_SIZES = [10, 12, 14, 16, 20, 24] as const;
 export type EditAction = "duplicate" | "forward" | "backward" | "hide";
 
 const TEXT_KINDS = new Set<Drawing["kind"]>(["text", "note", "price", "callout", "marker"]);
@@ -153,7 +154,10 @@ export function DrawingEditBar({
           <ColorGlyph color={drawing.fillVisible === false ? null : (drawing.fill || drawing.color)} kind="fill" />
         </Control>
       ) : null}
-      {fillKind && drawing.text ? (
+      <Control label={drawing.text ? "Edit text" : "Add text"} expanded={open === "label"} active={Boolean(drawing.text)} disabled={locked} onClick={() => toggle("label")}>
+        <Type className="h-4 w-4" aria-hidden />
+      </Control>
+      {!textKind && drawing.text ? (
         <Control label="Text color" expanded={open === "text"} disabled={locked} onClick={() => toggle("text")}>
           <ColorGlyph color={textColor} kind="text" />
         </Control>
@@ -196,6 +200,11 @@ export function DrawingEditBar({
             onColor={(fill) => onPatch({ fill, fillVisible: true })}
             onOpacity={(fillOpacity) => onPatch({ fillOpacity })}
           />
+        </Pop>
+      ) : null}
+      {open === "label" ? (
+        <Pop flip={flip}>
+          <TextPanel drawing={drawing} onPatch={onPatch} onDone={() => setOpen(null)} />
         </Pop>
       ) : null}
       {open === "text" ? (
@@ -265,6 +274,35 @@ function ColorGlyph({ color, kind }: { color: string | null; kind: "line" | "fil
       {kind === "text" ? <span className="text-[13px] font-semibold leading-none">T</span> : kind === "fill" ? <span className="h-3.5 w-3.5 rounded-[3px] border border-border-strong" style={{ background: color ?? "transparent" }} /> : <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 13 13 3" stroke="currentColor" strokeWidth={1.5} /></svg>}
       {kind !== "fill" ? <span className="absolute inset-x-0.5 -bottom-0.5 h-[3px] rounded-full" style={{ background: color ?? "transparent" }} /> : null}
     </span>
+  );
+}
+
+/** The T button's panel: the drawing's text, its size and weight. Colour is the text-colour button beside it. */
+function TextPanel({ drawing, onPatch, onDone }: { drawing: Drawing; onPatch: (patch: Partial<Drawing>) => void; onDone: () => void }) {
+  const style: DrawingTextStyle = drawing.textStyle ?? defaultTextStyle(drawing.color);
+  const setStyle = (change: Partial<DrawingTextStyle>) => onPatch({ textStyle: { ...style, visible: true, ...change } });
+  return (
+    <div className="grid gap-2 p-0.5 text-data">
+      <label className="grid gap-1 text-muted">Text
+        <input
+          autoFocus
+          className="h-8 px-2 py-0 text-dense text-text"
+          value={drawing.text ?? ""}
+          maxLength={120}
+          placeholder="Add text to this drawing"
+          onChange={(event) => onPatch({ text: event.target.value, textStyle: { ...style, visible: true } })}
+          onKeyDown={(event) => { if (event.key === "Enter") onDone(); }}
+        />
+      </label>
+      <div className="flex items-center gap-1">
+        <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label="Text size" value={style.size} onChange={(event) => setStyle({ size: Number(event.target.value) })}>
+          {TEXT_SIZES.map((size) => <option key={size} value={size}>{size}px</option>)}
+        </select>
+        <button type="button" aria-label="Bold" aria-pressed={style.bold} className={cx("grid h-7 w-7 place-items-center rounded-md", style.bold ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover")} onClick={() => setStyle({ bold: !style.bold })}><Bold className="h-3.5 w-3.5" aria-hidden /></button>
+        <button type="button" aria-label="Italic" aria-pressed={style.italic} className={cx("grid h-7 w-7 place-items-center rounded-md", style.italic ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover")} onClick={() => setStyle({ italic: !style.italic })}><Italic className="h-3.5 w-3.5" aria-hidden /></button>
+        {drawing.text ? <button type="button" className="ml-auto rounded-md px-2 py-1 text-muted hover:bg-hover hover:text-loss" onClick={() => onPatch({ text: "" })}>Remove</button> : null}
+      </div>
+    </div>
   );
 }
 
