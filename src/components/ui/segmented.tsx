@@ -14,7 +14,7 @@ const ACTIVE: Partial<Record<Tone, string>> = {
 /** Single-choice control. Use tone="profit"/"loss" only for Buy/Sell. */
 export function SegmentedControl<T extends string>({ options, value, onChange, label, block = false, size = "md" }: { options: SegmentOption<T>[]; value: T; onChange: (id: T) => void; label: string; block?: boolean; size?: "sm" | "md" }) {
   return (
-    <div role="radiogroup" aria-label={label} className={cx("inline-flex gap-0.5 rounded-input border border-border-soft bg-sunken p-0.5", block && "flex w-full")}>
+    <div role="radiogroup" aria-label={label} className={cx("inline-flex shrink-0 gap-0.5 rounded-input border border-border-soft bg-sunken p-0.5", block && "flex w-full")}>
       {options.map((option) => {
         const active = option.id === value;
         return (
@@ -27,7 +27,7 @@ export function SegmentedControl<T extends string>({ options, value, onChange, l
             title={option.title}
             onClick={() => onChange(option.id)}
             className={cx(
-              "inline-flex flex-1 items-center justify-center gap-1 rounded-sm font-semibold transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-45",
+              "inline-flex flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-sm font-semibold transition-[background-color,color,box-shadow] duration-150 disabled:cursor-not-allowed disabled:opacity-45",
               size === "sm" ? "h-6 px-2 text-data" : "h-[30px] px-3 text-dense",
               active ? ACTIVE[option.tone ?? "primary"] ?? "bg-elevated text-text shadow-e2 ring-1 ring-border" : "text-muted hover:text-text",
             )}
