@@ -32,6 +32,14 @@ export const SHAPE_FILL_OPACITY = 0.2;
 export const LINE_COLOR = "#B71C1C";
 export const LINE_KINDS = new Set<string>(["trend", "ray", "infoline", "extended", "angle", "hline", "hray", "vline", "crossline", "channel", "regression"]);
 
+/** The colour a new drawing gets (and its preview while placing): the saved default style, else the tool default. */
+function newDrawingColor(kind: Drawing["kind"]) {
+  const saved = preferredTemplate(kind)?.color;
+  if (saved) return saved;
+  if (kind === "rect" || kind === "ellipse" || kind === "circle") return SHAPE_COLOR;
+  return LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37";
+}
+
 export function DrawingLayer({
   chartRef,
   seriesRef,
@@ -297,6 +305,13 @@ export function DrawingLayer({
       }
       if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
       pushCaption(next, drawing, xy, series, scale.width());
+      // While placing points, each placed anchor and the cursor end show the same ring as a selected handle.
+      if (drawing.id === "preview" && drawing.kind !== "brush" && drawing.kind !== "highlighter") {
+        drawing.points.forEach((point, index) => {
+          const at = xy(point);
+          if (at) next.push({ id: `preview#${index}`, kind: "handle", x: at.x, y: at.y, selected: true });
+        });
+      }
       if (active && drawing.id !== "preview") {
         if ((drawing.kind === "rect" || drawing.kind === "ellipse") && drawing.points.length >= 2) pushBoxHandles(next, drawing, xy);
         else if ((drawing.kind === "long" || drawing.kind === "short") && drawing.points.length >= 2) {
@@ -339,10 +354,10 @@ export function DrawingLayer({
     const draft = draftRef.current;
     const preview = previewRef.current;
     const active = toolRef.current;
-    if ((active === "brush" || active === "highlighter") && draft.length > 1) return { id: "preview", kind: active, points: draft, color: "var(--muted)", locked: false };
+    if ((active === "brush" || active === "highlighter") && draft.length > 1) return { id: "preview", kind: active, points: draft, color: newDrawingColor(active), locked: false };
     if (!draft.length || !preview) return null;
     const points = [...draft, preview];
-    if (pointsNeeded(active) >= 2) return { id: "preview", kind: active as Drawing["kind"], points, color: "var(--muted)", locked: false };
+    if (pointsNeeded(active) >= 2) return { id: "preview", kind: active as Drawing["kind"], points, color: newDrawingColor(active as Drawing["kind"]), locked: false };
     return null;
   }
 
@@ -471,7 +486,7 @@ export function DrawingLayer({
     const rectangle = kind === "rect";
     // TradingView-like shapes: purple outline, 80% transparent fill of the same colour; rectangles get a dashed middle line.
     const shape = rectangle || kind === "ellipse" || kind === "circle";
-    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: style?.color ?? (shape ? SHAPE_COLOR : LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37"), fill: style?.fill ?? (shape ? SHAPE_COLOR : undefined), fillOpacity: style?.fillOpacity ?? (shape ? SHAPE_FILL_OPACITY : undefined), width: style?.width ?? (shape ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER, color: SHAPE_COLOR, visible: true }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
+    const drawing: Drawing = { id: crypto.randomUUID(), kind, points, text, color: newDrawingColor(kind), fill: style?.fill ?? (shape ? SHAPE_COLOR : undefined), fillOpacity: style?.fillOpacity ?? (shape ? SHAPE_FILL_OPACITY : undefined), width: style?.width ?? (shape ? 1 : kind === "highlighter" ? 10 : 1.5), dash: style?.dash ?? "solid", borderVisible: style?.borderVisible, fillVisible: style?.fillVisible, center: rectangle ? (style?.center ?? { ...RECTANGLE_CENTER, color: SHAPE_COLOR, visible: true }) : undefined, textStyle: text ? defaultTextStyle() : undefined, locked: false, createdAt: now, updatedAt: now };
     onDrawingsRef.current([...drawingsRef.current, drawing], true);
     draftRef.current = [];
     previewRef.current = null;

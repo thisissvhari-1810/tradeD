@@ -123,6 +123,19 @@ describe("line tools default colour", () => {
   it("creates every Lines-menu tool in dark red unless a default style was saved", () => {
     expect(layer).toContain('export const LINE_COLOR = "#B71C1C";');
     expect(layer).toContain('LINE_KINDS = new Set<string>(["trend", "ray", "infoline", "extended", "angle", "hline", "hray", "vline", "crossline", "channel", "regression"])');
-    expect(layer).toContain('LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37"');
+    expect(layer).toContain('return LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37";');
+    expect(layer).toContain("color: newDrawingColor(kind)");
+  });
+});
+
+describe("placing a trend line", () => {
+  it("shows a ring at each placed anchor and at the cursor end while drawing", () => {
+    expect(layer).toContain('if (drawing.id === "preview" && drawing.kind !== "brush" && drawing.kind !== "highlighter") {');
+    expect(layer).toContain("id: `preview#${index}`, kind: \"handle\"");
+  });
+
+  it("previews in the colour the drawing will have", () => {
+    expect(layer).toContain("color: newDrawingColor(active as Drawing[\"kind\"])");
+    expect(layer).not.toContain('color: "var(--muted)", locked: false');
   });
 });
