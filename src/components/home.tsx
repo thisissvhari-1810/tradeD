@@ -165,11 +165,11 @@ export function Home() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto grid max-w-[1680px] gap-4 p-3 sm:p-4 lg:gap-5 lg:p-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="mx-auto grid max-w-[1680px] gap-4 p-3 sm:p-4 lg:gap-5 lg:p-6 xl:grid-cols-[minmax(0,1fr)_minmax(272px,304px)]">
         <div className="flex min-w-0 flex-col gap-4 lg:gap-5">
           <header className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <p className="eyebrow">{desk.mode === "demo" ? "Practice account" : "Connected account · read only"}</p>
+              <p className="eyebrow">{desk.mode === "demo" ? "Practice account" : "Paper wallet · live prices"}</p>
               <h1 className="mt-1 text-page font-semibold">{firstName ? `Welcome back, ${firstName}` : "Overview"}</h1>
             </div>
             <MarketStatus />
@@ -332,7 +332,7 @@ function PortfolioHero({ state, portfolio, onRetry }: { state: PortfolioState; p
         <span>Closed <span className="num font-medium text-text-2">{portfolio.completedTrades}</span> · <span className="text-profit">{portfolio.winningTrades}W</span> / <span className="text-loss">{portfolio.losingTrades}L</span></span>
         <div className="ml-auto flex gap-2">
           <Link href="/positions" className="inline-flex h-[34px] items-center gap-1.5 rounded-input border border-border bg-elevated px-3.5 text-dense font-semibold text-text shadow-e1 transition-colors hover:border-border-strong hover:bg-hover">Positions</Link>
-          <Link href="/terminal" className="inline-flex h-[34px] items-center gap-1.5 rounded-input bg-primary px-3.5 text-dense font-semibold text-on-primary shadow-e1 transition-colors hover:bg-primary-hover">Trade <ArrowRight className="h-4 w-4" aria-hidden /></Link>
+          <Link href="/chart" className="inline-flex h-[34px] items-center gap-1.5 rounded-input bg-primary px-3.5 text-dense font-semibold text-on-primary shadow-e1 transition-colors hover:bg-primary-hover">Trade <ArrowRight className="h-4 w-4" aria-hidden /></Link>
         </div>
       </div>
       <p className="mt-4 text-micro text-muted">Practice ledger. Demo capital is allocated by an admin. Open-position marks use the latest quote, not the replay cursor.</p>
@@ -552,15 +552,15 @@ function WatchRow({ item, quote, onOpen, onRemove }: { item: List["items"][numbe
   const position = last != null && Number.isFinite(low) && Number.isFinite(high) && high > low ? Math.min(1, Math.max(0, (last - low) / (high - low))) : null;
   const tone = move == null || move.abs === 0 ? "text-muted" : move.abs > 0 ? "text-profit" : "text-loss";
   return (
-    <li className="group flex items-center gap-1 rounded-md transition-colors hover:bg-hover focus-within:bg-hover">
-      <button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md py-2 pl-2 text-left" onClick={onOpen}>
-        <StockLogo symbol={item.symbol} name={item.name} size={32} />
+    <li className="group flex items-center gap-0.5 rounded-md transition-colors hover:bg-hover focus-within:bg-hover">
+      <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md py-1.5 pl-1.5 text-left" onClick={onOpen} title={item.name}>
+        <StockLogo symbol={item.symbol} name={item.name} size={26} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-dense font-semibold text-text">{item.symbol}</span>
-          <span className="block truncate text-micro text-muted">{item.name}</span>
+          <span className="block truncate text-data font-semibold leading-tight text-text">{item.symbol}</span>
+          <span className="block truncate text-[11px] leading-tight text-muted">{item.name}</span>
         </span>
         {position != null ? (
-          <span className="hidden w-10 shrink-0 sm:block" title={`Day range ${low.toFixed(2)} – ${high.toFixed(2)}`}>
+          <span className="hidden w-8 shrink-0 2xl:block" title={`Day range ${low.toFixed(2)} – ${high.toFixed(2)}`}>
             <span className="relative block h-1 rounded-full bg-sunken">
               <span className="absolute top-1/2 h-2 w-0.5 -translate-y-1/2 rounded-full bg-text-2" style={{ left: `calc(${position * 100}% - 1px)` }} />
             </span>
@@ -568,8 +568,8 @@ function WatchRow({ item, quote, onOpen, onRemove }: { item: List["items"][numbe
           </span>
         ) : null}
         <span className="shrink-0 text-right">
-          {quote ? <PriceCell value={last} className="block text-dense font-semibold text-text" /> : <Skeleton className="ml-auto h-4 w-16" />}
-          <span className={cx("num mt-0.5 block whitespace-nowrap text-micro font-medium", tone)}>
+          {quote ? <PriceCell value={last} className="block text-data font-semibold leading-tight text-text" /> : <Skeleton className="ml-auto h-3.5 w-14" />}
+          <span className={cx("num block whitespace-nowrap text-[11px] font-medium leading-tight", tone)}>
             {move ? `${move.abs > 0 ? "▲" : move.abs < 0 ? "▼" : ""} ${signedPercent(move.pct)}` : quote ? "—" : ""}
           </span>
         </span>

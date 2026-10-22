@@ -111,7 +111,6 @@ export function OptionBook({
   orders,
   trades,
   error,
-  onOpenChain,
   onViewChart,
   onExit,
   context = { mode: "demo" },
@@ -141,7 +140,8 @@ export function OptionBook({
   orders: BookOrder[];
   trades: BookTrade[];
   error: string;
-  onOpenChain: () => void;
+  /** Kept for callers; the empty panel no longer shows an Open Option Chain button. */
+  onOpenChain?: () => void;
   onViewChart: (symbol: string) => void;
   onExit: (row: BookPosition) => void;
 }) {
@@ -160,6 +160,7 @@ export function OptionBook({
     return true;
   });
   const highlight = highlightTradeId ? rows.find((row) => row.id === highlightTradeId) ?? null : null;
+  const empty = !replay && options.length === 0 && others.length === 0 && !highlight;
   const metric = replay ? realizedMetric({ replay: true, summary }) : realizedMetric({ replay: false, today: realizedToday });
 
   return (
@@ -169,6 +170,8 @@ export function OptionBook({
         {replay ? <span className="num font-normal normal-case tracking-normal">{replay.date}{replay.cursor == null ? "" : ` · ${clockOf(replay.cursor)} IST`}</span> : null}
       </p>
       {replay ? <SessionHero summary={summary} /> : null}
+      {/* With nothing open (outside replay) the summary would be placeholders only, so it is not shown. */}
+      {empty ? null : <>
       <div className="grid grid-cols-3 gap-x-2 gap-y-1.5 border-b border-border px-3 py-2">
         <Metric label="Open" value={String(options.length)} />
         <Metric label="Position value" value={holdings} />
@@ -188,9 +191,10 @@ export function OptionBook({
           {hiddenCount ? <li>{hiddenCount} position{hiddenCount === 1 ? "" : "s"} from {replay ? "other sessions" : "replay sessions"} {hiddenCount === 1 ? "is" : "are"} not listed here; see Portfolio.</li> : null}
         </ul>
       </details>
-      <div className="flex gap-1 border-b border-border px-2 py-1" role="tablist">
+      </>}
+      <div className="flex h-9 shrink-0 gap-0.5 border-b border-border px-1.5" role="tablist">
         {(["positions", "orders", "history"] as const).map((item) => (
-          <button key={item} type="button" role="tab" aria-selected={tab === item} className={cx("h-8 rounded-full px-3 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", tab === item ? "bg-primary font-semibold text-on-primary" : "text-muted hover:text-text")} onClick={() => setTab(item)}>
+          <button key={item} type="button" role="tab" aria-selected={tab === item} className={cx("relative h-9 px-2.5 text-data font-medium focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", tab === item ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => setTab(item)}>
             {item === "positions" ? "Positions" : item === "orders" ? "Orders" : `Trade history${rows.length ? ` ${rows.length}` : ""}`}
           </button>
         ))}
@@ -201,10 +205,7 @@ export function OptionBook({
           <>
             {highlight ? <ResultCard row={highlight} highlighted onDismiss={onDismissHighlight} /> : null}
             {options.length === 0 ? (
-              <div className="p-3">
-                <p className="font-medium">No open option positions</p>
-                <button type="button" className="mt-2 h-8 rounded-full border border-primary px-3 text-primary hover:bg-primary-soft" onClick={onOpenChain}>Open Option Chain</button>
-              </div>
+              <p className="px-3 py-6 text-center text-data text-muted">No open positions</p>
             ) : options.map((row) => (
               <PositionCard key={row.symbol} row={row} replay={replay} block={exitBlock?.(row) ?? null} onView={replay ? null : () => onViewChart(row.symbol)} onExit={() => onExit(row)} />
             ))}

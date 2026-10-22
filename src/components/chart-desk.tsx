@@ -215,7 +215,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [summaryRequested, setSummaryRequested] = useState(false);
   const [summaryShownFor, setSummaryShownFor] = useState<string | null>(null);
   const closeTicket = useCallback(() => setOrderDraft(null), []);
-  const [sideRail, setSideRail] = useState<"watch" | "positions">("positions");
+  // The chart opens on the watchlist; Positions is one click away (and opens itself after a fill).
+  const [sideRail, setSideRail] = useState<"watch" | "positions">("watch");
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [closedTrades, setClosedTrades] = useState<BookTrade[]>([]);
   const refreshPractice = useRef<() => void>(() => undefined);
@@ -1101,13 +1102,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           />
         ) : null}
         <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "h-11 lg:w-11" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[clamp(17rem,24vw,21rem)]" : "h-64 lg:w-[clamp(16rem,20vw,18rem)]"}`}>
-          <div className="flex items-center gap-1 border-b border-border px-2 py-1">
-            {railCollapsed ? null : (
-              <>
-                <button type="button" className={`rounded-full px-2 py-1 text-xs ${sideRail === "watch" ? "bg-primary font-semibold text-on-primary" : "text-muted"}`} onClick={() => setSideRail("watch")}>Watchlist</button>
-                <button type="button" className={`rounded-full px-2 py-1 text-xs ${sideRail === "positions" ? "bg-primary font-semibold text-on-primary" : "text-muted"}`} onClick={() => setSideRail("positions")}>Positions{practice ? ` ${bookRows.filter((row) => row.contract).length}` : ""}</button>
-              </>
-            )}
+          <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border px-1.5" role="tablist" aria-label="Side panel">
+            {railCollapsed ? null : (["watch", "positions"] as const).map((item) => {
+              const count = item === "positions" && practice ? bookRows.filter((row) => row.quantity > 0).length : 0;
+              return (
+                <button key={item} type="button" role="tab" aria-selected={sideRail === item} className={cx("relative h-10 px-2.5 text-data font-medium transition-colors", sideRail === item ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => setSideRail(item)}>
+                  {item === "watch" ? "Watchlist" : "Positions"}{count > 0 ? <span className="num ml-1 rounded-pill bg-primary-soft px-1.5 text-micro text-primary">{count}</span> : null}
+                </button>
+              );
+            })}
             <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-label={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
           </div>
           {railCollapsed ? null : sideRail === "positions" ? (
@@ -1151,9 +1154,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               const move = moveOf(rowQuote?.last, rowQuote?.previousClose);
               const selected = item.symbol === symbol;
               return (
-                <div key={item.symbol} className={`flex items-center gap-1 border-b border-border pr-1 ${selected ? "bg-elevated" : ""}`}>
-                  <button className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left hover:bg-elevated" onClick={() => selectSymbol(item.symbol)}>
-                    <SymbolTitle symbol={item.symbol} name={item.name} size={28} />
+                <div key={item.symbol} className={`flex items-center gap-0.5 pr-1 transition-colors hover:bg-hover ${selected ? "bg-primary-soft/50" : ""}`}>
+                  <button className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left" onClick={() => selectSymbol(item.symbol)} title={item.name}>
+                    <SymbolTitle symbol={item.symbol} name={item.name} size={24} />
                     <span className="ml-auto shrink-0 text-right">
                       <span className={`num block whitespace-nowrap text-xs ${tone(move?.abs)}`}>{rowQuote ? money(rowQuote.last) : "…"}</span>
                       <span className={`num block whitespace-nowrap text-[10px] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
