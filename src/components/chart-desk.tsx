@@ -221,6 +221,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [closedTrades, setClosedTrades] = useState<BookTrade[]>([]);
   const refreshPractice = useRef<() => void>(() => undefined);
   const [optionView, setOptionView] = useState<OptionChartRequest | null>(null);
+  // Drawings belong to what is charted: the stock, or the option contract when one is open.
+  const drawingStore = optionView ? `${optionView.underlying}|${optionView.expiry}|${optionView.strike}|${optionView.right}` : desk.symbol;
+  const saveTimer = useRef<number | null>(null);
+  const pendingSave = useRef<{ key: string; drawings: Drawing[] } | null>(null);
+  useEffect(() => {
+    flushDrawings();
+    pastRef.current = [];
+    futureRef.current = [];
+    setHistoryTick((value) => value + 1);
+    setDrawings(loadDrawings(drawingStore));
+    // flushDrawings only reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawingStore]);
+  useEffect(() => () => flushDrawings(), []);
   const optionViewRef = useRef<OptionChartRequest | null>(null);
   optionViewRef.current = optionView;
   const [ledger, setLedger] = useState<(LedgerSnapshot & { realizedToday?: string }) | null>(null);
@@ -319,10 +333,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [book, desk.user?.email]);
 
   useEffect(() => {
-    pastRef.current = [];
-    futureRef.current = [];
-    setHistoryTick((value) => value + 1);
-    setDrawings(loadDrawings(symbol));
     if (replay.active) return;
     let stop = false;
     const load = () => {
@@ -470,7 +480,23 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       setHistoryTick((value) => value + 1);
     }
     setDrawings(next);
-    saveDrawings(symbol, next);
+    persistDrawings(next);
+  }
+
+  // Saves are batched: a drag changes the drawing on every pointer move, storage is written once it settles.
+  function persistDrawings(next: Drawing[]) {
+    const key = drawingStore;
+    pendingSave.current = { key, drawings: next };
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(flushDrawings, 300);
+  }
+
+  function flushDrawings() {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const pending = pendingSave.current;
+    pendingSave.current = null;
+    if (pending) saveDrawings(pending.key, pending.drawings);
   }
 
   function applyVisibility(action: VisibilityAction) {
@@ -513,7 +539,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     futureRef.current.push(drawingsRef.current);
     setHistoryTick((value) => value + 1);
     setDrawings(previous);
-    saveDrawings(symbol, previous);
+    persistDrawings(previous);
   }
 
   function redoDrawings() {
@@ -522,7 +548,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     pastRef.current.push(drawingsRef.current);
     setHistoryTick((value) => value + 1);
     setDrawings(next);
-    saveDrawings(symbol, next);
+    persistDrawings(next);
   }
 
   // Undo / redo read the latest functions (they save under the current symbol).
@@ -982,7 +1008,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         {objectsOpen ? (
           <aside className="max-h-48 shrink-0 overflow-auto border-b border-border bg-panel lg:max-h-none lg:w-52 lg:border-b-0 lg:border-r">
             <p className="px-3 pt-2 text-[11px] font-semibold text-muted">Drawings</p>
-            <DrawingList drawings={drawings} selectedId={selectedDrawing} onSelect={setSelectedDrawing} onChange={rememberDrawings} />
+            <DrawingList drawings={drawings} selectedId={selectedDrawing} onSelect={setSelectedDrawing} onChange={rememberDrawings} lockAll={lockAll} onClearAll={() => removeObjects("drawings")} />
           </aside>
         ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">

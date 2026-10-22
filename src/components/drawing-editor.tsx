@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CHART_SPANS, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
 import { ColorPicker } from "@/components/color-picker";
 import { useDesk } from "@/components/shell";
@@ -147,7 +147,7 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
         {tab === "Coordinates" ? (
           <div className="mt-3 grid gap-3 text-xs">
             {drawing.points.map((point, index) => (
-              <fieldset key={`${point.time}-${index}`} className="grid gap-2 rounded-xl border border-border p-2">
+              <fieldset key={index} className="grid gap-2 rounded-xl border border-border p-2">
                 <legend>Anchor {index + 1}</legend>
                 <label className="grid gap-1">Time, exchange local
                   <input type="datetime-local" value={toDatetimeLocal(point.time)} onChange={(event) => {
@@ -197,24 +197,59 @@ export function DrawingList({
   selectedId,
   onSelect,
   onChange,
+  lockAll = false,
+  onClearAll,
 }: {
   drawings: Drawing[];
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   onChange: (next: Drawing[], record?: boolean) => void;
+  lockAll?: boolean;
+  onClearAll?: () => void;
 }) {
-  if (!drawings.length) return <p className="p-3 text-xs text-muted">No drawings on this symbol.</p>;
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  // Keep the row of the drawing selected on the chart in view.
+  useEffect(() => {
+    if (!selectedId) return;
+    listRef.current?.querySelector(`[data-row="${CSS.escape(selectedId)}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
+  if (!drawings.length) return <p className="p-3 text-xs text-muted">No drawings on this chart.</p>;
+  const update = (id: string, change: Partial<Drawing>) => onChange(drawings.map((item) => item.id === id ? { ...item, ...change, updatedAt: Date.now() } : item), true);
   return (
-    <ul className="max-h-72 overflow-auto p-1 text-xs">
-      {drawings.map((drawing) => (
-        <li key={drawing.id} className={`flex items-center gap-1 rounded-lg px-1 py-1 ${selectedId === drawing.id ? "bg-primary/15" : ""}`}>
-          <button type="button" className="min-w-0 flex-1 truncate text-left" onClick={() => onSelect(drawing.id)}>{drawing.name || labelFor(drawing.kind)}</button>
-          <button type="button" title={drawing.hidden ? "Show" : "Hide"} className="px-1 text-muted" onClick={() => onChange(drawings.map((item) => item.id === drawing.id ? { ...item, hidden: !item.hidden } : item), true)}>{drawing.hidden ? "Show" : "Hide"}</button>
-          <button type="button" title={drawing.locked ? "Unlock" : "Lock"} className="px-1 text-muted" onClick={() => onChange(drawings.map((item) => item.id === drawing.id ? { ...item, locked: !item.locked } : item), true)}>{drawing.locked ? "Unlock" : "Lock"}</button>
-          <button type="button" title="Delete" className="px-1 text-loss" onClick={() => onChange(drawings.filter((item) => item.id !== drawing.id), true)}>Delete</button>
-        </li>
-      ))}
-    </ul>
+    <div className="text-xs">
+      <ul ref={listRef} className="max-h-72 overflow-auto p-1">
+        {drawings.map((drawing) => {
+          const locked = drawing.locked || lockAll;
+          return (
+            <li key={drawing.id} data-row={drawing.id} className={`flex items-center gap-1 rounded-lg px-1 py-1 ${selectedId === drawing.id ? "bg-primary/15" : ""} ${drawing.hidden ? "opacity-60" : ""}`}>
+              {renaming === drawing.id ? (
+                <input
+                  autoFocus
+                  className="h-6 min-w-0 flex-1 px-1.5 py-0 text-xs"
+                  defaultValue={drawing.name || labelFor(drawing.kind)}
+                  aria-label="Drawing name"
+                  maxLength={60}
+                  onBlur={(event) => { update(drawing.id, { name: event.target.value.trim() || undefined }); setRenaming(null); }}
+                  onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") setRenaming(null); }}
+                />
+              ) : (
+                <button type="button" className="min-w-0 flex-1 truncate text-left" title="Select. Double-click to rename." onClick={() => onSelect(drawing.hidden ? null : drawing.id)} onDoubleClick={() => setRenaming(drawing.id)}>{drawing.name || labelFor(drawing.kind)}</button>
+              )}
+              <button type="button" title={drawing.hidden ? "Show" : "Hide"} className="px-1 text-muted hover:text-text" onClick={() => update(drawing.id, { hidden: !drawing.hidden })}>{drawing.hidden ? "Show" : "Hide"}</button>
+              <button type="button" title={lockAll ? "All drawings are locked" : drawing.locked ? "Unlock" : "Lock"} disabled={lockAll} className="px-1 text-muted hover:text-text disabled:opacity-40" onClick={() => update(drawing.id, { locked: !drawing.locked })}>{drawing.locked ? "Unlock" : "Lock"}</button>
+              <button type="button" title="Duplicate" className="px-1 text-muted hover:text-text" onClick={() => onChange(applyListAction(drawings, drawing.id, "duplicate"), true)}>Copy</button>
+              <button type="button" title={locked ? "Unlock to delete" : "Delete"} disabled={locked} className="px-1 text-loss disabled:opacity-40" onClick={() => onChange(drawings.filter((item) => item.id !== drawing.id), true)}>Delete</button>
+            </li>
+          );
+        })}
+      </ul>
+      {onClearAll ? (
+        <div className="flex justify-end border-t border-border px-2 py-1.5">
+          <button type="button" className="rounded px-2 py-1 text-loss hover:bg-loss/10 disabled:opacity-40" disabled={lockAll} onClick={onClearAll}>Remove all…</button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

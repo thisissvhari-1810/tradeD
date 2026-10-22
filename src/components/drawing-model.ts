@@ -104,11 +104,32 @@ const STORAGE_VERSION = 1;
 export function pointsNeeded(tool: DrawTool) {
   if (tool === "cursor" || tool === "zoom" || tool === "eraser") return 0;
   if (tool === "xabcd" || tool === "headshoulders" || tool === "elliott") return 5;
-  if (tool === "channel" || tool === "triangle" || tool === "long" || tool === "short" || tool === "rrect" || tool === "arc" || tool === "curve" || tool === "pitchfork" || tool === "schiff" || tool === "modschiff" || tool === "fibchannel" || tool === "elliottabc") return 3;
+  if (tool === "fibext" || tool === "channel" || tool === "triangle" || tool === "long" || tool === "short" || tool === "rrect" || tool === "arc" || tool === "curve" || tool === "pitchfork" || tool === "schiff" || tool === "modschiff" || tool === "fibchannel" || tool === "elliottabc") return 3;
   if (tool === "dcurve") return 4;
   if (tool === "path" || tool === "polyline" || tool === "brush" || tool === "highlighter") return Infinity;
   if (tool === "hline" || tool === "hray" || tool === "vline" || tool === "crossline" || tool === "text" || tool === "note" || tool === "price" || tool === "callout" || tool === "marker" || tool === "avwap" || tool === "arrowmark" || tool === "arrowup" || tool === "arrowdown" || tool === "arrowleft" || tool === "arrowright") return 1;
   return 2;
+}
+
+/** Kinds whose lines span the whole chart. With a drawing tool active they never steal the press. */
+export const FULL_SPAN_KINDS = new Set<string>(["hline", "vline", "crossline", "fib", "fibext", "fibtime"]);
+
+/** Drops consecutive identical anchors (a double-click lands the last vertex twice). */
+export function dedupePoints(points: Point[]) {
+  return points.filter((point, index) => index === 0 || point.time !== points[index - 1].time || point.price !== points[index - 1].price);
+}
+
+/** Long / short: stop on the losing side of entry, target on the winning side, whichever order they were clicked. */
+export function positionLevels(kind: "long" | "short", entry: number, a: number, b: number) {
+  const low = Math.min(a, b);
+  const high = Math.max(a, b);
+  return kind === "long" ? { stop: low, target: high } : { stop: high, target: low };
+}
+
+/** Trend-based fib extension: levels measured from the third anchor by the first leg. 2-anchor drawings keep the old form. */
+export function fibExtensionPrice(points: Point[], ratio: number) {
+  if (points.length >= 3) return points[2].price + (points[1].price - points[0].price) * ratio;
+  return points[0].price + (points[1].price - points[0].price) * ratio;
 }
 
 export function isHexColor(value: string) {
@@ -309,7 +330,7 @@ export function shiftDrawing(drawing: Drawing, dt: number, dp: number, pointInde
   if (drawing.locked) return drawing;
   const move = (point: Point, index: number) => {
     if (pointIndex != null && index !== pointIndex) return point;
-    if (drawing.kind === "hline" || drawing.kind === "hray") return { time: point.time, price: point.price + dp };
+    if (drawing.kind === "hline") return { time: point.time, price: point.price + dp };
     if (drawing.kind === "vline") return { time: point.time + dt, price: point.price };
     return { time: point.time + dt, price: point.price + dp };
   };

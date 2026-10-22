@@ -5,7 +5,7 @@ import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "l
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
-import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, drawingVisible, duplicateDrawing, fibLevelSet, fibTimes, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
+import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, positionLevels, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
 type Bar = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
@@ -46,7 +46,7 @@ export function DrawingLayer({
   ready = 0,
   span = "1d",
   focusId,
-  stay = true,
+  stay = false,
   lockAll = false,
 }: {
   chartRef: { current: IChartApi | null };
@@ -160,7 +160,7 @@ export function DrawingLayer({
         const at = xy(drawing.points[0]);
         if (at) {
           next.push({ id: drawing.id, kind: "dot", x: at.x, y: at.y, color: drawing.color, selected: active });
-          if (drawing.text) next.push({ id: `${drawing.id}-glyph`, kind: "text", x: at.x + 8, y: at.y + 4, text: drawing.text, color: drawing.color, selected: active });
+          if (drawing.text) next.push({ id: `${drawing.id}-glyph`, kind: "text", x: at.x + 8, y: at.y + 4, text: drawing.text, color: drawing.textStyle?.color ?? drawing.color, selected: active, size: drawing.textStyle?.size, bold: drawing.textStyle?.bold, italic: drawing.textStyle?.italic });
         }
       } else if (drawing.kind === "range" && drawing.points.length >= 2) {
         pushRange(next, drawing, xy, candles, active, hostRef.current);
@@ -171,10 +171,9 @@ export function DrawingLayer({
         }).join(" ");
         if (d) next.push({ id: drawing.id, kind: "poly", d, color: drawing.color, selected: active, opacity: drawing.kind === "highlighter" ? 0.35 : 1 });
       } else if ((drawing.kind === "fib" || drawing.kind === "fibext") && drawing.points.length >= 2) {
-        const [start, end] = drawing.points;
         fibLevelSet(drawing).forEach((level, index) => {
           if (!level.visible) return;
-          const price = start.price + (end.price - start.price) * level.ratio;
+          const price = fibExtensionPrice(drawing.points, level.ratio);
           const y = series.priceToCoordinate(price);
           if (y != null) next.push({ id: `${drawing.id}-${level.ratio}`, kind: "hline", y, color: levelColor(drawing, index), label: `${(level.ratio * 100).toFixed(1)}% ${price.toFixed(2)}`, selected: active });
         });
@@ -205,10 +204,15 @@ export function DrawingLayer({
       } else if (drawing.kind === "vprofile" && drawing.points.length >= 2) {
         pushProfile(next, drawing, candles, xy);
       } else if ((drawing.kind === "ray" || drawing.kind === "extended") && drawing.points.length >= 2) {
-        const forward = farPoint(drawing.points[0], drawing.points[1], 40);
-        const backward = farPoint(drawing.points[1], drawing.points[0], 40);
-        if (drawing.kind === "extended") pushSegment(next, drawing.id, backward, forward, drawing.color, active, xy, drawing.dash === "dashed");
-        else pushSegment(next, drawing.id, drawing.points[0], forward, drawing.color, active, xy, drawing.dash === "dashed");
+        const a = xy(drawing.points[0]);
+        const b = xy(drawing.points[1]);
+        const width = scale.width();
+        const height = hostRef.current?.clientHeight ?? 0;
+        if (a && b && width > 0 && height > 0) {
+          const end = toEdge(a, b, width, height);
+          const start = drawing.kind === "extended" ? toEdge(b, a, width, height) : a;
+          next.push({ id: drawing.id, kind: "segment", x1: start.x, y1: start.y, x2: end.x, y2: end.y, color: drawing.color, selected: active, dash: drawing.dash === "dashed" });
+        }
       } else if (drawing.kind === "vline" && drawing.points[0]) {
         const at = xy(drawing.points[0]);
         if (at) next.push({ id: drawing.id, kind: "vline", x: at.x, color: drawing.color, selected: active });
@@ -291,9 +295,21 @@ export function DrawingLayer({
       if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
       if (active && drawing.id !== "preview") {
         if ((drawing.kind === "rect" || drawing.kind === "ellipse") && drawing.points.length >= 2) pushBoxHandles(next, drawing, xy);
-        else drawing.points.forEach((point, index) => {
-          const at = xy(point);
-          if (at) next.push({ id: `${drawing.id}#${index}`, kind: "handle", x: at.x, y: at.y, selected: true });
+        else if (drawing.kind === "brush" || drawing.kind === "highlighter") {
+          // A stroke has hundreds of samples: two handles, both of which move the whole stroke.
+          const first = xy(drawing.points[0]);
+          const last = xy(drawing.points[drawing.points.length - 1]);
+          if (first) next.push({ id: `${drawing.id}#move`, kind: "handle", x: first.x, y: first.y, selected: true });
+          if (last) next.push({ id: `${drawing.id}#move-end`, kind: "handle", x: last.x, y: last.y, selected: true });
+        } else drawing.points.forEach((point, index) => {
+          // The channel's third handle sits on the parallel line it controls.
+          const spot = drawing.kind === "channel" && index === 2 && drawing.points.length >= 3
+            ? { time: (drawing.points[0].time + drawing.points[1].time) / 2, price: (drawing.points[0].price + drawing.points[1].price) / 2 + (point.price - drawing.points[0].price) }
+            : point;
+          const at = xy(spot);
+          // The circle's centre handle moves the circle; the edge handle sets the radius.
+          const id = drawing.kind === "circle" && index === 0 ? `${drawing.id}#move` : `${drawing.id}#${index}`;
+          if (at) next.push({ id, kind: "handle", x: at.x, y: at.y, selected: true });
         });
       }
     }
@@ -305,6 +321,7 @@ export function DrawingLayer({
     const draft = draftRef.current;
     const preview = previewRef.current;
     const active = toolRef.current;
+    if ((active === "brush" || active === "highlighter") && draft.length > 1) return { id: "preview", kind: active, points: draft, color: "var(--muted)", locked: false };
     if (!draft.length || !preview) return null;
     const points = [...draft, preview];
     if (pointsNeeded(active) >= 2) return { id: "preview", kind: active as Drawing["kind"], points, color: "var(--muted)", locked: false };
@@ -343,8 +360,8 @@ export function DrawingLayer({
         const item = current.find((drawing) => drawing.id === id);
         if (item && !item.locked && !lockAllRef.current) onDrawingsRef.current(current.filter((drawing) => drawing.id !== id), true);
         setSelected(null);
-      } else if (!lockAllRef.current && window.confirm("Remove all drawings for this symbol? Orders and balances stay.")) {
-        onDrawingsRef.current([], true);
+      } else if (!lockAllRef.current && window.confirm("Remove all drawings for this symbol? Locked drawings, orders and balances stay.")) {
+        onDrawingsRef.current(current.filter((drawing) => drawing.locked), true);
       }
     } else if (command.name === "lock") {
       const id = selectedRef.current;
@@ -395,6 +412,8 @@ export function DrawingLayer({
       if (event.key === "Escape") {
         setMenu(null);
         measureDrag.current = null;
+        shapeDrag.current = null;
+        brushing.current = null;
         draftRef.current = [];
         previewRef.current = null;
         setSelected(null);
@@ -416,7 +435,12 @@ export function DrawingLayer({
     return () => window.removeEventListener("keydown", onKey);
   }, [enabled]);
 
-  function commit(points: Point[], kind: Drawing["kind"] = toolRef.current as Drawing["kind"]) {
+  function commit(raw: Point[], kind: Drawing["kind"] = toolRef.current as Drawing["kind"]) {
+    let points = kind === "path" || kind === "polyline" || kind === "brush" || kind === "highlighter" ? dedupePoints(raw) : raw;
+    if ((kind === "long" || kind === "short") && points.length >= 3) {
+      const { stop, target } = positionLevels(kind, points[0].price, points[1].price, points[2].price);
+      points = [points[0], { ...points[1], price: stop }, { ...points[2], price: target }];
+    }
     const typed = annotationRef.current.trim();
     const text = kind === "price" ? (typed || points[0]?.price.toFixed(2) || "") : kind === "marker" ? typed : (typed || (kind === "text" || kind === "note" || kind === "callout" ? "Note" : ""));
     const style = preferredTemplate(kind);
@@ -434,7 +458,7 @@ export function DrawingLayer({
     if (!stayRef.current) onToolRef.current("cursor");
   }
 
-  function read(event: { clientX: number; clientY: number }): Point | null {
+  function read(event: { clientX: number; clientY: number }, magnetOn = true): Point | null {
     const chart = chartRef.current;
     const series = seriesRef.current;
     const host = hostRef.current;
@@ -445,7 +469,7 @@ export function DrawingLayer({
     const price = series.coordinateToPrice(y);
     const time = screenXToTime((pixel) => chart.timeScale().coordinateToLogical(pixel), candles, x);
     if (price == null || time == null) return null;
-    const mode = magnetRef.current;
+    const mode = magnetOn ? magnetRef.current : "off";
     if (mode === "off" || !candles.length) return { time, price };
     const bar = candles.reduce((best, candle) => Math.abs(candle.time - time) < Math.abs(best.time - time) ? candle : best);
     const snap = [bar.open, bar.high, bar.low, bar.close].reduce((best, value) => Math.abs(value - price) < Math.abs(best - price) ? value : best);
@@ -572,6 +596,7 @@ export function DrawingLayer({
       const to = Math.max(brushing.current[0].time, point.time);
       if (to > from) chartRef.current.timeScale().setVisibleRange({ from: from as UTCTimestamp, to: to as UTCTimestamp });
       brushing.current = null;
+      if (!stayRef.current) onToolRef.current("cursor");
       return;
     }
     brushing.current = null;
@@ -599,6 +624,9 @@ export function DrawingLayer({
     const drawingTool = toolRef.current !== "cursor" && toolRef.current !== "eraser";
     // Mid-drawing (second click of a trend line, a path, a brush stroke): the press belongs to the new drawing.
     if (drawingTool && (draftRef.current.length > 0 || shapeDrag.current || brushing.current || measureDrag.current)) return;
+    // Lines that span the whole chart (horizontal, vertical, fib levels) would block most of it: with a tool
+    // active only their handles grab; anywhere else on them starts the new drawing.
+    if (drawingTool && FULL_SPAN_KINDS.has(drawing.kind) && hash < 0) return;
     event.stopPropagation();
     event.preventDefault();
     pickedAt.current = event.timeStamp;
@@ -617,12 +645,13 @@ export function DrawingLayer({
     setSelected(realId);
     onSelectRef.current?.(realId);
     if (isLocked(drawing) || toolRef.current !== "cursor") return;
-    const origin = read(event);
+    const anchorEdit = isBoxHandle(suffix) || Number.isFinite(pointIndex);
+    const origin = read(event, anchorEdit);
     if (!origin) return;
     const snapshot = drawing.points.map((point) => ({ ...point }));
     let saved = false;
     const move = (ev: PointerEvent) => {
-      const now = read(ev);
+      const now = read(ev, anchorEdit);
       if (!now) return;
       const shifted = isBoxHandle(suffix) && (drawing.kind === "rect" || drawing.kind === "ellipse")
         ? resizeBox({ ...drawing, points: snapshot }, suffix, now)
@@ -882,7 +911,11 @@ export function DrawingLayer({
           <ContextItem label="Remove" danger disabled={isLocked(menuDrawing)} onClick={() => { removeDrawing(menuDrawing.id); setMenu(null); }} />
         </div>
       ) : null}
-      {editorOpen && selectedDrawing ? <DrawingProperties drawing={selectedDrawing} onChange={(next) => onDrawingsRef.current(drawingsRef.current.map((item) => item.id === next.id ? next : item), true)} onClose={() => setEditorOpen(false)} /> : null}
+      {editorOpen && selectedDrawing ? <DrawingProperties drawing={selectedDrawing} onChange={(next) => {
+        const item = drawingsRef.current.find((drawing) => drawing.id === next.id);
+        if (!item || (isLocked(item) && next.locked === item.locked && next.hidden === item.hidden)) return;
+        onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === next.id ? next : drawing), true);
+      }} onClose={() => setEditorOpen(false)} /> : null}
     </div>
   );
 }
@@ -1005,6 +1038,20 @@ function pushRange(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: n
   marks.push({ id: `${drawing.id}-card`, kind: "card", x: card.x, y: card.y, width: card.width, height: card.height, lines, color: tone, selected });
 }
 
+/** Where the ray from a through b leaves the chart area (at least b itself). */
+function toEdge(a: { x: number; y: number }, b: { x: number; y: number }, width: number, height: number) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (!dx && !dy) return b;
+  let t = Infinity;
+  if (dx > 0) t = Math.min(t, (width - a.x) / dx);
+  else if (dx < 0) t = Math.min(t, -a.x / dx);
+  if (dy > 0) t = Math.min(t, (height - a.y) / dy);
+  else if (dy < 0) t = Math.min(t, -a.y / dy);
+  if (!Number.isFinite(t) || t < 1) t = 1;
+  return { x: a.x + dx * t, y: a.y + dy * t };
+}
+
 function farPoint(from: Point, to: Point, times: number): Point {
   return { time: to.time + (to.time - from.time) * times, price: to.price + (to.price - from.price) * times };
 }
@@ -1105,8 +1152,9 @@ function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x
   const other = drawing.points[1];
   const third = drawing.points[2];
   const span = Math.abs(other.price - entry.price) || Math.abs(entry.price) * 0.01;
-  const stop = third ? other.price : drawing.kind === "long" ? (other.price >= entry.price ? entry.price - span : other.price) : (other.price <= entry.price ? entry.price + span : other.price);
-  const target = third ? third.price : drawing.kind === "long" ? (other.price >= entry.price ? other.price : entry.price + span) : (other.price <= entry.price ? other.price : entry.price - span);
+  const ordered = third ? positionLevels(drawing.kind === "long" ? "long" : "short", entry.price, other.price, third.price) : null;
+  const stop = ordered ? ordered.stop : drawing.kind === "long" ? (other.price >= entry.price ? entry.price - span : other.price) : (other.price <= entry.price ? entry.price + span : other.price);
+  const target = ordered ? ordered.target : drawing.kind === "long" ? (other.price >= entry.price ? other.price : entry.price + span) : (other.price <= entry.price ? other.price : entry.price - span);
   const stats = positionStats(entry.price, stop, target);
   const leftTime = Math.min(...drawing.points.map((point) => point.time));
   const rightTime = Math.max(...drawing.points.map((point) => point.time));

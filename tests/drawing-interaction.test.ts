@@ -113,3 +113,50 @@ describe("colour panels open beside the drawing", () => {
     expect(bar).toContain('<Pop flip={flip} beside={beside}>');
   });
 });
+
+describe("engine fixes from the tool audit", () => {
+  it("lets a horizontal ray move in time, but keeps a horizontal line price-only", async () => {
+    const { shiftDrawing } = await import("@/components/drawing-model");
+    const base = { id: "h", points: [{ time: 100, price: 50 }], color: "#fff", locked: false };
+    expect(shiftDrawing({ ...base, kind: "hray" }, 60, 5).points[0]).toEqual({ time: 160, price: 55 });
+    expect(shiftDrawing({ ...base, kind: "hline" }, 60, 5).points[0]).toEqual({ time: 100, price: 55 });
+  });
+
+  it("measures a fib extension from the third anchor by the first leg", async () => {
+    const { fibExtensionPrice, pointsNeeded } = await import("@/components/drawing-model");
+    expect(pointsNeeded("fibext")).toBe(3);
+    const points = [{ time: 1, price: 100 }, { time: 2, price: 150 }, { time: 3, price: 120 }];
+    expect(fibExtensionPrice(points, 1)).toBe(170);
+    expect(fibExtensionPrice(points, 0.618)).toBeCloseTo(150.9);
+    expect(fibExtensionPrice(points.slice(0, 2), 1)).toBe(150);
+  });
+
+  it("puts long / short stop and target on the right side whatever the click order", async () => {
+    const { positionLevels } = await import("@/components/drawing-model");
+    expect(positionLevels("long", 100, 110, 95)).toEqual({ stop: 95, target: 110 });
+    expect(positionLevels("short", 100, 95, 110)).toEqual({ stop: 110, target: 95 });
+  });
+
+  it("drops the duplicate vertex a double-click adds", async () => {
+    const { dedupePoints } = await import("@/components/drawing-model");
+    expect(dedupePoints([{ time: 1, price: 1 }, { time: 2, price: 2 }, { time: 2, price: 2 }])).toHaveLength(2);
+  });
+
+  it("draws brush strokes live, extends rays to the edge, and does not let full-width lines steal a press", () => {
+    expect(layer).toContain('if ((active === "brush" || active === "highlighter") && draft.length > 1)');
+    expect(layer).toContain("function toEdge(");
+    expect(layer).toContain("FULL_SPAN_KINDS.has(drawing.kind) && hash < 0");
+    expect(layer).toContain("stay = false,");
+  });
+
+  it("keeps locked drawings when clearing, and in the settings dialog", () => {
+    expect(layer).toContain("onDrawingsRef.current(current.filter((drawing) => drawing.locked), true);");
+    expect(layer).toContain("isLocked(item) && next.locked === item.locked && next.hidden === item.hidden");
+  });
+
+  it("stores option-contract drawings under the contract and batches saves", () => {
+    expect(desk).toContain("const drawingStore = optionView ?");
+    expect(desk).toContain("saveTimer.current = window.setTimeout(flushDrawings, 300);");
+    expect(desk).not.toContain("saveDrawings(symbol,");
+  });
+});

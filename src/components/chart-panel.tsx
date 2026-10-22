@@ -93,7 +93,7 @@ export function ChartPanel({
   focusToken = 0,
   references = [],
   paint,
-  stay = true,
+  stay = false,
   lockAll = false,
   cursorStyle = "cross",
 }: {
