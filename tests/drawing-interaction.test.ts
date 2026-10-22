@@ -100,3 +100,16 @@ describe("drawing settings dialog", () => {
     expect(layer).toContain("{ ...RECTANGLE_CENTER, color: SHAPE_COLOR, visible: true }");
   });
 });
+
+describe("colour panels open beside the drawing", () => {
+  const bar = readFileSync(join(process.cwd(), "src/components/drawing-edit-bar.tsx"), "utf8");
+
+  it("passes the drawing's outline to the style bar", () => {
+    expect(layer).toContain("box={shapeBox(handles)}");
+  });
+
+  it("opens right of the shape, else left, else under the bar", () => {
+    expect(bar).toContain("host.clientWidth - box.right >= room ? box.right + PANEL_GAP : box.left >= room ? box.left - PANEL_GAP - PANEL_WIDTH : null");
+    expect(bar).toContain('<Pop flip={flip} beside={beside}>');
+  });
+});

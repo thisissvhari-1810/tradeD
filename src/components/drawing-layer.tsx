@@ -860,6 +860,7 @@ export function DrawingLayer({
           globalLock={lockAll}
           at={editBar}
           flip={editBar.y > hostSize.height / 2}
+          box={shapeBox(handles)}
           onPatch={patchSelected}
           onDelete={() => removeDrawing(selectedDrawing.id)}
           onToggleLock={() => onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === selectedDrawing.id ? { ...drawing, locked: !drawing.locked } : drawing), true)}
@@ -901,6 +902,14 @@ function handleCursor(id: string) {
   if (name === "ne" || name === "sw") return "nesw-resize";
   if (name === "nw" || name === "se") return "nwse-resize";
   return "move";
+}
+
+/** The selected drawing's outline, from its handles, in chart-area pixels. */
+function shapeBox(handles: Array<{ x: number; y: number }>) {
+  if (!handles.length) return null;
+  const xs = handles.map((handle) => handle.x);
+  const ys = handles.map((handle) => handle.y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
 }
 
 function placeEditBar(handles: Array<{ x: number; y: number }>, hostWidth: number) {

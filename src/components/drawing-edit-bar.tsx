@@ -11,6 +11,13 @@ export type EditAction = "duplicate" | "forward" | "backward" | "hide";
 
 const TEXT_KINDS = new Set<Drawing["kind"]>(["text", "note", "price", "callout", "marker"]);
 const FILL_KINDS = new Set<Drawing["kind"]>(["rect", "ellipse", "circle"]);
+/** Colour panel size, used to open it beside the drawing instead of over it. */
+const PANEL_WIDTH = 232;
+const PANEL_HEIGHT = 300;
+const PANEL_GAP = 12;
+
+export type ShapeBox = { left: number; top: number; right: number; bottom: number };
+
 const DASHES: Array<{ id: LineDash; label: string; pattern?: string }> = [
   { id: "solid", label: "Solid" },
   { id: "dashed", label: "Dashed", pattern: "6 4" },
@@ -23,6 +30,7 @@ export function DrawingEditBar({
   globalLock,
   at,
   flip,
+  box = null,
   onPatch,
   onDelete,
   onToggleLock,
@@ -34,6 +42,8 @@ export function DrawingEditBar({
   globalLock: boolean;
   at: { x: number; y: number };
   flip: boolean;
+  /** The selected drawing's outline in chart-area pixels. Colour panels open to its right or left. */
+  box?: ShapeBox | null;
   onPatch: (patch: Partial<Drawing>) => void;
   onDelete: () => void;
   onToggleLock: () => void;
@@ -43,6 +53,7 @@ export function DrawingEditBar({
   const [open, setOpen] = useState<Popover>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [templates, setTemplates] = useState<DrawingTemplate[]>([]);
+  const [beside, setBeside] = useState<{ left: number; top: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
   const textKind = TEXT_KINDS.has(drawing.kind);
@@ -60,12 +71,29 @@ export function DrawingEditBar({
     return () => window.removeEventListener("pointerdown", close);
   }, [open]);
 
+  /** Places a colour panel next to the drawing (right first, then left) so the shape stays visible while choosing. */
+  function placeBeside() {
+    const bar = barRef.current;
+    const host = bar?.offsetParent as HTMLElement | null;
+    if (!bar || !host || !box) return null;
+    const room = PANEL_WIDTH + PANEL_GAP + 8;
+    const x = host.clientWidth - box.right >= room ? box.right + PANEL_GAP : box.left >= room ? box.left - PANEL_GAP - PANEL_WIDTH : null;
+    if (x == null) return null;
+    const y = Math.max(8, Math.min(box.top, host.clientHeight - PANEL_HEIGHT - 8));
+    // The panel is positioned inside the bar, so convert from chart-area pixels to bar-relative pixels.
+    const hostRect = host.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect();
+    return { left: hostRect.left + x - barRect.left, top: hostRect.top + y - barRect.top };
+  }
+
   function toggle(next: Exclude<Popover, null>) {
     if (next === "more") setTemplates(loadTemplates().filter((template) => template.kind === drawing.kind));
+    setBeside(next === "line" || next === "fill" || next === "text" ? placeBeside() : null);
     setOpen((current) => (current === next ? null : next));
   }
 
   function onGripDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    setOpen(null);
     drag.current = { px: event.clientX, py: event.clientY, x: offset.x, y: offset.y };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -149,7 +177,7 @@ export function DrawingEditBar({
       <Control label="More" expanded={open === "more"} onClick={() => toggle("more")}><MoreHorizontal className="h-4 w-4" aria-hidden /></Control>
 
       {open === "line" ? (
-        <Pop flip={flip}>
+        <Pop flip={flip} beside={beside}>
           <ColorPanel
             value={drawing.color}
             opacity={textKind ? undefined : drawing.borderOpacity ?? 1}
@@ -159,7 +187,7 @@ export function DrawingEditBar({
         </Pop>
       ) : null}
       {open === "fill" ? (
-        <Pop flip={flip}>
+        <Pop flip={flip} beside={beside}>
           <ColorPanel
             value={drawing.fill || drawing.color}
             opacity={drawing.fillOpacity ?? 0.13}
@@ -171,7 +199,7 @@ export function DrawingEditBar({
         </Pop>
       ) : null}
       {open === "text" ? (
-        <Pop flip={flip}>
+        <Pop flip={flip} beside={beside}>
           <ColorPanel value={textColor} onColor={(color) => onPatch({ textStyle: { ...(drawing.textStyle ?? { size: 12, bold: false, italic: false, align: "center", valign: "middle", visible: true, color }), color } })} />
         </Pop>
       ) : null}
@@ -240,7 +268,14 @@ function ColorGlyph({ color, kind }: { color: string | null; kind: "line" | "fil
   );
 }
 
-function Pop({ flip, menu, align = "left", children }: { flip: boolean; menu?: boolean; align?: "left" | "right"; children: ReactNode }) {
+function Pop({ flip, menu, align = "left", beside, children }: { flip: boolean; menu?: boolean; align?: "left" | "right"; beside?: { left: number; top: number } | null; children: ReactNode }) {
+  if (beside) {
+    return (
+      <div role="dialog" aria-label="Choose color" className="surface-overlay absolute z-40 w-[232px] rounded-lg p-1.5" style={{ left: beside.left, top: beside.top }}>
+        {children}
+      </div>
+    );
+  }
   return (
     <div role={menu ? "menu" : "dialog"} aria-label={menu ? "Options" : "Choose color"} className={cx("surface-overlay absolute z-40 rounded-lg p-1.5", flip ? "bottom-full mb-1.5" : "top-full mt-1.5", align === "right" ? "right-0" : "left-0", menu ? "min-w-44" : "w-[232px]")}>
       {children}
