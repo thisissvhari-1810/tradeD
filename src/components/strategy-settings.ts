@@ -11,6 +11,8 @@ export type StrategySettings = {
   enabled: boolean;
   /** candles: box 1 from the session before the previous day to today, box 2 one session right (like the manual drawing). session: today 09:15-15:30. */
   boxSpan: "candles" | "session";
+  /** none: box B keeps box A's horizontal coordinates (only moved vertically). session: also one session right. */
+  cloneShift: "none" | "session";
   closeBox: StrategyBox;
   openBox: StrategyBox;
   high: StrategyLevel;
@@ -22,6 +24,7 @@ const KEY = "td-strategy";
 export const STRATEGY_DEFAULTS: StrategySettings = {
   enabled: false,
   boxSpan: "candles",
+  cloneShift: "none",
   closeBox: { border: "#7E22CE", fill: "#A855F7", width: 2, opacity: 0.15, dash: "solid", visible: true, mid: { color: "#7E22CE", width: 2, dash: "dashed", visible: true } },
   openBox: { border: "#C2410C", fill: "#F97316", width: 2, opacity: 0.12, dash: "solid", visible: true, mid: { color: "#C2410C", width: 2, dash: "dashed", visible: true } },
   high: { color: "#15803D", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
@@ -79,6 +82,7 @@ export function parseStrategySettings(raw: string | null, legacyOn = false): Str
   return {
     enabled: flag(row.enabled, legacyOn),
     boxSpan: row.boxSpan === "session" ? "session" : "candles",
+    cloneShift: row.cloneShift === "session" ? "session" : "none",
     closeBox: box(row.closeBox, STRATEGY_DEFAULTS.closeBox),
     openBox: box(row.openBox, STRATEGY_DEFAULTS.openBox),
     high: level(row.high, STRATEGY_DEFAULTS.high),

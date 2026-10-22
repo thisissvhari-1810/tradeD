@@ -33,7 +33,6 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   autoCurrent: string;
 }) {
   const set = (patch: Partial<StrategySettings>) => onChange({ ...settings, ...patch });
-  const levels = view?.levels ?? null;
   const status = disabledReason
     || (!settings.enabled ? "Turn the strategy on to calculate and draw it." : loading ? "Loading market data…" : error || (view?.failures.length ? `Not drawn: ${view.failures.join(" ")}` : data?.message ?? ""));
   const tone = disabledReason || error || view?.failures.length || data?.status === "unavailable" ? "text-loss" : data?.status === "ready" ? "text-profit" : "text-warning";
@@ -89,7 +88,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
             <Info label="Previous high" value={data?.previous?.high} />
             <Info label="Previous low" value={data?.previous?.low} />
             <Info label="Previous close" value={data?.previous?.close} />
-            <Info label="Candle range" value={levels?.range} />
+            <Info label="Candle range" value={view?.levels?.range} />
             <Info label="Today's open" value={data?.open} />
             <Info label="9:15 high" value={data?.firstMinute?.high} />
             <Info label="9:15 low" value={data?.firstMinute?.low} />
@@ -97,20 +96,22 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
           </dl>
         </div>
 
-        {levels ? (
+        {view?.trace ? (
           <details className="rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5">
-            <summary className="cursor-pointer list-none font-medium text-text-2 hover:text-text">Calculation (price space)</summary>
+            <summary className="cursor-pointer list-none font-medium text-text-2 hover:text-text">Calculation (read from the drawn boxes)</summary>
             <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1">
-              <Info label="Original top / bottom" text={`${price(levels.rawBox.top)} / ${price(levels.rawBox.bottom)}`} />
-              <Info label="Original mid" value={levels.rawBox.mid} />
-              <Info label="Shift to close" text={signed(levels.shift1)} />
-              <Info label="Box 1 mid" value={levels.closeBox.mid} />
-              <Info label="Box 1 top / bottom" text={`${price(levels.closeBox.top)} / ${price(levels.closeBox.bottom)}`} />
-              <Info label="Box 1 height" value={levels.closeBox.top - levels.closeBox.bottom} />
-              <Info label="Shift to open" text={levels.shift2 == null ? "—" : signed(levels.shift2)} />
-              <Info label="Box 2 mid" value={levels.openBox?.mid} />
-              <Info label="Box 2 top / bottom" text={levels.openBox ? `${price(levels.openBox.top)} / ${price(levels.openBox.bottom)}` : "—"} />
-              <Info label="Box 2 height" value={levels.openBox ? levels.openBox.top - levels.openBox.bottom : null} />
+              <Info label="Original top / bottom" text={`${price(view.trace.original.top)} / ${price(view.trace.original.bottom)}`} />
+              <Info label="Original mid" value={view.trace.original.mid} />
+              <Info label="Move A by" text={signed(view.trace.shiftA)} />
+              <Info label="A mid (= prev close)" value={view.trace.boxA.mid} />
+              <Info label="A top / bottom" text={`${price(view.trace.boxA.top)} / ${price(view.trace.boxA.bottom)}`} />
+              <Info label="A height" value={view.trace.boxA.height} />
+              <Info label="Clone mid before move" value={view.trace.cloneMidBefore} />
+              <Info label="Move B by" text={view.trace.shiftB == null ? "—" : signed(view.trace.shiftB)} />
+              <Info label="B mid (= open)" value={view.trace.boxB?.mid} />
+              <Info label="B top / bottom" text={view.trace.boxB ? `${price(view.trace.boxB.top)} / ${price(view.trace.boxB.bottom)}` : "—"} />
+              <Info label="B height" value={view.trace.boxB?.height} />
+              <Info label="Strategy boxes on chart" text={String(view.trace.rectangles)} />
             </dl>
           </details>
         ) : null}
@@ -124,6 +125,15 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
               <option value="session">Today&apos;s session only</option>
             </select>
           </div>
+          {settings.boxSpan === "candles" ? (
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="text-muted">Box B position</span>
+              <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label="Box B position" value={settings.cloneShift} onChange={(event) => set({ cloneShift: event.target.value === "session" ? "session" : "none" })}>
+                <option value="none">Same as box A</option>
+                <option value="session">One session right</option>
+              </select>
+            </div>
+          ) : null}
           <div className="divide-y divide-border-soft rounded-md border border-border-soft">
             <BoxSection title="Previous-close box" value={settings.closeBox} onChange={(closeBox) => set({ closeBox })} />
             <BoxSection title="Today's-open box" value={settings.openBox} onChange={(openBox) => set({ openBox })} />

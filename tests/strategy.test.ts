@@ -209,11 +209,15 @@ describe("box placement matches the manual drawing", () => {
   const anchors = { before: 1_792_454_400, previous: 1_792_454_400 + DAY, day: 1_792_454_400 + 2 * DAY, after: 1_792_454_400 + 3 * DAY };
   const withAnchors: S1Data = { ...data, anchors };
 
-  it("box 1 spans the session before the previous day to today; box 2 is one session to the right", () => {
+  it("box A spans the session before the previous day to today; clone B keeps the same horizontal coordinates", () => {
     const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
     expect(closeBox.points.map((point) => point.time)).toEqual([anchors.before, anchors.day]);
+    expect(openBox.points.map((point) => point.time)).toEqual([anchors.before, anchors.day]);
+  });
+
+  it("optionally moves clone B one session right as well", () => {
+    const [, openBox] = strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, cloneShift: "session" }).drawings;
     expect(openBox.points.map((point) => point.time)).toEqual([anchors.previous, anchors.after]);
-    expect(openBox.points[1].time - openBox.points[0].time).toBe(closeBox.points[1].time - closeBox.points[0].time);
   });
 
   it("can instead span today's session only", () => {
@@ -224,13 +228,48 @@ describe("box placement matches the manual drawing", () => {
   it("the drawn boxes carry the translated prices exactly", () => {
     const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
     const levels = s1Levels(previous, candle0915.open, candle0915)!;
-    expect(closeBox.points.map((point) => point.price)).toEqual([levels.closeBox.top, levels.closeBox.bottom]);
-    expect(openBox.points.map((point) => point.price)).toEqual([levels.openBox!.top, levels.openBox!.bottom]);
+    expect(closeBox.points[0].price).toBeCloseTo(levels.closeBox.top, 6);
+    expect(closeBox.points[1].price).toBeCloseTo(levels.closeBox.bottom, 6);
+    expect(openBox.points[0].price).toBeCloseTo(levels.openBox!.top, 6);
+    expect(openBox.points[1].price).toBeCloseTo(levels.openBox!.bottom, 6);
   });
 
   it("the server anchors boxes on the provider's daily-bar stamps", () => {
     const server = readFileSync(join(process.cwd(), "src/server/market.ts"), "utf8");
     expect(server).toContain("const offset = previousBar ? previousBar.time - midnight(previous.date) : 0;");
     expect(server).toContain("before: beforeBar ? beforeBar.time : previousTime - (dayTime - previousTime),");
+  });
+});
+
+describe("boxes made with the drawing tool's own move and clone", () => {
+  const prev = { date: "2026-10-21", open: 22850, high: 22900, low: 22800, close: 22870 };
+  const example: S1Data = { ...data, previous: prev, open: 22910, firstMinute: { ...candle0915, open: 22910 } };
+  const view = strategyView(example, null, STRATEGY_DEFAULTS);
+
+  it("traces every step: original 22,800-22,900, +20 to box A, clone at 22,870, +40 to box B", () => {
+    const trace = view.trace!;
+    expect(trace.original).toMatchObject({ top: 22900, bottom: 22800, mid: 22850, height: 100 });
+    expect(trace.shiftA).toBe(20);
+    expect(trace.boxA).toMatchObject({ top: 22920, bottom: 22820, mid: 22870, height: 100 });
+    expect(trace.cloneMidBefore).toBe(22870);
+    expect(trace.shiftB).toBe(40);
+    expect(trace.boxB).toMatchObject({ top: 22960, bottom: 22860, mid: 22910, height: 100 });
+  });
+
+  it("draws exactly two strategy rectangles (never the unmoved original) with stable ids", () => {
+    expect(view.trace!.rectangles).toBe(2);
+    expect(view.drawings.filter((drawing) => drawing.kind === "rect").map((drawing) => drawing.id)).toEqual([
+      `${STRATEGY_PREFIX}NIFTY:2026-10-22:close-box`,
+      `${STRATEGY_PREFIX}NIFTY:2026-10-22:open-box`,
+    ]);
+    // Re-rendering gives the same two, not more.
+    expect(strategyView(example, null, STRATEGY_DEFAULTS).drawings.map((drawing) => drawing.id)).toEqual(view.drawings.map((drawing) => drawing.id));
+  });
+
+  it("uses shiftDrawing (the drag-to-move operation) for both moves", () => {
+    const overlay = readFileSync(join(process.cwd(), "src/components/strategy-overlay.ts"), "utf8");
+    expect(overlay).toContain("const movedA = shiftDrawing(original, 0, shiftA);");
+    expect(overlay).toContain("{ ...movedA, id: `${tag}:open-box` }");
+    expect(overlay).toContain("shiftDrawing(clone, cloneDt, shiftB)");
   });
 });

@@ -951,6 +951,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
+  // Debug trace: in development, or with localStorage "td-debug-strategy" = "1". Logged once per result.
+  useEffect(() => {
+    const trace = strategyResult?.trace;
+    if (!trace) return;
+    let wanted = process.env.NODE_ENV !== "production";
+    try { wanted ||= localStorage.getItem("td-debug-strategy") === "1"; } catch { /* storage unavailable */ }
+    if (!wanted) return;
+    console.info("[strategy]", { symbol, session: s1Current?.data?.date, failures: strategyResult?.failures, ...trace });
+  }, [strategyResult, symbol, s1Current]);
   const strategyDot = !s1Current ? "animate-pulse bg-muted" : s1Current.error || s1Current.data?.status === "unavailable" || strategyResult?.failures.length ? "bg-loss" : s1Current.data?.status === "ready" ? "bg-profit" : "bg-warning";
 
   useEffect(() => {
