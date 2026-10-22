@@ -76,7 +76,6 @@ export function Home() {
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [portfolioState, setPortfolioState] = useState<PortfolioState>("loading");
-  const [sort, setSort] = useState<"name" | "price" | "change">("name");
   const [showAll, setShowAll] = useState(false);
   const [mover, setMover] = useState<"gainers" | "losers" | "volume">("gainers");
   const [board, setBoard] = useState<Board | null>(null);
@@ -137,13 +136,18 @@ export function Home() {
     return () => window.clearTimeout(handle);
   }, [query]);
 
-  const rows = useMemo(() => {
-    const items = [...(list?.items ?? [])];
-    if (sort === "name") items.sort((a, b) => a.name.localeCompare(b.name));
-    if (sort === "price") items.sort((a, b) => Number(quotes[b.symbol]?.last ?? 0) - Number(quotes[a.symbol]?.last ?? 0));
-    if (sort === "change") items.sort((a, b) => (moveOf(quotes[b.symbol]?.last, quotes[b.symbol]?.previousClose)?.pct ?? -999) - (moveOf(quotes[a.symbol]?.last, quotes[a.symbol]?.previousClose)?.pct ?? -999));
-    return items;
-  }, [list, sort, quotes]);
+  const rows = useMemo(() => [...(list?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [list]);
+  // Advancers and decliners in this watchlist, from the same live quotes as the rows.
+  const breadth = useMemo(() => {
+    let up = 0;
+    let down = 0;
+    for (const item of list?.items ?? []) {
+      const move = moveOf(quotes[item.symbol]?.last, quotes[item.symbol]?.previousClose);
+      if (move && move.abs > 0) up += 1;
+      if (move && move.abs < 0) down += 1;
+    }
+    return { up, down };
+  }, [list, quotes]);
   const visibleRows = showAll ? rows : rows.slice(0, WATCH_PREVIEW);
 
   const searchStatus = query.trim().length < 1 ? "idle" : searched !== query ? "loading" : searchError ? "error" : hits.length === 0 ? "empty" : "ready";
@@ -201,9 +205,7 @@ export function Home() {
                     </select>
                     <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden />
                   </label>
-                ) : (
-                  <SegmentedControl size="sm" label="Sort watchlist" value={sort} onChange={setSort} options={[{ id: "name", label: "A–Z" }, { id: "price", label: "LTP" }, { id: "change", label: "%" }]} />
-                )}
+                ) : <Breadth up={breadth.up} down={breadth.down} />}
               </div>
               <StockSearchField
                 query={query}
@@ -215,11 +217,7 @@ export function Home() {
                 onSelect={(hit) => { desk.openChart(hit.symbol); setQuery(""); setHits([]); }}
                 onToggleWatch={(hit) => toggleWatch(hit.symbol, hit.name, hit.exchange)}
               />
-              {lists.length > 1 ? (
-                <div className="mt-2 flex justify-end">
-                  <SegmentedControl size="sm" label="Sort watchlist" value={sort} onChange={setSort} options={[{ id: "name", label: "A–Z" }, { id: "price", label: "LTP" }, { id: "change", label: "%" }]} />
-                </div>
-              ) : null}
+              {lists.length > 1 ? <div className="mt-2 flex justify-end"><Breadth up={breadth.up} down={breadth.down} /></div> : null}
             </div>
             <div className="min-h-0 flex-1 overflow-auto border-t border-border-soft px-1.5 py-1">
               {listsState === "loading" ? <WatchlistSkeleton /> : null}
@@ -242,6 +240,17 @@ export function Home() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function Breadth({ up, down }: { up: number; down: number }) {
+  if (up + down === 0) return null;
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 text-micro font-semibold" title={`${up} up, ${down} down today in this watchlist`}>
+      <span className="num inline-flex items-center gap-0.5 rounded-sm bg-profit-soft px-1.5 py-0.5 text-profit"><ArrowUpRight className="h-3 w-3" aria-hidden />{up}</span>
+      <span className="num inline-flex items-center gap-0.5 rounded-sm bg-loss-soft px-1.5 py-0.5 text-loss"><ArrowDownRight className="h-3 w-3" aria-hidden />{down}</span>
+      <span className="sr-only">{up} up and {down} down today</span>
+    </span>
   );
 }
 
