@@ -78,8 +78,8 @@ type PracticePosition = {
 };
 type ReplayMarkRow = { symbol: string; cursor: number; mark: string | null; marketValue: string | null; unrealized: string | null; asOf: string | null; stale: boolean; beforeEntry: boolean; openedAt: string | null; message: string };
 
-/** Shown inline on laptop widths; the rest sit in the "More" menu below the 2xl breakpoint. */
-const PRIMARY_SPANS = new Set<ChartSpan>(["1m", "5m", "15m", "1h", "1d", "1w"]);
+/** The timeframe bar: one row of fixed ranges, no overflow menu. */
+const PRIMARY_SPANS = new Set<ChartSpan>(["1m", "5m", "15m", "1h", "1d", "1w", "1y", "5y"]);
 
 function optionSessionKey(email: string) {
   return `td-option-replay-sessions:${email}`;
@@ -907,12 +907,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         <div className="flex shrink-0 items-center gap-0.5 rounded-input bg-sunken p-0.5" role="toolbar" aria-label="Timeframe">
           {CHART_SPANS.map((span) => (
-            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden 2xl:inline-flex 2xl:items-center", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
+            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
-          <select aria-label="More timeframes" className="h-7 w-[5.5rem] shrink-0 rounded-xs border-0 bg-transparent py-0 pl-2 pr-6 text-data text-muted 2xl:hidden" value={PRIMARY_SPANS.has(timeframe) ? "" : timeframe} onChange={(event) => { if (event.target.value) setTimeframe(event.target.value as ChartSpan); }}>
-            <option value="">More</option>
-            {CHART_SPANS.filter((span) => !PRIMARY_SPANS.has(span)).map((span) => <option key={span} value={span}>{SPAN_LABEL[span]}</option>)}
-          </select>
         </div>
         <ChartHeaderTools
           chartType={chartType}
