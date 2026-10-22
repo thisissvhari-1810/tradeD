@@ -10,6 +10,7 @@ import { aggregateCount, aggregateMinutes, aggregatePeriod, type ChartSpan } fro
 import { describeSession, normalizeTape, selectPreviousSession, type PreviousSession } from "@/lib/trading/replay-engine";
 import { istDay } from "@/lib/trading/demo-replay";
 import { configuredProvider, getHolidays } from "@/server/settings";
+import type { S1Data } from "@/lib/trading/s1";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
 import type { DataMode } from "@prisma/client";
 
@@ -516,3 +517,83 @@ export async function getMarketMovers() {
 }
 
 export { DEMO_UNIVERSE };
+
+const s1Cache = new Map<string, { at: number; value: S1Data }>();
+
+/**
+ * S1 levels for one symbol and session date (today when no date is given).
+ * Previous session: the last completed daily bar before the date (weekends and holidays have no bar),
+ * folded from 1-minute bars if the daily bar is missing. Open and first minute: the session's first
+ * 1-minute candle, used only once that minute has finished. Nothing is substituted when data is missing.
+ */
+export async function getS1Data(symbol: string, date?: string | null): Promise<S1Data> {
+  const now = Math.floor(Date.now() / 1000);
+  const today = kolkataParts(new Date()).dateKey;
+  const day = date ?? today;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new AppError("Choose a valid session date.", 400);
+  const key = symbol.trim().toUpperCase();
+  const [year, month, dom] = day.split("-").map(Number);
+  const dayOpen = Math.floor(Date.UTC(year, month - 1, dom, 3, 45, 0) / 1000);
+  const dayClose = Math.floor(Date.UTC(year, month - 1, dom, 10, 0, 0) / 1000);
+  const base = { symbol: key, date: day, sessionOpen: dayOpen, sessionClose: dayClose, previous: null, open: null, firstMinute: null };
+  if (day > today) return { ...base, status: "unavailable", message: `${day} has not traded yet.` };
+  const index = findIndex(key);
+  const instrument = await prisma.instrument.findUnique({ where: { symbol: key } });
+  if (!instrument && !index) throw new AppError("Instrument is not available.", 404);
+  if (configuredProvider() !== "dhan") return { ...base, status: "unavailable", message: "S1 needs exchange candles. This data source is not Dhan, so no levels were drawn." };
+  const cacheKey = `${key}|${day}`;
+  const hit = s1Cache.get(cacheKey);
+  if (hit && Date.now() - hit.at < (hit.value.firstMinute ? 30 * 60_000 : 45_000)) return hit.value;
+
+  const holidays = await getHolidays();
+  const session = describeSession(day, holidays, today);
+  const stored = instrument?.dhanSecurityId ?? "";
+  const name = index?.symbol ?? instrument!.symbol;
+  const [daily, minutes] = await Promise.all([
+    dhanPriorDaily(name, stored, dayOpen).catch(() => [] as Candle[]),
+    dhanContextMinutes(name, stored, dayOpen).catch(() => [] as Candle[]),
+  ]);
+  const previous = selectPreviousSession(
+    normalizeTape(daily.filter((bar) => istDay(bar.time) < day)),
+    normalizeTape(minutes.filter((bar) => istDay(bar.time) < day)),
+    day,
+  );
+
+  let first: Candle | null = null;
+  if (session.ok) {
+    const tape = normalizeTape((await dhanSessionTape(name, stored, session.open, session.close).catch(() => [] as Candle[]))
+      .filter((bar) => istDay(bar.time) === day && bar.time >= session.open && bar.time < session.close));
+    // Only a finished minute: during 09:15 the first candle is still forming.
+    if (tape[0] && tape[0].time + 60 <= now) first = tape[0];
+  }
+
+  let status: S1Data["status"];
+  let message: string;
+  if (!previous) {
+    status = "unavailable";
+    message = `The previous completed session before ${day} was not returned, so S1 drew nothing.`;
+  } else if (!session.ok) {
+    status = "closed";
+    message = `${session.message} Showing the previous session (${previous.date}) range only.`;
+  } else if (!first) {
+    status = "waiting";
+    message = now < session.open + 60
+      ? `Waiting for the first 1-minute candle of ${day} (09:15 IST). Previous session ${previous.date} is drawn.`
+      : `The first 1-minute candle of ${day} was not returned yet. Previous session ${previous.date} is drawn.`;
+  } else {
+    status = "ready";
+    message = `Previous session ${previous.date}: H ${previous.high} L ${previous.low} C ${previous.close}. ${day} open ${first.open}, first minute H ${first.high} L ${first.low}.`;
+  }
+  const value: S1Data = {
+    ...base,
+    sessionOpen: session.ok ? session.open : dayOpen,
+    sessionClose: session.ok ? session.close : dayClose,
+    status,
+    message,
+    previous,
+    open: first ? first.open : null,
+    firstMinute: first ? { time: first.time, open: first.open, high: first.high, low: first.low } : null,
+  };
+  s1Cache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}

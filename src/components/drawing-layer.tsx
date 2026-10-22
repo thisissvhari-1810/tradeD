@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "lightweight-charts";
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
+import { S1_PREFIX } from "@/components/s1-overlay";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
 import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, editPosition, isPositionHandle, positionGeometry, positionMetrics, positionPoints, setAnchor, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
@@ -40,6 +41,8 @@ function newDrawingColor(kind: Drawing["kind"]) {
   return LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37";
 }
 
+const NO_OVERLAYS: Drawing[] = [];
+
 export function DrawingLayer({
   chartRef,
   seriesRef,
@@ -59,6 +62,7 @@ export function DrawingLayer({
   focusId,
   stay = false,
   lockAll = false,
+  overlays = NO_OVERLAYS,
 }: {
   chartRef: { current: IChartApi | null };
   seriesRef: { current: ISeriesApi<SeriesType> | null };
@@ -69,6 +73,8 @@ export function DrawingLayer({
   magnet: MagnetMode | boolean;
   stay?: boolean;
   lockAll?: boolean;
+  /** Strategy drawings (S1): drawn like the rest, never selectable, never saved, never in undo. */
+  overlays?: Drawing[];
   hidden: boolean;
   annotation: string;
   command: { id: number; name: "lock" | "trash" | "color" } | null;
@@ -82,6 +88,7 @@ export function DrawingLayer({
   const hostRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<() => void>(() => undefined);
   const drawingsRef = useRef(drawings);
+  const overlaysRef = useRef(overlays);
   const toolRef = useRef(tool);
   const magnetRef = useRef<MagnetMode>("off");
   const annotationRef = useRef(annotation);
@@ -120,6 +127,7 @@ export function DrawingLayer({
     lockAllRef.current = lockAll;
   }, [stay, lockAll]);
   drawingsRef.current = drawings;
+  overlaysRef.current = overlays;
   toolRef.current = tool;
   magnetRef.current = magnet === true ? "strong" : magnet === false ? "off" : magnet;
   annotationRef.current = annotation;
@@ -146,7 +154,7 @@ export function DrawingLayer({
       return x == null || y == null ? null : { x, y };
     };
     const next: Mark[] = [];
-    const show = [...drawingsRef.current];
+    const show = [...drawingsRef.current, ...overlaysRef.current];
     const preview = previewShape();
     if (preview) show.push(preview);
     for (const drawing of show) {
@@ -385,7 +393,7 @@ export function DrawingLayer({
       chart.timeScale().unsubscribeSizeChange(onRange);
       chart.unsubscribeClick(onClick);
     };
-  }, [candles, drawings, hidden, selected, tool, ready, span]);
+  }, [candles, drawings, overlays, hidden, selected, tool, ready, span]);
 
   useEffect(() => {
     if (!enabled || !command) return;
@@ -836,8 +844,8 @@ export function DrawingLayer({
 
   const capturing = enabled && tool !== "cursor";
   const interactive = enabled;
-  const hit = interactive ? "auto" : "none";
-  const hitStroke = interactive ? "stroke" : "none";
+  const hitAll = interactive ? "auto" : "none";
+  const hitStrokeAll = interactive ? "stroke" : "none";
   const menuDrawing = menu ? drawings.find((item) => item.id === menu.id) : null;
   const selectedDrawing = selected ? drawings.find((item) => item.id === selected) ?? null : null;
   const handles = marks.flatMap((mark) => mark.kind === "handle" ? [mark] : []);
@@ -898,6 +906,10 @@ export function DrawingLayer({
           const dash = mark.pattern === "dashed" ? "6 4" : mark.pattern === "dotted" ? "1.5 3" : undefined;
           const ink = mark.kind === "handle" ? "" : doomed ? "var(--loss)" : mark.color;
           const pointer = tool === "eraser" ? "pointer" : undefined;
+          // Strategy overlays never take the pointer, so the chart still pans and zooms through them.
+          const passive = mark.id.startsWith(S1_PREFIX);
+          const hit = passive ? "none" : hitAll;
+          const hitStroke = passive ? "none" : hitStrokeAll;
           if (mark.kind === "hline") {
             return (
               <g key={mark.id} {...bind(mark.id)} style={{ pointerEvents: hit, cursor: pointer }}>

@@ -94,6 +94,7 @@ export function ChartPanel({
   references = [],
   paint,
   stay = false,
+  overlays,
   lockAll = false,
   cursorStyle = "cross",
 }: {
@@ -116,6 +117,8 @@ export function ChartPanel({
   streamKey?: string;
   magnet?: MagnetMode | boolean;
   stay?: boolean;
+  /** Read-only strategy drawings (S1). */
+  overlays?: Drawing[];
   lockAll?: boolean;
   cursorStyle?: CursorStyle;
   hidden?: boolean;
@@ -432,7 +435,7 @@ export function ChartPanel({
       <div className="relative min-h-0 w-full flex-1 overflow-hidden">
         <div ref={priceRef} className={`absolute inset-0 chart-cursor-${cursorStyle}`} />
         <CandleReadout candles={candles} hover={hover} />
-        <DrawingLayer chartRef={chartRef} seriesRef={seriesRef} candles={candles} drawings={drawings} onDrawings={onDrawings} tool={tool} magnet={magnet} hidden={hidden} annotation={annotation} command={command} enabled={enabled} onTool={onTool} onSelect={onSelect} ready={chartEpoch} span={span} focusId={focusId} stay={stay} lockAll={lockAll} />
+        <DrawingLayer chartRef={chartRef} seriesRef={seriesRef} candles={candles} drawings={drawings} onDrawings={onDrawings} tool={tool} magnet={magnet} hidden={hidden} annotation={annotation} command={command} enabled={enabled} onTool={onTool} onSelect={onSelect} ready={chartEpoch} span={span} focusId={focusId} stay={stay} lockAll={lockAll} overlays={overlays} />
       </div>
       {oscillator !== "none" ? <div ref={oscRef} className="h-28 w-full shrink-0 border-t border-border" /> : null}
     </div>

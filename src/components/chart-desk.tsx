@@ -9,6 +9,8 @@ import { ChartToolbar, FavouritesBar, type RemoveScope, type VisibilityAction } 
 import { useDrawingPrefs } from "@/components/drawing-prefs";
 import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
+import { s1Drawings } from "@/components/s1-overlay";
+import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
 import { OptionChainPanel, type OptionChartRequest } from "@/components/option-chain-panel";
 import { OptionBook, type BookPosition, type BookTrade } from "@/components/option-book";
@@ -221,6 +223,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [closedTrades, setClosedTrades] = useState<BookTrade[]>([]);
   const refreshPractice = useRef<() => void>(() => undefined);
   const [optionView, setOptionView] = useState<OptionChartRequest | null>(null);
+  // S1 strategy: on / off is remembered; levels are fetched per symbol and session (live or the replay date).
+  const [s1On, setS1On] = useState(false);
+  const [s1, setS1] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
   // Drawings belong to what is charted: the stock, or the option contract when one is open.
   const drawingStore = optionView ? `${optionView.underlying}|${optionView.expiry}|${optionView.strike}|${optionView.right}` : desk.symbol;
   const saveTimer = useRef<number | null>(null);
@@ -231,8 +236,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     futureRef.current = [];
     setHistoryTick((value) => value + 1);
     setDrawings(loadDrawings(drawingStore));
-    // flushDrawings only reads refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawingStore]);
   useEffect(() => () => flushDrawings(), []);
   const optionViewRef = useRef<OptionChartRequest | null>(null);
@@ -284,6 +287,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [symbol]);
 
   useEffect(() => {
+    setS1On(localStorage.getItem("td-s1") === "1");
     const fromUrl = params.get("symbol");
     if (fromUrl) desk.chooseSymbol(fromUrl);
     const saved = localStorage.getItem("td-replay-session");
@@ -928,6 +932,44 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     ? [REPLAY_STATUS_LABEL[replay.status], replay.cursor != null ? formatIst(replay.cursor) : replay.date, "simulated"].filter(Boolean).join(" · ")
     : [feedLabel, feedStamp, stream.detail].filter(Boolean).join(" · ") || quoteError || "Quote unavailable";
 
+  const s1Session = replay.active && replay.date ? replay.date : "live";
+  const s1Key = optionView ? null : `${symbol}|${s1Session}`;
+  const s1Current = s1 && s1.key === s1Key ? s1 : null;
+  const s1Overlay = useMemo(
+    // In replay, nothing after the replay clock is shown (a missing cursor counts as before the open).
+    () => (s1On && s1Current?.data ? s1Drawings(s1Current.data, replay.active ? (replay.cursor ?? 0) : null) : []),
+    [s1On, s1Current, replay.active, replay.cursor],
+  );
+  const s1Status = !s1On ? "" : optionView ? "S1 works on the stock or index chart, not on an option contract." : !s1Current ? "Loading S1 levels…" : s1Current.error || s1Current.data?.message || "";
+  const s1Dot = !s1Current ? "animate-pulse bg-muted" : s1Current.error || s1Current.data?.status === "unavailable" ? "bg-loss" : s1Current.data?.status === "ready" ? "bg-profit" : "bg-warning";
+
+  useEffect(() => {
+    if (!s1On || optionView) return;
+    let stop = false;
+    const session = replay.active && replay.date ? replay.date : "live";
+    const key = `${symbol}|${session}`;
+    const load = () => {
+      api<S1Data>(`/api/market/s1?symbol=${encodeURIComponent(symbol)}${session === "live" ? "" : `&date=${encodeURIComponent(session)}`}`)
+        .then((data) => { if (!stop) setS1({ key, data, error: "" }); })
+        .catch((reason: unknown) => {
+          if (!stop) setS1((current) => ({ key, data: current?.key === key ? current.data : null, error: reason instanceof Error ? reason.message : "S1 levels could not be loaded." }));
+        });
+    };
+    load();
+    // Live: refresh each minute so the open and first-minute lines appear once they exist (the server caches).
+    const timer = session === "live" ? window.setInterval(load, 60_000) : null;
+    return () => {
+      stop = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [s1On, symbol, optionView, replay.active, replay.date]);
+
+  function toggleS1() {
+    const next = !s1On;
+    setS1On(next);
+    try { localStorage.setItem("td-s1", next ? "1" : "0"); } catch { /* storage unavailable */ }
+  }
+
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       {/* One compact row: identity never shrinks; only the tool strip scrolls when space runs out. */}
@@ -972,6 +1014,18 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           full={full}
           onFull={toggleFullScreen}
         >
+          <button
+            type="button"
+            aria-pressed={s1On}
+            aria-label="S1 strategy"
+            disabled={Boolean(optionView)}
+            title={`S1 — Automatic Previous-Day and Opening-Range Strategy${s1Status ? `\n${s1Status}` : ""}`}
+            className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:opacity-40", s1On ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
+            onClick={toggleS1}
+          >
+            S1
+            {s1On && !optionView ? <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", s1Dot)} /> : null}
+          </button>
           {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
           {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
           <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
@@ -1045,6 +1099,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 span={timeframe}
                 focusId={selectedDrawing}
                 drawings={drawings}
+                overlays={s1Overlay}
                 onDrawings={rememberDrawings}
                 handleRef={handleRef}
                 scheme={desk.theme}
