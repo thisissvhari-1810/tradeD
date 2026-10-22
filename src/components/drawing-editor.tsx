@@ -148,7 +148,7 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
           <div className="mt-3 grid gap-3 text-xs">
             {drawing.points.map((point, index) => (
               <fieldset key={index} className="grid gap-2 rounded-xl border border-border p-2">
-                <legend>Anchor {index + 1}</legend>
+                <legend>{drawing.kind === "long" || drawing.kind === "short" ? (["Entry (left edge)", "Stop", "Target (right edge)"][index] ?? `Anchor ${index + 1}`) : `Anchor ${index + 1}`}</legend>
                 <label className="grid gap-1">Time, exchange local
                   <input type="datetime-local" value={toDatetimeLocal(point.time)} onChange={(event) => {
                     const time = fromDatetimeLocal(event.target.value);

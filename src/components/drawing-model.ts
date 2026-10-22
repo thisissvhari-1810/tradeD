@@ -126,6 +126,82 @@ export function positionLevels(kind: "long" | "short", entry: number, a: number,
   return kind === "long" ? { stop: low, target: high } : { stop: high, target: low };
 }
 
+export type PositionHandle = "entry" | "target" | "stop" | "right";
+/** A long / short drawing in chart data: a time span and three prices. */
+export type PositionGeometry = { left: number; right: number; entry: number; stop: number; target: number };
+
+export function isPositionHandle(value: string): value is PositionHandle {
+  return value === "entry" || value === "target" || value === "stop" || value === "right";
+}
+
+/**
+ * Reads a long / short drawing. Stored as [entry @ left, stop @ left, target @ right]; older 3-click
+ * drawings in any order and 2-point drawings (entry + one level) are read the same way.
+ */
+export function positionGeometry(drawing: { kind: string; points: Point[] }): PositionGeometry | null {
+  const [entry, other, third] = drawing.points;
+  if (!entry || !other) return null;
+  const long = drawing.kind === "long";
+  const times = drawing.points.map((point) => point.time);
+  const left = Math.min(...times);
+  const right = Math.max(left + 1, Math.max(...times));
+  if (third) {
+    const { stop, target } = positionLevels(long ? "long" : "short", entry.price, other.price, third.price);
+    return { left, right, entry: entry.price, stop, target };
+  }
+  const span = Math.abs(other.price - entry.price) || Math.abs(entry.price) * 0.01;
+  const stop = long ? (other.price >= entry.price ? entry.price - span : other.price) : (other.price <= entry.price ? entry.price + span : other.price);
+  const target = long ? (other.price >= entry.price ? other.price : entry.price + span) : (other.price <= entry.price ? other.price : entry.price - span);
+  return { left, right, entry: entry.price, stop, target };
+}
+
+export function positionPoints(geometry: PositionGeometry): Point[] {
+  return [
+    { time: geometry.left, price: geometry.entry },
+    { time: geometry.left, price: geometry.stop },
+    { time: geometry.right, price: geometry.target },
+  ];
+}
+
+/**
+ * Moves one handle of a long / short drawing. Target and stop stay on their side of entry, entry stays
+ * between them, and the right edge stays right of the left edge, so the zones never invert.
+ * Entry: entry price and left edge. Target / stop: that price only. Right: right edge only.
+ */
+export function editPosition(drawing: Drawing, handle: PositionHandle, point: Point): Drawing {
+  const geometry = positionGeometry(drawing);
+  if (!geometry || drawing.locked) return drawing;
+  const long = drawing.kind === "long";
+  const gap = Math.max(Math.abs(geometry.entry) * 1e-4, 1e-6);
+  const next = { ...geometry };
+  if (handle === "target") next.target = long ? Math.max(point.price, geometry.entry + gap) : Math.min(point.price, geometry.entry - gap);
+  if (handle === "stop") next.stop = long ? Math.min(point.price, geometry.entry - gap) : Math.max(point.price, geometry.entry + gap);
+  if (handle === "entry") {
+    const low = long ? geometry.stop : geometry.target;
+    const high = long ? geometry.target : geometry.stop;
+    next.entry = Math.min(high - gap, Math.max(low + gap, point.price));
+    next.left = Math.min(point.time, geometry.right - 1);
+  }
+  if (handle === "right") next.right = Math.max(point.time, geometry.left + 1);
+  return { ...drawing, points: positionPoints(next) };
+}
+
+/** Long: reward = target − entry, risk = entry − stop. Short mirrors it. R:R only when both are positive. */
+export function positionMetrics(kind: "long" | "short", geometry: PositionGeometry) {
+  const reward = kind === "long" ? geometry.target - geometry.entry : geometry.entry - geometry.target;
+  const risk = kind === "long" ? geometry.entry - geometry.stop : geometry.stop - geometry.entry;
+  const percent = (value: number) => (geometry.entry ? (value / geometry.entry) * 100 : 0);
+  return { reward, risk, rewardPercent: percent(reward), riskPercent: percent(risk), ratio: risk > 0 && reward > 0 ? reward / risk : null };
+}
+
+/** Moves one anchor to where the cursor is (handles follow the pointer, including magnet snaps). */
+export function setAnchor(drawing: Drawing, index: number, point: Point): Drawing {
+  if (drawing.locked || !drawing.points[index]) return drawing;
+  const keep = drawing.points[index];
+  const placed = drawing.kind === "hline" ? { time: keep.time, price: point.price } : drawing.kind === "vline" ? { time: point.time, price: keep.price } : point;
+  return { ...drawing, points: drawing.points.map((item, at) => (at === index ? placed : item)) };
+}
+
 /** Trend-based fib extension: levels measured from the third anchor by the first leg. 2-anchor drawings keep the old form. */
 export function fibExtensionPrice(points: Point[], ratio: number) {
   if (points.length >= 3) return points[2].price + (points[1].price - points[0].price) * ratio;

@@ -5,7 +5,7 @@ import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "l
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
-import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, positionLevels, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
+import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, editPosition, isPositionHandle, positionGeometry, positionMetrics, positionPoints, setAnchor, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
 type Bar = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
@@ -187,7 +187,7 @@ export function DrawingLayer({
         const offset = (drawing.points[2]?.price ?? drawing.points[0].price) - drawing.points[0].price;
         pushSegment(next, `${drawing.id}-b`, { time: drawing.points[0].time, price: drawing.points[0].price + offset }, { time: drawing.points[1].time, price: drawing.points[1].price + offset }, drawing.color, active, xy);
       } else if ((drawing.kind === "long" || drawing.kind === "short") && drawing.points.length >= 2) {
-        pushPosition(next, drawing, xy, series);
+        pushPosition(next, drawing, xy, series, hostRef.current?.clientHeight ?? 0);
       } else if (drawing.kind === "forecast" && drawing.points.length >= 2) {
         pushSegment(next, drawing.id, drawing.points[0], drawing.points[1], drawing.color, active, xy, true);
       } else if (drawing.kind === "projection" && drawing.points.length >= 2) {
@@ -295,7 +295,21 @@ export function DrawingLayer({
       if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
       if (active && drawing.id !== "preview") {
         if ((drawing.kind === "rect" || drawing.kind === "ellipse") && drawing.points.length >= 2) pushBoxHandles(next, drawing, xy);
-        else if (drawing.kind === "brush" || drawing.kind === "highlighter") {
+        else if ((drawing.kind === "long" || drawing.kind === "short") && drawing.points.length >= 2) {
+          const geometry = positionGeometry(drawing);
+          if (geometry) {
+            const spots: Array<[string, Point]> = [
+              ["target", { time: geometry.left, price: geometry.target }],
+              ["entry", { time: geometry.left, price: geometry.entry }],
+              ["stop", { time: geometry.left, price: geometry.stop }],
+              ["right", { time: geometry.right, price: geometry.entry }],
+            ];
+            for (const [name, spot] of spots) {
+              const at = xy(spot);
+              if (at) next.push({ id: `${drawing.id}#${name}`, kind: "handle", x: at.x, y: at.y, selected: true });
+            }
+          }
+        } else if (drawing.kind === "brush" || drawing.kind === "highlighter") {
           // A stroke has hundreds of samples: two handles, both of which move the whole stroke.
           const first = xy(drawing.points[0]);
           const last = xy(drawing.points[drawing.points.length - 1]);
@@ -438,8 +452,13 @@ export function DrawingLayer({
   function commit(raw: Point[], kind: Drawing["kind"] = toolRef.current as Drawing["kind"]) {
     let points = kind === "path" || kind === "polyline" || kind === "brush" || kind === "highlighter" ? dedupePoints(raw) : raw;
     if ((kind === "long" || kind === "short") && points.length >= 3) {
-      const { stop, target } = positionLevels(kind, points[0].price, points[1].price, points[2].price);
-      points = [points[0], { ...points[1], price: stop }, { ...points[2], price: target }];
+      const geometry = positionGeometry({ kind, points });
+      if (geometry) {
+        // Clicked in a column: give it about 20 bars of width so the zones are readable.
+        const minimum = barStep(candlesRef.current) * 20;
+        if (geometry.right - geometry.left < minimum) geometry.right = geometry.left + minimum;
+        points = positionPoints(geometry);
+      }
     }
     const typed = annotationRef.current.trim();
     const text = kind === "price" ? (typed || points[0]?.price.toFixed(2) || "") : kind === "marker" ? typed : (typed || (kind === "text" || kind === "note" || kind === "callout" ? "Note" : ""));
@@ -645,7 +664,10 @@ export function DrawingLayer({
     setSelected(realId);
     onSelectRef.current?.(realId);
     if (isLocked(drawing) || toolRef.current !== "cursor") return;
-    const anchorEdit = isBoxHandle(suffix) || Number.isFinite(pointIndex);
+    const positionHandle = (drawing.kind === "long" || drawing.kind === "short") && isPositionHandle(suffix) ? suffix : null;
+    // The channel's third handle is drawn on the parallel line, not at its stored point, so it moves by offset.
+    const offsetHandle = drawing.kind === "channel" && pointIndex === 2;
+    const anchorEdit = isBoxHandle(suffix) || Number.isFinite(pointIndex) || positionHandle != null;
     const origin = read(event, anchorEdit);
     if (!origin) return;
     const snapshot = drawing.points.map((point) => ({ ...point }));
@@ -653,9 +675,14 @@ export function DrawingLayer({
     const move = (ev: PointerEvent) => {
       const now = read(ev, anchorEdit);
       if (!now) return;
-      const shifted = isBoxHandle(suffix) && (drawing.kind === "rect" || drawing.kind === "ellipse")
-        ? resizeBox({ ...drawing, points: snapshot }, suffix, now)
-        : shiftDrawing({ ...drawing, points: snapshot }, now.time - origin.time, now.price - origin.price, Number.isFinite(pointIndex) ? pointIndex : undefined);
+      const base = { ...drawing, points: snapshot };
+      const shifted = positionHandle
+        ? editPosition(base, positionHandle, now)
+        : isBoxHandle(suffix) && (drawing.kind === "rect" || drawing.kind === "ellipse")
+          ? resizeBox(base, suffix, now)
+          : Number.isFinite(pointIndex) && !offsetHandle
+            ? setAnchor(base, pointIndex as number, now)
+            : shiftDrawing(base, now.time - origin.time, now.price - origin.price, Number.isFinite(pointIndex) ? pointIndex : undefined);
       onDrawingsRef.current(drawingsRef.current.map((item) => item.id === realId ? shifted : item), !saved);
       saved = true;
     };
@@ -843,7 +870,12 @@ export function DrawingLayer({
             return <ellipse key={mark.id} {...bind(mark.id)} cx={mark.cx} cy={mark.cy} rx={mark.rx} ry={mark.ry} strokeWidth={width} strokeDasharray={dash} style={{ fill: mark.fill, stroke: ink, pointerEvents: hit, cursor: pointer }} />;
           }
           if (mark.kind === "handle") {
-            return <circle key={mark.id} cx={mark.x} cy={mark.y} r="4.5" strokeWidth="1.5" style={{ fill: "var(--panel)", stroke: "var(--primary)", pointerEvents: "auto", cursor: handleCursor(mark.id) }} onPointerDown={(event) => startDrag(mark.id, event)} />;
+            return (
+              <g key={mark.id} style={{ cursor: handleCursor(mark.id) }} onPointerDown={(event) => startDrag(mark.id, event)}>
+                <circle cx={mark.x} cy={mark.y} r="10" fill="transparent" style={{ pointerEvents: "auto" }} />
+                <circle cx={mark.x} cy={mark.y} r="4.5" strokeWidth="1.5" style={{ fill: "var(--panel)", stroke: "var(--primary)", pointerEvents: "none" }} />
+              </g>
+            );
           }
           if (mark.kind === "box") {
             return <rect key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} width={mark.width} height={mark.height} strokeWidth={width} strokeDasharray={dash} style={{ fill: mark.fill, stroke: ink, pointerEvents: hit, cursor: pointer }} />;
@@ -930,7 +962,8 @@ function ContextItem({ label, danger, disabled, onClick }: { label: string; dang
 
 function handleCursor(id: string) {
   const name = id.slice(id.lastIndexOf("#") + 1);
-  if (name === "n" || name === "s") return "ns-resize";
+  if (name === "n" || name === "s" || name === "target" || name === "stop") return "ns-resize";
+  if (name === "right") return "ew-resize";
   if (name === "e" || name === "w") return "ew-resize";
   if (name === "ne" || name === "sw") return "nesw-resize";
   if (name === "nw" || name === "se") return "nwse-resize";
@@ -1147,32 +1180,32 @@ function pushPoly(marks: Mark[], id: string, points: Point[], color: string, sel
   if (d) marks.push({ id, kind: "poly", d, color, selected, opacity });
 }
 
-function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, series: ISeriesApi<SeriesType>) {
-  const entry = drawing.points[0];
-  const other = drawing.points[1];
-  const third = drawing.points[2];
-  const span = Math.abs(other.price - entry.price) || Math.abs(entry.price) * 0.01;
-  const ordered = third ? positionLevels(drawing.kind === "long" ? "long" : "short", entry.price, other.price, third.price) : null;
-  const stop = ordered ? ordered.stop : drawing.kind === "long" ? (other.price >= entry.price ? entry.price - span : other.price) : (other.price <= entry.price ? entry.price + span : other.price);
-  const target = ordered ? ordered.target : drawing.kind === "long" ? (other.price >= entry.price ? other.price : entry.price + span) : (other.price <= entry.price ? other.price : entry.price - span);
-  const stats = positionStats(entry.price, stop, target);
-  const leftTime = Math.min(...drawing.points.map((point) => point.time));
-  const rightTime = Math.max(...drawing.points.map((point) => point.time));
-  const left = xy({ time: leftTime, price: entry.price });
-  const right = xy({ time: rightTime, price: entry.price });
-  const targetY = series.priceToCoordinate(target);
-  const stopY = series.priceToCoordinate(stop);
-  const entryY = series.priceToCoordinate(entry.price);
+function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: number; y: number } | null, series: ISeriesApi<SeriesType>, height: number) {
+  const geometry = positionGeometry(drawing);
+  if (!geometry) return;
+  const left = xy({ time: geometry.left, price: geometry.entry });
+  const right = xy({ time: geometry.right, price: geometry.entry });
+  const targetY = series.priceToCoordinate(geometry.target);
+  const stopY = series.priceToCoordinate(geometry.stop);
+  const entryY = series.priceToCoordinate(geometry.entry);
   if (!left || !right || targetY == null || stopY == null || entryY == null) return;
+  const kind = drawing.kind === "short" ? "short" : "long";
   const x = Math.min(left.x, right.x);
   const width = Math.max(24, Math.abs(right.x - left.x));
-  const reward = "var(--profit)";
-  const risk = "var(--loss)";
-  const targetColor = drawing.kind === "long" ? reward : risk;
-  const stopColor = drawing.kind === "long" ? risk : reward;
-  marks.push(box(drawing.id, x, entryY, targetY, width, targetColor, drawing.id === "preview"));
-  marks.push(box(`${drawing.id}-stop`, x, entryY, stopY, width, stopColor, false));
-  marks.push({ id: `${drawing.id}-label`, kind: "text", x: x + 6, y: Math.min(targetY, stopY, entryY) - 6, text: `${drawing.kind === "long" ? "Long" : "Short"} · entry ${entry.price.toFixed(2)} · stop ${stop.toFixed(2)} (${stats.riskPercent.toFixed(2)}%) · target ${target.toFixed(2)} (${stats.rewardPercent.toFixed(2)}%) · R ${stats.ratio.toFixed(2)}`, color: targetColor, selected: false });
+  // The profit zone carries the drawing's id so a press on it selects / moves the whole drawing.
+  marks.push(box(drawing.id, x, entryY, targetY, width, "var(--profit)", false));
+  marks.push(box(`${drawing.id}-risk`, x, entryY, stopY, width, "var(--loss)", false));
+  marks.push({ id: `${drawing.id}-entry`, kind: "segment", x1: x, y1: entryY, x2: x + width, y2: entryY, color: "var(--text-2)", selected: false, stroke: 1 });
+  const stats = positionMetrics(kind, geometry);
+  const fit = (y: number) => Math.min(Math.max(y, 14), Math.max(14, height - 6));
+  const price = (value: number) => value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const above = (y: number) => fit(y - 6);
+  const below = (y: number) => fit(y + 15);
+  const targetOutside = kind === "long" ? above(targetY) : below(targetY);
+  const stopOutside = kind === "long" ? below(stopY) : above(stopY);
+  marks.push({ id: `${drawing.id}-target`, kind: "text", x: x + 6, y: targetOutside, text: `Target ${price(geometry.target)} · ${stats.reward >= 0 ? "+" : "−"}${price(Math.abs(stats.reward))} (${stats.rewardPercent.toFixed(2)}%)`, color: "var(--profit)", selected: false, size: 11 });
+  marks.push({ id: `${drawing.id}-stop`, kind: "text", x: x + 6, y: stopOutside, text: `Stop ${price(geometry.stop)} · ${stats.risk >= 0 ? "−" : "+"}${price(Math.abs(stats.risk))} (${stats.riskPercent.toFixed(2)}%)`, color: "var(--loss)", selected: false, size: 11 });
+  marks.push({ id: `${drawing.id}-ratio`, kind: "text", x: x + 6, y: fit(entryY - 4), text: `${kind === "long" ? "Long" : "Short"} · entry ${price(geometry.entry)} · R:R ${stats.ratio == null ? "—" : stats.ratio.toFixed(2)}`, color: "var(--text)", selected: false, size: 11 });
 }
 
 function box(id: string, x: number, y1: number, y2: number, width: number, color: string, selected: boolean): Mark {
