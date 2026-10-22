@@ -527,7 +527,7 @@ const s1Cache = new Map<string, { at: number; value: S1Data }>();
  * folded from 1-minute bars if the daily bar is missing. Open and first minute: the session's first
  * 1-minute candle, used only once that minute has finished. Nothing is substituted when data is missing.
  */
-export async function getS1Data(symbol: string, date?: string | null): Promise<S1Data> {
+export async function getS1Data(symbol: string, date?: string | null, previousDate?: string | null): Promise<S1Data> {
   const now = Math.floor(Date.now() / 1000);
   const today = kolkataParts(new Date()).dateKey;
   const day = date ?? today;
@@ -538,11 +538,13 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
   const dayClose = Math.floor(Date.UTC(year, month - 1, dom, 10, 0, 0) / 1000);
   const base = { symbol: key, date: day, sessionOpen: dayOpen, sessionClose: dayClose, previous: null, open: null, firstMinute: null };
   if (day > today) return { ...base, status: "unavailable", message: `${day} has not traded yet.` };
+  if (previousDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(previousDate)) throw new AppError("Choose a valid previous-day date.", 400);
+  if (previousDate != null && previousDate >= day) return { ...base, status: "unavailable", message: `The previous day (${previousDate}) must be before the current day (${day}).` };
   const index = findIndex(key);
   const instrument = await prisma.instrument.findUnique({ where: { symbol: key } });
   if (!instrument && !index) throw new AppError("Instrument is not available.", 404);
   if (configuredProvider() !== "dhan") return { ...base, status: "unavailable", message: "S1 needs exchange candles. This data source is not Dhan, so no levels were drawn." };
-  const cacheKey = `${key}|${day}`;
+  const cacheKey = `${key}|${day}|${previousDate ?? "auto"}`;
   const hit = s1Cache.get(cacheKey);
   if (hit && Date.now() - hit.at < (hit.value.firstMinute ? 30 * 60_000 : 45_000)) return hit.value;
 
@@ -554,10 +556,14 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
     dhanPriorDaily(name, stored, dayOpen).catch(() => [] as Candle[]),
     dhanContextMinutes(name, stored, dayOpen).catch(() => [] as Candle[]),
   ]);
+  // A chosen previous day must be a session that traded: its own daily bar, or its own 1-minute bars.
+  // Automatic: the last completed session before the current day.
+  const upTo = previousDate ?? day;
+  const until = previousDate ? (bar: Candle) => istDay(bar.time) === previousDate : (bar: Candle) => istDay(bar.time) < day;
   const previous = selectPreviousSession(
-    normalizeTape(daily.filter((bar) => istDay(bar.time) < day)),
-    normalizeTape(minutes.filter((bar) => istDay(bar.time) < day)),
-    day,
+    normalizeTape(daily.filter(until)),
+    normalizeTape(minutes.filter(until)),
+    previousDate ? nextDay(upTo) : day,
   );
 
   let first: Candle | null = null;
@@ -577,7 +583,9 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
   let message: string;
   if (!previous) {
     status = "unavailable";
-    message = `The previous completed session before ${day} was not returned, so S1 drew nothing.`;
+    message = previousDate
+      ? `No session data for ${previousDate} (weekend, holiday or not returned). Choose another previous day.`
+      : `The previous completed session before ${day} was not returned, so nothing was drawn.`;
   } else if (!session.ok) {
     status = "closed";
     message = `${session.message} Showing the previous session (${previous.date}) range only.`;
@@ -610,4 +618,10 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
   };
   s1Cache.set(cacheKey, { at: Date.now(), value });
   return value;
+}
+
+/** The calendar day after an IST date key. */
+function nextDay(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
 }

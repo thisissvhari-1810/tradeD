@@ -230,6 +230,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   // Strategy: settings (on / off, styles) are remembered; levels are fetched per symbol and session (live or the replay date).
   const [strategy, setStrategy] = useState<StrategySettings>(STRATEGY_DEFAULTS);
   const [strategyOpen, setStrategyOpen] = useState(false);
+  /** Chosen sessions for the strategy; empty = automatic (live day or replay date, and the session before it). */
+  const [strategyDates, setStrategyDates] = useState({ current: "", previous: "" });
   const [s1, setS1] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
   // Drawings belong to what is charted: the stock, or the option contract when one is open.
   const drawingStore = optionView ? `${optionView.underlying}|${optionView.expiry}|${optionView.strike}|${optionView.right}` : desk.symbol;
@@ -938,13 +940,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     ? [REPLAY_STATUS_LABEL[replay.status], replay.cursor != null ? formatIst(replay.cursor) : replay.date, "simulated"].filter(Boolean).join(" · ")
     : [feedLabel, feedStamp, stream.detail].filter(Boolean).join(" · ") || quoteError || "Quote unavailable";
 
-  const s1Session = replay.active && replay.date ? replay.date : "live";
-  const s1Key = optionView ? null : `${symbol}|${s1Session}`;
+  const s1Session = strategyDates.current || (replay.active && replay.date ? replay.date : "live");
+  const s1Key = optionView ? null : `${symbol}|${s1Session}|${strategyDates.previous || "auto"}`;
   const s1Current = s1 && s1.key === s1Key ? s1 : null;
   const strategyOn = strategy.enabled && !optionView;
   // In replay, nothing after the replay clock is shown (a missing cursor counts as before the open).
   const strategyResult = useMemo(
-    () => (strategyOn && s1Current?.data ? strategyView(s1Current.data, replay.active ? (replay.cursor ?? 0) : null, strategy) : null),
+    // The replay clock limits only the replayed session; another chosen day shows everything it has.
+    () => (strategyOn && s1Current?.data ? strategyView(s1Current.data, replay.active && s1Current.data.date === replay.date ? (replay.cursor ?? 0) : null, strategy) : null),
     [strategyOn, s1Current, replay.active, replay.cursor, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
@@ -953,10 +956,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   useEffect(() => {
     if (!strategyOn) return;
     let stop = false;
-    const session = replay.active && replay.date ? replay.date : "live";
-    const key = `${symbol}|${session}`;
+    const session = strategyDates.current || (replay.active && replay.date ? replay.date : "live");
+    const previous = strategyDates.previous;
+    const key = `${symbol}|${session}|${previous || "auto"}`;
     const load = () => {
-      api<S1Data>(`/api/market/s1?symbol=${encodeURIComponent(symbol)}${session === "live" ? "" : `&date=${encodeURIComponent(session)}`}`)
+      api<S1Data>(`/api/market/s1?symbol=${encodeURIComponent(symbol)}${session === "live" ? "" : `&date=${encodeURIComponent(session)}`}${previous ? `&previous=${encodeURIComponent(previous)}` : ""}`)
         .then((data) => { if (!stop) setS1({ key, data, error: "" }); })
         .catch((reason: unknown) => {
           if (!stop) setS1((current) => ({ key, data: current?.key === key ? current.data : null, error: reason instanceof Error ? reason.message : "Strategy levels could not be loaded." }));
@@ -969,7 +973,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       stop = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [strategyOn, symbol, replay.active, replay.date]);
+  }, [strategyOn, symbol, replay.active, replay.date, strategyDates.current, strategyDates.previous]);
 
   function changeStrategy(next: StrategySettings) {
     setStrategy(next);
@@ -1124,6 +1128,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 loading={strategyOn && !s1Current}
                 error={s1Current?.error ?? ""}
                 disabledReason={optionView ? "The strategy works on the stock or index chart, not on an option contract." : ""}
+                dates={strategyDates}
+                onDates={setStrategyDates}
+                today={kolkataParts(new Date()).dateKey}
+                autoCurrent={replay.active && replay.date ? replay.date : kolkataParts(new Date()).dateKey}
                 onClose={() => setStrategyOpen(false)}
               />
             ) : null}

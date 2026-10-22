@@ -148,3 +148,33 @@ describe("wiring", () => {
     expect(desk).toContain("overlays={strategyOverlay}");
   });
 });
+
+describe("choosing the previous and current day", () => {
+  const desk = readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8");
+  const panel = readFileSync(join(process.cwd(), "src/components/strategy-panel.tsx"), "utf8");
+  const server = readFileSync(join(process.cwd(), "src/server/market.ts"), "utf8");
+  const route = readFileSync(join(process.cwd(), "src/app/api/market/s1/route.ts"), "utf8");
+
+  it("the panel has Current day and Previous day pickers, each with Auto", () => {
+    expect(panel).toContain('label="Current day"');
+    expect(panel).toContain('label="Previous day"');
+    expect(panel).toMatch(/>\s*Auto\s*<\/button>/);
+    expect(panel).toContain('onClick={() => onChange("")}');
+  });
+
+  it("the chosen days are sent to the server and keyed so data never mixes", () => {
+    expect(desk).toContain("previous ? `&previous=${encodeURIComponent(previous)}` : \"\"");
+    expect(desk).toContain('`${symbol}|${s1Session}|${strategyDates.previous || "auto"}`');
+    expect(route).toContain('url.searchParams.get("previous")');
+  });
+
+  it("a chosen previous day must be before the current day and must have traded", () => {
+    expect(server).toContain("if (previousDate != null && previousDate >= day)");
+    expect(server).toContain("(bar: Candle) => istDay(bar.time) === previousDate");
+    expect(server).toContain("weekend, holiday or not returned");
+  });
+
+  it("the replay clock only limits the replayed session", () => {
+    expect(desk).toContain("replay.active && s1Current.data.date === replay.date ? (replay.cursor ?? 0) : null");
+  });
+});

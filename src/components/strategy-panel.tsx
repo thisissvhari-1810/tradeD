@@ -15,7 +15,7 @@ const DASHES: Array<{ id: LineDash; label: string }> = [{ id: "solid", label: "S
  * The Strategy panel: on / off, which drawings show, the prices used and every drawing's style.
  * Changes apply to the chart at once and are saved; they never change a calculated price.
  */
-export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose }: {
+export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent }: {
   settings: StrategySettings;
   onChange: (next: StrategySettings) => void;
   data: S1Data | null;
@@ -24,6 +24,13 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   error: string;
   disabledReason: string;
   onClose: () => void;
+  /** Chosen current / previous day ("" = automatic). */
+  dates: { current: string; previous: string };
+  onDates: (next: { current: string; previous: string }) => void;
+  /** Today in IST, the latest selectable day. */
+  today: string;
+  /** The automatic current day: the replay date in replay, else today. */
+  autoCurrent: string;
 }) {
   const set = (patch: Partial<StrategySettings>) => onChange({ ...settings, ...patch });
   const levels = view?.levels ?? null;
@@ -46,6 +53,28 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2.5">
         {status ? <p className={cx("text-micro leading-snug", settings.enabled || disabledReason ? tone : "text-muted")} role="status">{status}</p> : null}
+
+        <div>
+          <p className="eyebrow mb-1">Dates</p>
+          <div className="grid gap-1.5 rounded-md border border-border-soft bg-sunken/50 p-2">
+            <DateRow
+              label="Current day"
+              hint="Open and 9:15 candle"
+              value={dates.current}
+              auto={autoCurrent}
+              max={today}
+              onChange={(current) => onDates({ current, previous: dates.previous && current && dates.previous >= current ? "" : dates.previous })}
+            />
+            <DateRow
+              label="Previous day"
+              hint="Range and close"
+              value={dates.previous}
+              auto={data?.previous?.date ?? ""}
+              max={dayBefore(dates.current || autoCurrent)}
+              onChange={(previous) => onDates({ ...dates, previous })}
+            />
+          </div>
+        </div>
 
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <Toggle label="Previous-day box" checked={settings.closeBox.visible} onChange={(visible) => set({ closeBox: { ...settings.closeBox, visible } })} swatch={settings.closeBox.border} />
@@ -87,6 +116,42 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
       </footer>
     </section>
   );
+}
+
+/** A date picker with an Auto option: empty value means automatic. */
+function DateRow({ label, hint, value, auto, max, onChange }: { label: string; hint: string; value: string; auto: string; max: string; onChange: (value: string) => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium text-text-2">{label}</span>
+        <span className="block text-micro text-muted">{value ? hint : `Auto${auto ? ` · ${auto}` : ""}`}</span>
+      </span>
+      <input
+        type="date"
+        aria-label={label}
+        className="h-7 w-[8.5rem] px-1.5 py-0 text-data"
+        value={value || auto}
+        max={max}
+        onChange={(event) => onChange(event.target.value && event.target.value <= max ? event.target.value : "")}
+      />
+      <button
+        type="button"
+        aria-pressed={!value}
+        title={`Use the automatic ${label.toLowerCase()}`}
+        className={cx("h-7 rounded-md px-2 text-micro font-semibold", !value ? "bg-primary-soft text-primary" : "text-muted hover:bg-hover hover:text-text")}
+        onClick={() => onChange("")}
+      >
+        Auto
+      </button>
+    </div>
+  );
+}
+
+/** The calendar day before a YYYY-MM-DD date. */
+function dayBefore(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  if (!year || !month || !day) return dateKey;
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);
 }
 
 function BoxSection({ title, value, onChange }: { title: string; value: StrategyBox; onChange: (next: StrategyBox) => void }) {
