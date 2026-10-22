@@ -693,25 +693,36 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     return () => { stop = true; };
   }, [optionSession, markMinute, sessionOpenCount, ledgerTick, notify]);
 
-  // Live revaluation: open option paper positions get the last traded price every 2 seconds.
+  // Live revaluation: open option paper positions follow every trade from the market feed.
   const liveSymbols = useMemo(() => (practice ?? []).filter((row) => row.contract && row.quantity > 0 && !row.replaySession).map((row) => row.symbol).sort().join(","), [practice]);
   const [livePrices, setLivePrices] = useState<{ asOf: string; prices: Record<string, number> } | null>(null);
   useEffect(() => {
     if (replay.active || !practises || !liveSymbols) return;
     let stop = false;
     let busy = false;
-    const tick = () => {
+    const query = liveSymbols.split(",").map((symbol) => `s=${encodeURIComponent(symbol)}`).join("&");
+    const merge = (prices: Record<string, number>, asOf: string) => setLivePrices((current) => ({ asOf, prices: { ...(current?.prices ?? {}), ...prices } }));
+    // Primary: every trade from Dhan's WebSocket feed. EventSource reconnects by itself when the server
+    // rotates the connection (under 60 seconds on Vercel).
+    const source = new EventSource(`/api/market/option-stream?${query}`);
+    source.addEventListener("tick", (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent<string>).data) as { symbol?: string; price?: number; time?: number };
+        if (!stop && data.symbol && typeof data.price === "number" && data.price > 0) merge({ [data.symbol]: data.price }, new Date((data.time ?? Date.now() / 1000) * 1000).toISOString());
+      } catch { /* ignore a malformed event */ }
+    });
+    // Backup: a REST snapshot every 10 seconds (Dhan's quote API is limited to about one call per second).
+    const snapshot = () => {
       if (busy || document.visibilityState !== "visible") return;
       busy = true;
-      const query = liveSymbols.split(",").map((symbol) => `s=${encodeURIComponent(symbol)}`).join("&");
       api<{ asOf: string; prices: Record<string, number> }>(`/api/market/option-ltp?${query}`)
-        .then((data) => { if (!stop) setLivePrices(data); })
+        .then((data) => { if (!stop && Object.keys(data.prices).length) merge(data.prices, data.asOf); })
         .catch(() => undefined)
         .finally(() => { busy = false; });
     };
-    tick();
-    const timer = window.setInterval(tick, 2000);
-    return () => { stop = true; window.clearInterval(timer); };
+    snapshot();
+    const timer = window.setInterval(snapshot, 10000);
+    return () => { stop = true; source.close(); window.clearInterval(timer); };
   }, [liveSymbols, replay.active, practises]);
 
   const bookRows = useMemo<BookPosition[]>(() => {
