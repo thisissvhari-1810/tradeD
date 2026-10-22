@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { AppError, clientIp, readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
@@ -17,11 +18,14 @@ async function idFrom(context: Context) {
 
 export const GET = query<Context>(async (_request, context) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   return Response.json({ account: await getBrokerAccount(user, await idFrom(context)) }, { headers: { "Cache-Control": "no-store" } });
 });
 
 export const PATCH = mutation<Context>(async (request, context) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
+  requireFeature(user, "brokerConnection");
   const id = await idFrom(context);
   const input = await readJson(request, updateBody);
   return Response.json({ account: await updateBrokerAccount(user, id, input, { ip: clientIp(request) }) });
@@ -29,6 +33,8 @@ export const PATCH = mutation<Context>(async (request, context) => {
 
 export const DELETE = mutation<Context>(async (request, context) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
+  requireFeature(user, "brokerConnection");
   return Response.json(await removeBrokerAccount(user, await idFrom(context), { ip: clientIp(request) }));
 });
 
@@ -38,6 +44,8 @@ export const DELETE = mutation<Context>(async (request, context) => {
  */
 export const POST = mutation<Context>(async (request, context) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
+  requireFeature(user, "brokerConnection");
   const id = await idFrom(context);
   const input = await readJson(request, actionBody);
   const ip = clientIp(request);

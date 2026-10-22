@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { z } from "zod";
 import { clientIp, readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
@@ -40,12 +41,14 @@ const body = z.discriminatedUnion("action", [
 
 export const GET = query(async () => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   const [orders, gate] = await Promise.all([listLiveOrders(user), gateFor(user)]);
   return Response.json({ orders, gate }, { headers: { "Cache-Control": "no-store" } });
 });
 
 export const POST = mutation(async (request) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   const input = await readJson(request, body);
   const ctx = { ip: clientIp(request) };
   switch (input.action) {

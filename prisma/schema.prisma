@@ -103,6 +103,15 @@ model User {
   mfaEnabled     Boolean    @default(false)
   mfaSecret      String?
   tokenVersion   Int        @default(0)
+  /// Feature permissions set by the Super Admin; enforced on the server. tradingEnabled is "Standard Trading".
+  featDemoTrading      Boolean @default(true)
+  featReplay           Boolean @default(true)
+  featMultiAccount     Boolean @default(true)
+  featBrokerConnection Boolean @default(true)
+  featPortfolio        Boolean @default(true)
+  featOrderHistory     Boolean @default(true)
+  featAnalytics        Boolean @default(true)
+  notes                String  @default("")
   createdById    String?
   createdBy      User?      @relation("UserCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers   User[]     @relation("UserCreator")

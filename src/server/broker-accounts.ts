@@ -316,6 +316,9 @@ export async function completeBrokerConsent(tokenId: string, accountHint: string
   if (claimed.count !== 1) throw new AppError("This connection link was already used.", 410, "CONSENT_EXPIRED");
   const account = await prisma.brokerAccount.findUnique({ where: { id: consent.accountId } });
   if (!account || account.ownerId !== consent.userId) throw new AppError("Broker account not found.", 404, "ACCOUNT_NOT_FOUND");
+  // No session on this redirect, so check the owner's standing and permissions here.
+  const owner = await prisma.user.findUnique({ where: { id: account.ownerId }, select: { status: true, featMultiAccount: true, featBrokerConnection: true } });
+  if (!owner || owner.status !== "ACTIVE" || !owner.featMultiAccount || !owner.featBrokerConnection) throw new AppError("Broker connection is not enabled for this account.", 403, "FEATURE_DISABLED");
   const envelope = await readEnvelope(account.id);
   if (!envelope?.appId || !envelope.appSecret) throw new AppError("This account has no API key configured.", 409, "ACCOUNT_NOT_CONFIGURED");
   const result = await consumeConsent({ appId: envelope.appId, appSecret: envelope.appSecret }, tokenId, deps.fetch);

@@ -1,41 +1,17 @@
 "use client";
 
+import type { FeatureKey, Features } from "@/lib/auth/features";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  Activity,
-  ArrowDownRight,
-  ArrowUpRight,
-  Bell,
-  Eye,
-  FlaskConical,
-  CandlestickChart,
-  ClipboardList,
-  GitBranch,
-  House,
-  Layers,
-  LineChart,
-  LogOut,
-  MoreHorizontal,
-  Moon,
-  Palette,
-  PieChart,
-  Settings,
-  Sun,
-  TrendingUp,
-  UsersRound,
-  Wallet,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, Moon, MoreHorizontal, Palette, PieChart, Settings, ShieldCheck, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
 import { Badge, Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
 import { appearanceKey, applyAppearance, emptyAppearance, loadAppearance, presetAppearance, saveAppearance, type Appearance } from "@/lib/color/appearance";
 
-type User = { name: string; email: string; role: string; status: string; tradingEnabled: boolean };
+type User = { name: string; email: string; role: string; status: string; tradingEnabled: boolean; features?: Features };
 type Health = {
   ok: boolean;
   database: string;
@@ -73,20 +49,20 @@ export function useDesk() {
   return value;
 }
 
-type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; accent?: boolean };
+type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; accent?: boolean; feature?: FeatureKey };
 
 const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: House },
   { href: "/chart", label: "Chart", icon: CandlestickChart },
   { href: "/options", label: "Options", icon: GitBranch },
-  { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound },
-  { href: "/positions", label: "Positions", icon: Layers },
-  { href: "/orders", label: "Orders", icon: ClipboardList },
-  { href: "/holdings", label: "Portfolio", icon: PieChart },
-  { href: "/funds", label: "Money", icon: Wallet },
+  { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound, feature: "multiAccount" },
+  { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio" },
+  { href: "/orders", label: "Orders", icon: ClipboardList, feature: "orderHistory" },
+  { href: "/holdings", label: "Portfolio", icon: PieChart, feature: "portfolio" },
+  { href: "/funds", label: "Money", icon: Wallet, feature: "portfolio" },
   { href: "/markets", label: "Markets", icon: LineChart },
   { href: "/alerts", label: "Alerts", icon: Bell },
-  { href: "/prediction", label: "Prediction", icon: TrendingUp },
+  { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
 ];
 
 const TAB_BAR = ["/", "/chart", "/options", "/positions"] as const;
@@ -270,7 +246,11 @@ export function Shell({ children }: { children: ReactNode }) {
             : { label: health ? health.marketMode.toLowerCase() : "Connecting", tone: "bg-muted" };
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   const toggleTheme = useCallback(() => setAppearance(presetAppearance(theme === "light" ? "classic" : "light", appearance)), [setAppearance, theme, appearance]);
-  const links = useMemo<NavItem[]>(() => (user?.role === "SUPER_ADMIN" ? [...NAV, { href: "/admin", label: "Admin", icon: Settings }] : [...NAV]), [user?.role]);
+  // Navigation follows the user's permissions; the server enforces the same rules on every request.
+  const links = useMemo<NavItem[]>(() => {
+    const allowed = NAV.filter((item) => !item.feature || !user?.features || user.features[item.feature]);
+    return user?.role === "SUPER_ADMIN" ? [...allowed, { href: "/admin", label: "Admin", icon: Settings }, { href: "/super-admin", label: "Users", title: "Super Admin", icon: ShieldCheck }] : allowed;
+  }, [user?.role, user?.features]);
   const goTo = useCallback((href: string) => router.push(href), [router]);
   const unread = notes.some((note) => !note.read);
 
@@ -392,6 +372,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[calc(var(--tabbar)+env(safe-area-inset-bottom))] border-t border-border-soft bg-panel/92 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
           {TAB_BAR.map((href) => {
             const item = NAV.find((link) => link.href === href)!;
+            if (item.feature && user?.features && !user.features[item.feature]) return null;
             const Icon = item.icon;
             const current = active(href);
             return (

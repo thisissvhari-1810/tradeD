@@ -5,6 +5,7 @@ import { Secret, TOTP } from "otpauth";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import type { AppRole } from "@/lib/auth/permissions";
+import { featuresOf, type Features } from "@/lib/auth/features";
 
 export const SESSION_COOKIE = "td_session";
 const SESSION_DAYS = 7;
@@ -17,6 +18,8 @@ export type SessionUser = {
   status: "ACTIVE" | "SUSPENDED" | "DISABLED";
   tradingEnabled: boolean;
   mfaEnabled: boolean;
+  /** Super Admin controlled feature permissions, re-read on every request. */
+  features: Features;
 };
 
 export function newToken(): string {
@@ -71,6 +74,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     status: session.user.status,
     tradingEnabled: session.user.tradingEnabled,
     mfaEnabled: session.user.mfaEnabled,
+    features: featuresOf(session.user),
   };
 }
 

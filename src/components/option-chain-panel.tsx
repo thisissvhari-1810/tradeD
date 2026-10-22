@@ -46,7 +46,7 @@ const CHIPS = ["NIFTY", "BANKNIFTY", "FINNIFTY"];
 export type ChainReplay = { date: string; session: string | null; cursor: number | null; spot: number | null; spotSymbol: string };
 
 /** Docked to the left of the chart area so the order ticket on the right never covers it. */
-export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder, ledgerTick = 0, livePaper = false }: { livePaper?: boolean; symbol: string; replay: ChainReplay | null; onClose: () => void; onOpenChart: (contract: OptionChartRequest) => void; onOrder: (draft: OptionOrderDraft) => void; ledgerTick?: number }) {
+export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder, ledgerTick = 0, livePaper = false, allowOrders = true }: { livePaper?: boolean; allowOrders?: boolean; symbol: string; replay: ChainReplay | null; onClose: () => void; onOpenChart: (contract: OptionChartRequest) => void; onOrder: (draft: OptionOrderDraft) => void; ledgerTick?: number }) {
   const [underlying, setUnderlying] = useState(symbol);
   const [shownSymbol, setShownSymbol] = useState(symbol);
   const [expiry, setExpiry] = useState("");
@@ -177,7 +177,8 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       });
     };
     return {
-      ...(replayDate ? { canTrade: (_right: Right, _strike: number, side: ChainSide | null) => side != null } : {}),
+      // Without the Demo Trading permission the chain is read-only (the API refuses orders too).
+      ...(!allowOrders ? { canTrade: () => false } : replayDate ? { canTrade: (_right: Right, _strike: number, side: ChainSide | null) => side != null } : {}),
       canSell: (right, strike) => (heldLots(right, strike) ?? 0) > 0,
       onBuy: open("BUY"),
       onSell: open("SELL"),
@@ -202,7 +203,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
           .catch((reason: unknown) => setNote({ tone: "error", text: reason instanceof Error ? reason.message : "The watchlist could not be updated." }));
       },
     };
-  }, [chain, underlying, replayDate, replaySession, onOrder, onOpenChart, heldLots, heldRow, lists, contractKey]);
+  }, [chain, underlying, replayDate, replaySession, onOrder, onOpenChart, heldLots, heldRow, lists, contractKey, allowOrders]);
 
   const move = replaying ? null : spotMove(chain?.spot ?? null, quote);
   const spotShown = replaying ? replaySpot : chain?.spot ?? null;

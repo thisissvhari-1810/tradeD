@@ -79,7 +79,7 @@ const env = {
   DHAN_ACCOUNT_OWNER_EMAIL: "owner@x.test",
 } as unknown as NodeJS.ProcessEnv;
 
-const user = (email: string, id = email): SessionUser => ({ id, email, name: id, role: "STUDENT", status: "ACTIVE", tradingEnabled: true, mfaEnabled: false });
+const user = (email: string, id = email): SessionUser => ({ id, email, name: id, role: "STUDENT", status: "ACTIVE", tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } });
 const owner = user("owner@x.test", "u-owner");
 const stranger = user("someone@x.test", "u-other");
 const ctx = { ip: "127.0.0.1" };

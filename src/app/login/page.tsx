@@ -46,7 +46,7 @@ export default function LoginPage() {
             <p className="text-data text-muted">Indian markets practice terminal</p>
           </div>
         </div>
-        <p className="mt-5 text-dense text-text-2">{challenge ? "Enter the code from your authenticator app." : "Sign in with your TradeM account. Practice orders stay virtual."}</p>
+        <p className="mt-5 text-dense text-text-2">{challenge ? "Enter the code from your authenticator app." : "Sign in with your TradeD account. Practice orders stay virtual."}</p>
         {challenge ? (
           <label className="mt-4 flex flex-col gap-1.5 text-data font-medium text-text-2">Authentication code
             <input className="num h-10 text-body tracking-[0.3em] text-text" inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(event) => setCode(event.target.value)} autoFocus />

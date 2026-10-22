@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
 import { paiseToRupees } from "@/lib/money";
@@ -30,6 +31,8 @@ const settleSchema = z.object({
 
 export const POST = mutation(async (request) => {
   const user = await requireUser(PRACTICE_ROLES);
+  requireFeature(user, "replay");
+  requireFeature(user, "demoTrading");
   const body = await request.json().catch(() => null);
   if (body?.action === "settle") {
     const input = settleSchema.safeParse(body);

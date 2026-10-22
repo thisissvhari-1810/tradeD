@@ -6,7 +6,7 @@ import type { SessionUser } from "../src/server/auth";
 /** In-memory stand-in for the four broker tables, enforcing the same unique constraints as Postgres. */
 const db = vi.hoisted(() => {
   type Row = Record<string, unknown> & { id: string };
-  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, consents: [] as Array<Record<string, unknown>>, settings: [] as Array<Record<string, unknown>>, seq: 0, failAudit: false };
+  const state = { accounts: [] as Row[], credentials: [] as Array<Record<string, unknown>>, orders: [] as Array<Record<string, unknown>>, audit: [] as Array<Record<string, unknown>>, consents: [] as Array<Record<string, unknown>>, settings: [] as Array<Record<string, unknown>>, ownerMulti: true, seq: 0, failAudit: false };
   const unique = () => Object.assign(new Error("Unique constraint failed"), { code: "P2002" });
   const withCredential = (row: Row, include?: unknown) => {
     const copy = { ...row };
@@ -65,6 +65,9 @@ const db = vi.hoisted(() => {
       },
       deleteMany: async () => ({ count: 0 }),
     },
+    user: {
+      findUnique: async () => ({ status: "ACTIVE", featMultiAccount: state.ownerMulti, featBrokerConnection: true }),
+    },
     brokerConsent: {
       create: async ({ data }: { data: Record<string, unknown> }) => void state.consents.push({ usedAt: null, createdAt: new Date(), ...data }),
       findMany: async ({ where }: { where: { usedAt: null; expiresAt: { gt: Date }; accountId?: string } }) =>
@@ -111,7 +114,7 @@ const listRoute = await import("../src/app/api/broker-accounts/route");
 const itemRoute = await import("../src/app/api/broker-accounts/[id]/route");
 const { resetRateLimits } = await import("../src/lib/security/rate-limit");
 
-const user = (id: string, status: SessionUser["status"] = "ACTIVE"): SessionUser => ({ id, email: `${id}@x.test`, name: id, role: "STUDENT", status, tradingEnabled: true, mfaEnabled: false });
+const user = (id: string, status: SessionUser["status"] = "ACTIVE"): SessionUser => ({ id, email: `${id}@x.test`, name: id, role: "STUDENT", status, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } });
 const alice = user("alice");
 const bob = user("bob");
 const ctx = { ip: "127.0.0.1" };
@@ -132,6 +135,7 @@ beforeEach(() => {
   db.state.audit = [];
   db.state.consents = [];
   db.state.settings = [];
+  db.state.ownerMulti = true;
   db.state.failAudit = false;
   auth.user = null;
   resetRateLimits();
@@ -370,6 +374,14 @@ describe("family account consent flow", () => {
     expect(String(db.state.credentials[0]?.ciphertext)).not.toContain(FUTURE);
 
     await expect(service.completeBrokerConsent("token-id-0001", account.id, ctx, { fetch })).rejects.toMatchObject({ code: "CONSENT_EXPIRED" });
+  });
+
+  it("refuses to finish a sign-in when the owner's Multi-Account permission was switched off", async () => {
+    const account = await family();
+    await service.configureBrokerAccount(alice, account.id, configure, ctx);
+    await service.startBrokerConsent(alice, account.id, ctx, { fetch: dhan({ consent: "consent-perm-001" }) });
+    db.state.ownerMulti = false;
+    await expect(service.completeBrokerConsent("token-id-0009", account.id, ctx, { fetch: dhan({}) })).rejects.toMatchObject({ code: "FEATURE_DISABLED" });
   });
 
   it("rejects an expired consent and a sign-in to a different Dhan account", async () => {

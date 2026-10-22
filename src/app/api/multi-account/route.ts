@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { z } from "zod";
 import { clientIp, readJson } from "@/lib/http";
 import { mutation, query } from "@/server/http";
@@ -92,11 +93,13 @@ function sourceFrom(url: URL): PriceSource {
 
 export const GET = query(async (request) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   return Response.json(await multiAccountView(user, sourceFrom(new URL(request.url))));
 });
 
 export const POST = mutation(async (request) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   const input = await readJson(request, body);
   const ip = clientIp(request);
   switch (input.action) {

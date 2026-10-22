@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
 import { readJson } from "@/lib/http";
@@ -12,11 +13,13 @@ const orderSchema = z.object({
 
 export const GET = query(async () => {
   const user = await requireUser(PRACTICE_ROLES);
+  requireFeature(user, "demoTrading");
   return Response.json(await optionsDesk(user));
 });
 
 export const POST = mutation(async (request) => {
   const user = await requireUser(PRACTICE_ROLES);
+  requireFeature(user, "demoTrading");
   const input = await readJson(request, orderSchema);
   const result = await placeOptionPaper(user, input);
   return Response.json({

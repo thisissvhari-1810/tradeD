@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
 import { AppError } from "@/lib/http";
@@ -35,6 +36,8 @@ const schema = z.discriminatedUnion("action", [
 
 export const POST = mutation(async (request) => {
   const user = await requireUser(PRACTICE_ROLES);
+  requireFeature(user, "replay");
+  requireFeature(user, "demoTrading");
   const body = await request.json().catch(() => null);
   const parsed = schema.safeParse(body);
   if (!parsed.success) {

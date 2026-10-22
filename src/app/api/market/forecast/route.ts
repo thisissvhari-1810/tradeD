@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { isHorizon, buildForecast } from "@/lib/market/forecast";
 import { isChartSpan } from "@/lib/market/spans";
 import { AppError } from "@/lib/http";
@@ -9,7 +10,8 @@ import { getHolidays } from "@/server/settings";
 export const maxDuration = 30;
 
 export const GET = query(async (request) => {
-  await requireUser();
+  const user = await requireUser();
+  requireFeature(user, "analytics");
   const url = new URL(request.url);
   const symbol = (url.searchParams.get("symbol") ?? "").trim().toUpperCase();
   const timeframe = url.searchParams.get("timeframe");

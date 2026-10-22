@@ -11,6 +11,7 @@ export const GET = query(async () => {
       role: user.role,
       status: user.status,
       tradingEnabled: user.tradingEnabled,
+      features: user.features,
     },
   });
 });

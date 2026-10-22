@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { practiceModeOf } from "@/server/practice-account";
 import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
@@ -20,6 +21,7 @@ const schema = z.object({
 
 export const POST = mutation(async (request) => {
   const user = await requireUser(PRACTICE_ROLES);
+  requireFeature(user, "demoTrading");
   const body = await request.json().catch(() => null);
   const parsed = schema.safeParse(body);
   if (!parsed.success) {

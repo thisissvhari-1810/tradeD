@@ -929,13 +929,14 @@ export function premiumMoved(reviewed: number, latest: number) {
   return gap > 0.5 && gap / reviewed > 0.05;
 }
 
-export async function adjustFunds(actor: SessionUser, userId: string, amountPaise: bigint, reason: string, ip?: string, idempotencyKey?: string) {
+export async function adjustFunds(actor: SessionUser, userId: string, amountPaise: bigint, reason: string, ip?: string, idempotencyKey?: string, mode: PracticeMode = "DEMO") {
   if (!reason.trim()) throw new AppError("A reason is required for a balance adjustment.");
-  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "DEMO") });
+  const account = mode === "DEMO" ? await prisma.virtualAccount.findUnique({ where: walletKey(userId, "DEMO") }) : await ensurePracticeAccount(userId, mode);
   if (!account?.currentPeriodId) throw new AppError("Student account not found.", 404);
   if (idempotencyKey) {
+    // A retried request returns the current balance and posts nothing.
     const prior = await prisma.ledgerEntry.findUnique({ where: { idempotencyKey } });
-    if (prior) return account;
+    if (prior) return prisma.virtualAccount.findUniqueOrThrow({ where: { id: account.id } });
   }
   return ledgerTx(async (tx) => {
     const locked = await lockAccount(tx, account.id);
@@ -959,10 +960,10 @@ export async function adjustFunds(actor: SessionUser, userId: string, amountPais
       targetId: locked.id,
       reason,
       before: { cashAvailablePaise: before },
-      after: { cashAvailablePaise: locked.cashAvailable.toString() },
+      after: { cashAvailablePaise: (BigInt(before) + amountPaise).toString(), wallet: mode },
       ipAddress: ip,
     });
-    return locked;
+    return tx.virtualAccount.findUniqueOrThrow({ where: { id: locked.id } });
   });
 }
 

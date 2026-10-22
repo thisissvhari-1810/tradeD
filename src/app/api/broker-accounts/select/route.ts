@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { z } from "zod";
 import { clientIp, readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
@@ -14,6 +15,7 @@ const body = z.object({
 /** Switches one account in or out of live orders, or renames it. */
 export const POST = mutation(async (request) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   rateLimit(`broker-accounts:select:${user.id}`, 60, 60_000);
   const input = await readJson(request, body);
   const ctx = { ip: clientIp(request) };

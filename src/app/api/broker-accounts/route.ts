@@ -1,3 +1,4 @@
+import { requireFeature } from "@/lib/auth/features";
 import { clientIp, readJson } from "@/lib/http";
 import { encryptionConfigured } from "@/lib/security/crypto";
 import { liveOrdersStatus } from "@/lib/security/flags";
@@ -11,6 +12,7 @@ export const maxDuration = 15;
 
 export const GET = query(async () => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
   const live = liveOrdersStatus();
   return Response.json(
     {
@@ -30,6 +32,8 @@ export const GET = query(async () => {
 
 export const POST = mutation(async (request) => {
   const user = await requireUser();
+  requireFeature(user, "multiAccount");
+  requireFeature(user, "brokerConnection");
   rateLimit(`broker-accounts:create:${user.id}`, 10, 60_000);
   const input = await readJson(request, createBody);
   return Response.json({ account: await createBrokerAccount(user, input, { ip: clientIp(request) }) }, { status: 201 });

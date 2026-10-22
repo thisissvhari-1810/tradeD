@@ -5,7 +5,8 @@
  *    database has no super admin yet. The password is read from the environment and never printed;
  *    remove it from the environment after the first sign-in.
  */
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
+import { randomBytes } from "node:crypto";
 import { hash } from "bcryptjs";
 import scrips from "../src/lib/market/nse-eq.json";
 import { DEMO_UNIVERSE } from "../src/lib/market/demo";
@@ -91,10 +92,70 @@ async function bootstrapOwner() {
   console.info(`db-setup: created admin ${email}. Remove BOOTSTRAP_ADMIN_PASSWORD from Vercel now.`);
 }
 
+const SEED_FLAGS: Record<string, string> = {
+  standardTrading: "tradingEnabled",
+  demoTrading: "featDemoTrading",
+  replay: "featReplay",
+  multiAccount: "featMultiAccount",
+  brokerConnection: "featBrokerConnection",
+  portfolio: "featPortfolio",
+  orderHistory: "featOrderHistory",
+  analytics: "featAnalytics",
+};
+
+/**
+ * SEED_USERS creates missing users on deploy, e.g.
+ *   SEED_USERS="ashiq@gmail.com|Ashiq|STANDARD|multiAccount=off"
+ * Entries are separated by ";". Existing users are never changed. New users get an unusable password:
+ * the Super Admin sends a one-time setup link from /super-admin.
+ */
+async function seedUsers() {
+  const raw = process.env.SEED_USERS?.trim();
+  if (!raw) return;
+  const admin = await prisma.user.findFirst({ where: { role: "SUPER_ADMIN" }, select: { id: true } });
+  const { startingCapitalPaise } = { startingCapitalPaise: DEFAULT_STARTING_CAPITAL_PAISE, ...(await readStartingCapital()) };
+  for (const entry of raw.split(";").map((item) => item.trim()).filter(Boolean)) {
+    const [emailRaw, nameRaw, roleRaw, ...flags] = entry.split("|").map((item) => item.trim());
+    const email = (emailRaw ?? "").toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { console.warn(`db-setup: skipped seed entry with an invalid email.`); continue; }
+    if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) continue;
+    const role = (roleRaw ?? "").toUpperCase() === "SUPER_ADMIN" ? "SUPER_ADMIN" : "STUDENT";
+    // Standard users start without multi-account and broker connection unless the entry says otherwise.
+    const columns: Record<string, boolean> = { featMultiAccount: role === "SUPER_ADMIN", featBrokerConnection: role === "SUPER_ADMIN" };
+    for (const flag of flags) {
+      const [key, value] = flag.split("=").map((item) => item.trim());
+      const column = key ? SEED_FLAGS[key] : undefined;
+      if (column) columns[column] = value !== "off" && value !== "false";
+    }
+    const passwordHash = await hash(randomBytes(32).toString("base64url"), 12);
+    await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({ data: { email, name: nameRaw || email.split("@")[0] || email, passwordHash, role, status: "ACTIVE", createdById: admin?.id ?? null, ...columns } });
+      await openDemoWallet(tx, user.id, startingCapitalPaise, admin?.id ?? user.id);
+      await tx.auditLog.create({ data: { actorId: admin?.id ?? null, action: "user.seed", targetType: "User", targetId: user.id, reason: "Created from SEED_USERS during deploy.", after: { email, role, ...columns } } });
+    });
+    console.info(`db-setup: created ${email} (${role === "SUPER_ADMIN" ? "Super Admin" : "Standard User"}). Send a password link from /super-admin.`);
+  }
+}
+
+async function readStartingCapital() {
+  const row = await prisma.appSetting.findUnique({ where: { key: "trading.startingCapitalPaise" } });
+  const value = typeof row?.value === "string" || typeof row?.value === "number" ? BigInt(row.value) : null;
+  return value && value > 0n ? { startingCapitalPaise: value } : {};
+}
+
+async function openDemoWallet(tx: Prisma.TransactionClient, userId: string, startingCapital: bigint, actorId: string) {
+  const account = await tx.virtualAccount.create({ data: { userId, mode: "DEMO", currency: "INR", cashAvailable: 0n, cashReserved: 0n } });
+  const period = await tx.practicePeriod.create({ data: { accountId: account.id, sequence: 1, label: "Practice period 1", startingCapital, createdById: actorId } });
+  await tx.virtualAccount.update({ where: { id: account.id }, data: { currentPeriodId: period.id, cashAvailable: startingCapital } });
+  await tx.ledgerEntry.create({ data: { accountId: account.id, practicePeriodId: period.id, type: "OPENING_BALANCE", cashDelta: startingCapital, reservedDelta: 0n, cashAvailableAfter: startingCapital, cashReservedAfter: 0n, reason: "Starting virtual capital", actorId } });
+  await tx.watchlist.create({ data: { userId, name: "Default" } });
+}
+
 async function main() {
   await seedInstruments();
   await seedSettings();
   await bootstrapOwner();
+  await seedUsers();
 }
 
 main()

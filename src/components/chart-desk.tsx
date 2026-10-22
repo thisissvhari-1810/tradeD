@@ -190,7 +190,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const live = desk.mode === "live";
   // Standing rule, checked every render: while Live, replay is off. This also catches a replay restored
   // from storage after the page opened in Live mode. Converges in one extra render.
-  if (live && replay.active) setReplay((current) => (current.active ? { ...current, active: false, status: "idle" } : current));
+  // Permissions from the Super Admin: replay and demo orders can be switched off per user.
+  const canReplay = desk.user?.features?.replay !== false;
+  const canPaperTrade = desk.user?.features?.demoTrading !== false && desk.user?.tradingEnabled !== false;
+  if ((live || !canReplay) && replay.active) setReplay((current) => (current.active ? { ...current, active: false, status: "idle" } : current));
   const replayRef = useRef(replay);
   const tapeRef = useRef<Candle[]>([]);
   const priorRef = useRef<Candle[]>([]);
@@ -923,7 +926,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           full={full}
           onFull={toggleFullScreen}
         >
-          {live ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
+          {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
           {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
           <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
         </ChartHeaderTools>
@@ -1013,6 +1016,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 onOpenChart={(contract) => setOptionView(contract)}
                 onOrder={orderFromChain}
                 livePaper={live}
+                allowOrders={canPaperTrade}
                 ledgerTick={ledgerTick}
               />
             ) : null}
