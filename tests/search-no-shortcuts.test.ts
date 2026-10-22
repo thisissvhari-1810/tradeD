@@ -17,10 +17,16 @@ const read = (path: string) => readFileSync(join(root, path), "utf8");
 describe("no keyboard shortcuts", () => {
   const files = sources(root).map((path) => ({ path, text: readFileSync(path, "utf8") }));
 
-  it("shows no key hints anywhere in the UI", () => {
+  // Chart drawing editing has its own shortcuts (undo / redo, delete, duplicate, lock, nudge), requested for
+  // the drawing system. Their hints appear only in the drawing style bar; nothing else in the app has shortcuts.
+  const DRAWING_HINTS = /drawing-edit-bar\.tsx$/;
+
+  it("shows no key hints anywhere in the UI except the drawing style bar", () => {
     for (const { path, text } of files) {
+      if (DRAWING_HINTS.test(path)) continue;
       expect(text, path).not.toMatch(/<kbd|aria-keyshortcuts|Ctrl\s*\+|Keyboard shortcuts|shortcut=/);
     }
+    expect(files.find(({ path }) => DRAWING_HINTS.test(path))?.text).not.toMatch(/<kbd|Keyboard shortcuts|shortcut=/);
   });
 
   it("has no global shortcut listeners", () => {

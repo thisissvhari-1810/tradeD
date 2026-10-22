@@ -142,10 +142,10 @@ export function DrawingEditBar({
       ) : null}
       <span aria-hidden className="mx-0.5 h-5 w-px bg-border" />
       <Control label="Settings" onClick={onSettings}><Settings2 className="h-4 w-4" aria-hidden /></Control>
-      <Control label={globalLock ? "All drawings are locked" : drawing.locked ? "Unlock" : "Lock"} active={drawing.locked || globalLock} disabled={globalLock} onClick={onToggleLock}>
+      <Control label={globalLock ? "All drawings are locked" : drawing.locked ? "Unlock (Ctrl+Shift+L)" : "Lock (Ctrl+Shift+L)"} active={drawing.locked || globalLock} disabled={globalLock} onClick={onToggleLock}>
         {drawing.locked || globalLock ? <Lock className="h-4 w-4" aria-hidden /> : <Unlock className="h-4 w-4" aria-hidden />}
       </Control>
-      <Control label="Delete" danger disabled={locked} onClick={onDelete}><Trash2 className="h-4 w-4" aria-hidden /></Control>
+      <Control label="Delete (Del)" danger disabled={locked} onClick={onDelete}><Trash2 className="h-4 w-4" aria-hidden /></Control>
       <Control label="More" expanded={open === "more"} onClick={() => toggle("more")}><MoreHorizontal className="h-4 w-4" aria-hidden /></Control>
 
       {open === "line" ? (
@@ -195,7 +195,7 @@ export function DrawingEditBar({
       ) : null}
       {open === "more" ? (
         <Pop flip={flip} menu align="right">
-          <MenuItem icon={<Copy className="h-4 w-4" aria-hidden />} label="Clone" onClick={() => { onAction("duplicate"); setOpen(null); }} />
+          <MenuItem icon={<Copy className="h-4 w-4" aria-hidden />} label="Clone (Ctrl+D)" onClick={() => { onAction("duplicate"); setOpen(null); }} />
           <MenuItem icon={<Layers className="h-4 w-4" aria-hidden />} label="Bring forward" onClick={() => { onAction("forward"); setOpen(null); }} />
           <MenuItem icon={<SquareStack className="h-4 w-4" aria-hidden />} label="Send backward" onClick={() => { onAction("backward"); setOpen(null); }} />
           <MenuItem icon={drawing.hidden ? <Eye className="h-4 w-4" aria-hidden /> : <EyeOff className="h-4 w-4" aria-hidden />} label={drawing.hidden ? "Show" : "Hide"} onClick={() => { onAction("hide"); setOpen(null); }} />

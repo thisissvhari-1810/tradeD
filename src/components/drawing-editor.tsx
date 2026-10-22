@@ -5,7 +5,7 @@ import { CHART_SPANS, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
 import { ColorPicker } from "@/components/color-picker";
 import { useDesk } from "@/components/shell";
 import { rememberColor, toggleFavorite } from "@/lib/color/appearance";
-import { FIB_CHANNEL_RATIOS, FIB_EXTENSION_RATIOS, FIB_FAN_RATIOS, FIB_RATIOS, FIB_TIME_RATIOS, GANN_RATIOS, RECTANGLE_CENTER, defaultTextStyle, duplicateDrawing, loadTemplates, moveDrawing, saveTemplates, type Drawing, type DrawingTemplate, type LineDash, type TextAlign, type TextValign } from "@/components/drawing-model";
+import { FIB_CHANNEL_RATIOS, FIB_EXTENSION_RATIOS, FIB_FAN_RATIOS, FIB_RATIOS, FIB_TIME_RATIOS, fibLevelSet, GANN_RATIOS, RECTANGLE_CENTER, defaultTextStyle, duplicateDrawing, loadTemplates, moveDrawing, saveTemplates, type Drawing, type DrawingTemplate, type LineDash, type TextAlign, type TextValign } from "@/components/drawing-model";
 import { toolLabel } from "@/components/drawing-tools";
 
 const TABS = ["Style", "Text", "Coordinates", "Visibility"] as const;
@@ -93,7 +93,9 @@ export function DrawingProperties({ drawing, onChange, onClose }: { drawing: Dra
                 </label>
               </fieldset>
             ) : null}
-            {fibRatios(drawing.kind) ? (
+            {drawing.kind === "fib" || drawing.kind === "fibext" ? (
+              <FibLevelsEditor drawing={drawing} patch={patch} />
+            ) : fibRatios(drawing.kind) ? (
               <fieldset className="grid gap-2 rounded-xl border border-border p-2">
                 <legend>Level colours</legend>
                 {fibRatios(drawing.kind)?.map((ratio, index) => (
@@ -264,6 +266,33 @@ function ColorField({ label, value, onChange, opacity, onOpacity }: { label: str
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Show / hide, edit, add and remove Fibonacci levels. Colours stay paired with their row. */
+function FibLevelsEditor({ drawing, patch }: { drawing: Drawing; patch: (next: Partial<Drawing>) => void }) {
+  const levels = fibLevelSet(drawing);
+  const colors = levels.map((_, index) => drawing.levelColors?.[index] || drawing.color);
+  const save = (next: typeof levels, nextColors = colors) => patch({ levels: next, levelColors: nextColors });
+  return (
+    <fieldset className="grid gap-1.5 rounded-xl border border-border p-2">
+      <legend>Levels</legend>
+      {levels.map((level, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <input type="checkbox" className="oc-check" checked={level.visible} aria-label={`Show level ${level.ratio}`} onChange={(event) => save(levels.map((item, at) => at === index ? { ...item, visible: event.target.checked } : item))} />
+          <input type="number" step="0.001" min={-10} max={10} className="w-24 py-1" value={level.ratio} aria-label="Level value" onChange={(event) => {
+            const ratio = Number(event.target.value);
+            if (Number.isFinite(ratio)) save(levels.map((item, at) => at === index ? { ...item, ratio: Math.max(-10, Math.min(10, ratio)) } : item));
+          }} />
+          <span className="min-w-0 flex-1"><ColorField label="" value={colors[index]} onChange={(color) => save(levels, colors.map((item, at) => at === index ? color : item))} /></span>
+          <button type="button" className="rounded px-1.5 text-muted hover:text-loss disabled:opacity-40" disabled={levels.length <= 1} aria-label={`Remove level ${level.ratio}`} onClick={() => save(levels.filter((_, at) => at !== index), colors.filter((_, at) => at !== index))}>✕</button>
+        </div>
+      ))}
+      <div className="mt-1 flex gap-2">
+        <button type="button" className="rounded-lg border border-border px-2.5 py-1 disabled:opacity-40" disabled={levels.length >= 16} onClick={() => save([...levels, { ratio: 1.618, visible: true }], [...colors, drawing.color])}>Add level</button>
+        <button type="button" className="rounded-lg border border-border px-2.5 py-1" onClick={() => patch({ levels: undefined, levelColors: undefined })}>Reset to defaults</button>
+      </div>
+    </fieldset>
   );
 }
 

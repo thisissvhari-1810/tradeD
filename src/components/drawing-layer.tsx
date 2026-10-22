@@ -5,7 +5,7 @@ import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "l
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
-import { FIB_CHANNEL_RATIOS, FIB_EXTENSION_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, drawingVisible, fibLevels, fibTimes, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
+import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, drawingVisible, duplicateDrawing, fibLevelSet, fibTimes, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, positionStats, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
 type Bar = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
@@ -82,6 +82,9 @@ export function DrawingLayer({
   const measureDrag = useRef<MeasureGesture | null>(null);
   const shapeDrag = useRef<Point | null>(null);
   const spanRef = useRef(span);
+  const candlesRef = useRef(candles);
+  /** Set when a press grabbed an existing drawing while a drawing tool was active, so its pointerup adds no point. */
+  const grabbed = useRef(false);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [selected, setSelected] = useState<string | null>(focusId ?? null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -108,6 +111,9 @@ export function DrawingLayer({
   onSelectRef.current = onSelect;
   selectedRef.current = selected;
   spanRef.current = span;
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
 
   function project() {
     const chart = chartRef.current;
@@ -162,9 +168,12 @@ export function DrawingLayer({
         }).join(" ");
         if (d) next.push({ id: drawing.id, kind: "poly", d, color: drawing.color, selected: active, opacity: drawing.kind === "highlighter" ? 0.35 : 1 });
       } else if ((drawing.kind === "fib" || drawing.kind === "fibext") && drawing.points.length >= 2) {
-        fibLevels(drawing.points[0].price, drawing.points[1].price, drawing.kind === "fibext" ? FIB_EXTENSION_RATIOS : undefined).forEach((level, index) => {
-          const y = series.priceToCoordinate(level.price);
-          if (y != null) next.push({ id: `${drawing.id}-${level.ratio}`, kind: "hline", y, color: levelColor(drawing, index), label: `${(level.ratio * 100).toFixed(1)}% ${level.price.toFixed(2)}`, selected: active });
+        const [start, end] = drawing.points;
+        fibLevelSet(drawing).forEach((level, index) => {
+          if (!level.visible) return;
+          const price = start.price + (end.price - start.price) * level.ratio;
+          const y = series.priceToCoordinate(price);
+          if (y != null) next.push({ id: `${drawing.id}-${level.ratio}`, kind: "hline", y, color: levelColor(drawing, index), label: `${(level.ratio * 100).toFixed(1)}% ${price.toFixed(2)}`, selected: active });
         });
       } else if (drawing.kind === "fibtime" && drawing.points.length >= 2) {
         fibTimes(drawing.points[0].time, drawing.points[1].time).forEach((zone, index) => {
@@ -350,7 +359,36 @@ export function DrawingLayer({
     if (!enabled) return;
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable || target.closest('[role="slider"]'))) return;
+      const mod = event.ctrlKey || event.metaKey;
+      const chosen = selectedRef.current ? drawingsRef.current.find((drawing) => drawing.id === selectedRef.current) ?? null : null;
+      if (chosen && mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "d") {
+        event.preventDefault();
+        const copy = duplicateDrawing(chosen, crypto.randomUUID());
+        onDrawingsRef.current([...drawingsRef.current, copy], true);
+        setSelected(copy.id);
+        onSelectRef.current?.(copy.id);
+        return;
+      }
+      if (chosen && mod && event.shiftKey && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        if (!lockAllRef.current) onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === chosen.id ? { ...drawing, locked: !drawing.locked, updatedAt: Date.now() } : drawing), true);
+        return;
+      }
+      if (chosen && !mod && !event.altKey && event.key.startsWith("Arrow") && !chosen.locked && !lockAllRef.current) {
+        // One bar sideways or about one pixel of price; Shift moves ten.
+        const factor = event.shiftKey ? 10 : 1;
+        const series = seriesRef.current;
+        const top = series?.coordinateToPrice(0);
+        const below = series?.coordinateToPrice(factor);
+        const dp = top != null && below != null ? Math.abs(top - below) : 0;
+        const dt = barStep(candlesRef.current) * factor;
+        const shift = event.key === "ArrowLeft" ? [-dt, 0] : event.key === "ArrowRight" ? [dt, 0] : event.key === "ArrowUp" ? [0, dp] : event.key === "ArrowDown" ? [0, -dp] : null;
+        if (!shift || (shift[0] === 0 && shift[1] === 0)) return;
+        event.preventDefault();
+        onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === chosen.id ? { ...shiftDrawing(drawing, shift[0], shift[1]), updatedAt: Date.now() } : drawing), true);
+        return;
+      }
       if (event.key === "Escape") {
         setMenu(null);
         measureDrag.current = null;
@@ -503,6 +541,10 @@ export function DrawingLayer({
   }
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (grabbed.current) {
+      grabbed.current = false;
+      return;
+    }
     const point = read(event);
     if (shapeDrag.current) {
       const start = shapeDrag.current;
@@ -542,8 +584,6 @@ export function DrawingLayer({
   }
 
   function startDrag(id: string, event: ReactPointerEvent) {
-    event.stopPropagation();
-    event.preventDefault();
     const hash = id.lastIndexOf("#");
     const suffix = hash >= 0 ? id.slice(hash + 1) : "";
     const pointIndex = suffix === "" ? undefined : Number(suffix);
@@ -551,7 +591,19 @@ export function DrawingLayer({
     const drawing = drawingsRef.current.find((item) => item.id === lookup || lookup.startsWith(`${item.id}-`) || lookup.startsWith(`${item.id}#`));
     const realId = drawing?.id;
     if (!realId || !drawing) return;
+    const drawingTool = toolRef.current !== "cursor" && toolRef.current !== "eraser";
+    // Mid-drawing (second click of a trend line, a path, a brush stroke): the press belongs to the new drawing.
+    if (drawingTool && (draftRef.current.length > 0 || shapeDrag.current || brushing.current || measureDrag.current)) return;
+    event.stopPropagation();
+    event.preventDefault();
     pickedAt.current = event.timeStamp;
+    if (drawingTool) {
+      // Pressing an existing drawing with a tool active selects and moves it instead of starting a new one.
+      grabbed.current = true;
+      window.addEventListener("pointerup", () => { window.setTimeout(() => { grabbed.current = false; }, 0); }, { once: true });
+      toolRef.current = "cursor";
+      onToolRef.current("cursor");
+    }
     if (toolRef.current === "eraser") {
       if (!isLocked(drawing)) onDrawingsRef.current(drawingsRef.current.filter((item) => item.id !== realId), true);
       setEraseHover(null);
@@ -674,7 +726,7 @@ export function DrawingLayer({
   }
 
   const capturing = enabled && tool !== "cursor";
-  const interactive = tool === "cursor" || tool === "eraser";
+  const interactive = enabled;
   const hit = interactive ? "auto" : "none";
   const hitStroke = interactive ? "stroke" : "none";
   const menuDrawing = menu ? drawings.find((item) => item.id === menu.id) : null;

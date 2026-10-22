@@ -525,6 +525,24 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     saveDrawings(symbol, next);
   }
 
+  // Undo / redo read the latest functions (they save under the current symbol).
+  const historyKeys = useRef({ undo: undoDrawings, redo: redoDrawings });
+  useEffect(() => {
+    historyKeys.current = { undo: undoDrawings, redo: redoDrawings };
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) { event.preventDefault(); historyKeys.current.undo(); }
+      else if ((key === "z" && event.shiftKey) || (key === "y" && !event.shiftKey)) { event.preventDefault(); historyKeys.current.redo(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;

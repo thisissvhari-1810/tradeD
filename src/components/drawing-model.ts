@@ -55,6 +55,8 @@ export type Drawing = {
   textStyle?: DrawingTextStyle;
   center?: CenterLineStyle;
   levelColors?: string[];
+  /** Fibonacci levels for fib / fibext. Missing means the defaults for the tool. */
+  levels?: FibLevel[];
   visibility?: DrawingVisibility;
   locked: boolean;
   hidden?: boolean;
@@ -65,7 +67,24 @@ export type Drawing = {
 export const BOX_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
 export type BoxHandle = (typeof BOX_HANDLES)[number];
 
-export const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 1] as const;
+export const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1] as const;
+
+export type FibLevel = { ratio: number; visible: boolean };
+
+/** The levels a fib / fib extension draws: the user's own set, or the defaults for that tool. */
+export function fibLevelSet(drawing: { kind: string; levels?: FibLevel[] }): FibLevel[] {
+  if (drawing.levels?.length) return drawing.levels;
+  return (drawing.kind === "fibext" ? FIB_EXTENSION_RATIOS : FIB_RATIOS).map((ratio) => ({ ratio, visible: true }));
+}
+
+export function normalizeLevels(value: unknown): FibLevel[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value
+    .filter((item): item is FibLevel => !!item && typeof item === "object" && typeof (item as FibLevel).ratio === "number" && Number.isFinite((item as FibLevel).ratio))
+    .map((item) => ({ ratio: Math.max(-10, Math.min(10, item.ratio)), visible: item.visible !== false }))
+    .slice(0, 16);
+  return rows.length ? rows : undefined;
+}
 export const FIB_EXTENSION_RATIOS = [0, 0.618, 1, 1.272, 1.618] as const;
 export const FIB_TIME_RATIOS = [0, 1, 2, 3, 5, 8] as const;
 export const DRAW_COLORS = ["#D4AF37", "#089981", "#F23645", "#F0B90B", "#F8FAFC"] as const;
@@ -475,7 +494,8 @@ export function normalizeDrawing(value: unknown): Drawing | null {
     dash: row.dash === "dashed" || row.dash === "dotted" ? row.dash : "solid",
     textStyle: normalizeTextStyle(row.textStyle),
     center: normalizeCenter(row.center),
-    levelColors: Array.isArray(row.levelColors) ? row.levelColors.filter((item): item is string => typeof item === "string").slice(0, 12) : undefined,
+    levelColors: Array.isArray(row.levelColors) ? row.levelColors.filter((item): item is string => typeof item === "string").slice(0, 16) : undefined,
+    levels: normalizeLevels(row.levels),
     visibility: normalizeVisibility(row.visibility),
     locked: Boolean(row.locked),
     hidden: Boolean(row.hidden),

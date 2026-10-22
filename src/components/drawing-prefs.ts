@@ -11,6 +11,8 @@ export type DrawingPrefs = {
   magnet: MagnetMode;
   cursor: CursorStyle;
   last: Record<string, string>;
+  /** 2 = "stay" was chosen by the user. Older saves wrote stay: true as a default, so they are ignored. */
+  stayVersion?: 2;
 };
 
 const KEY = "td-draw-prefs";
@@ -18,7 +20,7 @@ const KEY = "td-draw-prefs";
 export const DEFAULT_PREFS: DrawingPrefs = {
   favourites: [],
   favBar: { x: 12, y: 12 },
-  stay: true,
+  stay: false,
   magnet: "off",
   cursor: "cross",
   last: {},
@@ -51,7 +53,7 @@ export function parsePrefs(raw: string | null): DrawingPrefs {
         if (groups.has(group) && typeof key === "string" && toolEntry(key)) last[group] = key;
       }
     }
-    return { favourites, favBar, stay: row.stay === false ? false : true, magnet, cursor, last };
+    return { favourites, favBar, stay: row.stayVersion === 2 && row.stay === true, magnet, cursor, last, stayVersion: 2 };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -91,7 +93,7 @@ function subscribe(listener: () => void) {
 
 export function updatePrefs(patch: Partial<DrawingPrefs> | ((current: DrawingPrefs) => Partial<DrawingPrefs>)) {
   const current = snapshot();
-  const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch) };
+  const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch), stayVersion: 2 as const };
   try {
     window.localStorage.setItem(KEY, JSON.stringify(next));
   } catch {
