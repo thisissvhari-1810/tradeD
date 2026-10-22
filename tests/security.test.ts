@@ -136,3 +136,18 @@ describe("who may paper trade", () => {
     expect(mayPractice({ role: "INSTRUCTOR", status: "ACTIVE", tradingEnabled: true })).toBe(false);
   });
 });
+
+describe("practice trading has a single role rule", () => {
+  it("never gates practice orders on the student role directly", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const file of ["src/server/trading.ts", "src/server/options-paper.ts", "src/server/option-replay.ts", "src/components/chart-desk.tsx", "src/components/terminal.tsx", "src/components/option-order-ticket.tsx"]) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).not.toMatch(/role !== "STUDENT"\) throw/);
+      expect(source, file).not.toMatch(/Only a student demo account/);
+      expect(source, file).not.toMatch(/role !== "STUDENT"\) return/);
+    }
+    for (const route of ["src/app/api/demo/option/route.ts", "src/app/api/demo/option-replay/route.ts", "src/app/api/demo/replay/route.ts", "src/app/api/options/route.ts", "src/app/api/orders/route.ts", "src/app/api/portfolio/route.ts"]) {
+      expect(readFileSync(route, "utf8"), route).not.toContain('requireUser(["STUDENT"])');
+    }
+  });
+});

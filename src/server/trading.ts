@@ -518,7 +518,7 @@ export async function placeReplayOrder(
     idempotencyKey: string;
   },
 ) {
-  if (user.role !== "STUDENT") throw new AppError("Only a student demo account can place a replay order.", 403);
+  if (!mayPractice(user)) throw new AppError("This account cannot place practice orders.", 403);
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account.", 403);
   if (!Number.isInteger(input.quantity) || input.quantity <= 0) throw new AppError("Enter a whole number of shares.");
   if (!Number.isFinite(input.cursor)) throw new AppError("The replay clock is not ready.", 409);
@@ -660,7 +660,7 @@ function replayTouched(
 }
 
 export async function settleReplayOrders(user: SessionUser, input: { symbol: string; date: string; cursor: number; timeframe: string }) {
-  if (user.role !== "STUDENT") throw new AppError("Only a student demo account can settle replay orders.", 403);
+  if (!mayPractice(user)) throw new AppError("This account cannot settle practice orders.", 403);
   if (!Number.isFinite(input.cursor)) return { filled: 0 };
   const symbol = input.symbol.trim().toUpperCase();
   const session = await getReplay(symbol, input.date);
@@ -717,7 +717,7 @@ export async function placeOptionDemo(
   user: SessionUser,
   input: { symbol: string; expiry: string; strike: number; right: "CE" | "PE"; action: "BUY" | "SELL"; lots: number; idempotencyKey: string; referencePremium?: number },
 ) {
-  if (user.role !== "STUDENT") throw new AppError("Only a student demo account can buy or sell an option.", 403, "ROLE_NOT_ALLOWED");
+  if (!mayPractice(user)) throw new AppError("This account cannot buy or sell practice options.", 403, "ROLE_NOT_ALLOWED");
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account. Ask your instructor to enable it.", 403, "TRADING_DISABLED");
   if (!Number.isInteger(input.lots) || input.lots <= 0 || input.lots > 50) throw new AppError("Enter between 1 and 50 lots.", 400, "INVALID_QUANTITY", { field: "lots" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry)) throw new AppError("Choose an expiry from the option chain.", 400, "INVALID_EXPIRY", { field: "expiry" });
@@ -813,7 +813,7 @@ export async function placeOptionReplay(
   input: { symbol: string; expiry: string; strike: number; right: "CE" | "PE"; action: "BUY" | "SELL"; lots: number; session: string; cursor: number; idempotencyKey: string; referencePremium?: number },
   now = new Date(),
 ) {
-  if (user.role !== "STUDENT") throw new AppError("Only a student demo account can buy or sell an option.", 403, "ROLE_NOT_ALLOWED");
+  if (!mayPractice(user)) throw new AppError("This account cannot buy or sell practice options.", 403, "ROLE_NOT_ALLOWED");
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account. Ask your instructor to enable it.", 403, "TRADING_DISABLED");
   if (!Number.isInteger(input.lots) || input.lots <= 0 || input.lots > 50) throw new AppError("Enter between 1 and 50 lots.", 400, "INVALID_QUANTITY", { field: "lots" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry)) throw new AppError("Choose an expiry from the option chain.", 400, "INVALID_EXPIRY", { field: "expiry" });
