@@ -139,3 +139,28 @@ describe("placing a trend line", () => {
     expect(layer).not.toContain('color: "var(--muted)", locked: false');
   });
 });
+
+describe("+ Add text on a selected line", () => {
+  it("places the hint at the middle of the line, upright and just above it", async () => {
+    const { alongLine } = await import("@/components/drawing-layer");
+    const xy = (point: { time: number; price: number }) => ({ x: point.time, y: point.price });
+    const flat = alongLine({ kind: "trend", points: [{ time: 0, price: 100 }, { time: 200, price: 100 }] }, xy)!;
+    expect(flat).toMatchObject({ x: 100, angle: 0 });
+    expect(flat.y).toBeLessThan(100);
+    // Drawn right-to-left, the text still reads left-to-right.
+    expect(Math.abs(alongLine({ kind: "trend", points: [{ time: 200, price: 100 }, { time: 0, price: 120 }] }, xy)!.angle)).toBeLessThan(90);
+    expect(alongLine({ kind: "hline", points: [{ time: 0, price: 1 }, { time: 1, price: 1 }] }, xy)).toBeNull();
+  });
+
+  it("shows the hint only on a selected drawing with no text, and opens an in-place box", () => {
+    expect(layer).toContain('text: "+ Add text"');
+    expect(layer).toContain("if (!label && !selected) return;");
+    expect(layer).toContain('openInline(id, id.slice(0, -"-addtext".length));');
+    expect(layer).toContain('aria-label="Drawing text"');
+  });
+
+  it("edits an existing caption on double-click and never saves a cancelled edit", () => {
+    expect(layer).toContain('markId.endsWith("-caption") ? { onDoubleClick:');
+    expect(layer).toContain("if (!id || inlineCancelled.current) return;");
+  });
+});

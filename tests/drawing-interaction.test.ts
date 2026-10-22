@@ -172,7 +172,7 @@ describe("text on any drawing", () => {
   });
 
   it("draws the caption for lines, levels and tools that had no text", () => {
-    expect(layer).toContain("pushCaption(next, drawing, xy, series, scale.width());");
+    expect(layer).toContain("pushCaption(next, drawing, xy, series, scale.width(), active);");
     expect(layer).toContain('const OWN_TEXT = new Set<string>(["text", "note", "price", "callout", "marker", "rect", "ellipse"]);');
   });
 

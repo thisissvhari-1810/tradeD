@@ -16,7 +16,7 @@ type Mark = (
   | { id: string; kind: "segment"; x1: number; y1: number; x2: number; y2: number; color: string; selected: boolean; dash?: boolean }
   | { id: string; kind: "hline"; y: number; color: string; label: string; selected: boolean }
   | { id: string; kind: "poly"; d: string; color: string; selected: boolean; opacity?: number }
-  | { id: string; kind: "text"; x: number; y: number; text: string; color: string; selected: boolean; size?: number; bold?: boolean; italic?: boolean; anchor?: "start" | "middle" | "end" }
+  | { id: string; kind: "text"; x: number; y: number; text: string; color: string; selected: boolean; size?: number; bold?: boolean; italic?: boolean; anchor?: "start" | "middle" | "end"; angle?: number }
   | { id: string; kind: "dot"; x: number; y: number; color: string; selected: boolean }
   | { id: string; kind: "vline"; x: number; color: string; selected: boolean }
   | { id: string; kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; color: string; fill: string; selected: boolean }
@@ -103,6 +103,9 @@ export function DrawingLayer({
   const [selected, setSelected] = useState<string | null>(focusId ?? null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
+  /** In-place text box opened from "+ Add text" or by double-clicking a caption. */
+  const [inline, setInline] = useState<{ id: string; x: number; y: number; angle: number } | null>(null);
+  const inlineCancelled = useRef(false);
   const [eraseHover, setEraseHover] = useState<string | null>(null);
   const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
   const stayRef = useRef(stay);
@@ -304,7 +307,7 @@ export function DrawingLayer({
         next[index] = { ...mark, ...tinted, stroke: mark.stroke ?? drawing.width ?? 1.5, pattern: forced ? "dashed" : (mark.pattern ?? drawing.dash ?? "solid") };
       }
       if (drawing.kind === "rect") pushCenterLine(next, drawing, xy);
-      pushCaption(next, drawing, xy, series, scale.width());
+      pushCaption(next, drawing, xy, series, scale.width(), active);
       // While placing points, each placed anchor and the cursor end show the same ring as a selected handle.
       if (drawing.id === "preview" && drawing.kind !== "brush" && drawing.kind !== "highlighter") {
         drawing.points.forEach((point, index) => {
@@ -651,7 +654,33 @@ export function DrawingLayer({
     project();
   }
 
+  function openInline(markId: string, drawingId: string) {
+    const mark = marks.find((item) => item.id === markId);
+    const target = drawingsRef.current.find((item) => item.id === drawingId);
+    if (!mark || mark.kind !== "text" || !target || isLocked(target)) return;
+    inlineCancelled.current = false;
+    setInline({ id: drawingId, x: mark.x, y: mark.y, angle: mark.angle ?? 0 });
+  }
+
+  function saveInline(value: string) {
+    const id = inline?.id;
+    setInline(null);
+    // Escape removes the box; a blur fired while it unmounts must not save.
+    if (!id || inlineCancelled.current) return;
+    const text = value.replace(/\s+/g, " ").trim();
+    onDrawingsRef.current(drawingsRef.current.map((drawing) => drawing.id === id && drawing.text !== text
+      ? { ...drawing, text, textStyle: drawing.textStyle ?? defaultTextStyle(drawing.color), updatedAt: Date.now() }
+      : drawing), true);
+  }
+
   function startDrag(id: string, event: ReactPointerEvent) {
+    if (id.endsWith("-addtext") && toolRef.current === "cursor") {
+      event.stopPropagation();
+      event.preventDefault();
+      pickedAt.current = event.timeStamp;
+      openInline(id, id.slice(0, -"-addtext".length));
+      return;
+    }
     const hash = id.lastIndexOf("#");
     const suffix = hash >= 0 ? id.slice(hash + 1) : "";
     const pointIndex = suffix === "" ? undefined : Number(suffix);
@@ -855,6 +884,7 @@ export function DrawingLayer({
       onPointerEnter: () => hoverMark(markId),
       onPointerLeave: () => setEraseHover(null),
       onContextMenu: openMenu,
+      ...(markId.endsWith("-caption") ? { onDoubleClick: () => openInline(markId, markId.slice(0, -"-caption".length)) } : {}),
     };
   }
 
@@ -929,7 +959,7 @@ export function DrawingLayer({
           if (mark.kind === "dot") {
             return <circle key={mark.id} {...bind(mark.id)} cx={mark.x} cy={mark.y} r={mark.selected ? 6 : 4} style={{ fill: ink, pointerEvents: hit, cursor: pointer }} />;
           }
-          return <text key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} fontSize={mark.size ?? 12} fontWeight={mark.bold ? 700 : 400} fontStyle={mark.italic ? "italic" : "normal"} textAnchor={mark.anchor ?? "start"} style={{ fill: ink, pointerEvents: hit, cursor: pointer }}>{mark.text}</text>;
+          return <text key={mark.id} {...bind(mark.id)} x={mark.x} y={mark.y} transform={mark.angle ? `rotate(${mark.angle} ${mark.x} ${mark.y})` : undefined} fontSize={mark.size ?? 12} fontWeight={mark.bold ? 700 : 400} fontStyle={mark.italic ? "italic" : "normal"} textAnchor={mark.anchor ?? "start"} style={{ fill: ink, pointerEvents: hit, cursor: mark.id.endsWith("-addtext") ? "text" : pointer }}>{mark.text}</text>;
         })}
       </svg>
       {selectedDrawing && editBar ? (
@@ -961,6 +991,24 @@ export function DrawingLayer({
           <ContextItem label={menuDrawing.hidden ? "Show" : "Hide"} onClick={() => { runAction(menuDrawing.id, "hide"); setMenu(null); }} />
           <ContextItem label="Remove" danger disabled={isLocked(menuDrawing)} onClick={() => { removeDrawing(menuDrawing.id); setMenu(null); }} />
         </div>
+      ) : null}
+      {inline ? (
+        <input
+          key={inline.id}
+          autoFocus
+          aria-label="Drawing text"
+          maxLength={120}
+          defaultValue={drawingsRef.current.find((drawing) => drawing.id === inline.id)?.text ?? ""}
+          placeholder="Add text"
+          className="absolute z-40 h-7 w-44 rounded-md border border-primary bg-overlay px-2 py-0 text-center text-dense text-text shadow-e2"
+          style={{ left: inline.x, top: inline.y, transform: `translate(-50%, -70%) rotate(${inline.angle}deg)`, pointerEvents: "auto" }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onBlur={(event) => saveInline(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); inlineCancelled.current = true; setInline(null); }
+          }}
+        />
       ) : null}
       {editorOpen && selectedDrawing ? <DrawingProperties drawing={selectedDrawing} onChange={(next) => {
         const item = drawingsRef.current.find((drawing) => drawing.id === next.id);
@@ -1146,6 +1194,23 @@ function pushClosed(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x: 
   pushShapeText(marks, drawing, x, y, width, height);
 }
 
+/** Line tools whose caption runs along the line, TradingView style. */
+const ALONG_KINDS = new Set<string>(["trend", "ray", "extended", "infoline", "angle", "arrow", "forecast", "projection"]);
+
+/** The middle of a line tool, nudged just above the line, with the line's angle kept upright for reading. */
+export function alongLine(drawing: { kind: string; points: Point[] }, xy: XYFn) {
+  if (!ALONG_KINDS.has(drawing.kind) || drawing.points.length < 2) return null;
+  const a = xy(drawing.points[0]);
+  const b = xy(drawing.points[1]);
+  if (!a || !b) return null;
+  let angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+  if (angle > 90) angle -= 180;
+  if (angle < -90) angle += 180;
+  const radians = (angle * Math.PI) / 180;
+  const lift = 7;
+  return { x: (a.x + b.x) / 2 + Math.sin(radians) * lift, y: (a.y + b.y) / 2 - Math.cos(radians) * lift, angle };
+}
+
 /** Kinds that already draw their own text (text tools, and shapes that write inside the box). */
 const OWN_TEXT = new Set<string>(["text", "note", "price", "callout", "marker", "rect", "ellipse"]);
 
@@ -1153,11 +1218,21 @@ const OWN_TEXT = new Set<string>(["text", "note", "price", "callout", "marker", 
  * The text added from the style bar's T button, for every other drawing: above the middle of a
  * two-point line, beside a single anchor, near the left of a horizontal line, at the top of a vertical one.
  */
-function pushCaption(marks: Mark[], drawing: Drawing, xy: XYFn, series: ISeriesApi<SeriesType>, width: number) {
+function pushCaption(marks: Mark[], drawing: Drawing, xy: XYFn, series: ISeriesApi<SeriesType>, width: number, selected = false) {
+  if (drawing.id === "preview" || OWN_TEXT.has(drawing.kind) || !drawing.points[0]) return;
   const label = drawing.text?.replace(/\s+/g, " ").trim();
-  if (!label || drawing.id === "preview" || OWN_TEXT.has(drawing.kind) || !drawing.points[0]) return;
   const style = drawing.textStyle ?? defaultTextStyle(drawing.color);
-  if (style.visible === false) return;
+  if (label && style.visible === false) return;
+  // Selected and still without text: TradingView's faint "+ Add text" hint, clickable.
+  if (!label && !selected) return;
+  const along = alongLine(drawing, xy);
+  if (along) {
+    marks.push(label
+      ? { id: `${drawing.id}-caption`, kind: "text", x: along.x, y: along.y, angle: along.angle, text: label, color: style.color, selected: false, size: style.size, bold: style.bold, italic: style.italic, anchor: "middle" }
+      : { id: `${drawing.id}-addtext`, kind: "text", x: along.x, y: along.y, angle: along.angle, text: "+ Add text", color: "color-mix(in srgb, var(--primary) 70%, transparent)", selected: false, size: 12, italic: true, anchor: "middle" });
+    return;
+  }
+  if (!label) return;
   const first = drawing.points[0];
   let x: number;
   let y: number;
