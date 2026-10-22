@@ -518,7 +518,7 @@ export async function getMarketMovers() {
 
 export { DEMO_UNIVERSE };
 
-// v3: exact 09:15 bar; daily-bar anchors for the boxes.
+// v4: exact 09:15 bar; daily-bar anchors; open from the daily candle when published.
 const s1Cache = new Map<string, { at: number; value: S1Data }>();
 
 /**
@@ -553,7 +553,8 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
   const stored = instrument?.dhanSecurityId ?? "";
   const name = index?.symbol ?? instrument!.symbol;
   const [daily, minutes] = await Promise.all([
-    dhanPriorDaily(name, stored, dayOpen).catch(() => [] as Candle[]),
+    // Through the next morning so the selected day's own daily candle (its open) is included when published.
+    dhanPriorDaily(name, stored, dayOpen + 86_400).catch(() => [] as Candle[]),
     dhanContextMinutes(name, stored, dayOpen).catch(() => [] as Candle[]),
   ]);
   // A chosen previous day must be a session that traded: its own daily bar, or its own 1-minute bars.
@@ -600,6 +601,11 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
     if (opening && opening.time + 60 <= now) first = opening;
   }
 
+  // Today's open: the selected day's daily candle (as the daily chart shows it), else the 09:15 candle's open.
+  const dayBar = normalizeTape(daily.filter((bar) => istDay(bar.time) === day)).at(-1) ?? null;
+  const openPrice = session.ok && dayBar ? dayBar.open : first ? first.open : null;
+  const openSource: S1Data["openSource"] = session.ok && dayBar ? "daily" : first ? "09:15" : null;
+
   let status: S1Data["status"];
   let message: string;
   if (!previous) {
@@ -633,7 +639,8 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
     status,
     message,
     previous,
-    open: first ? first.open : null,
+    open: openPrice,
+    openSource,
     firstMinute: first ? { time: first.time, open: first.open, high: first.high, low: first.low } : null,
     firstBarTime,
     anchors,

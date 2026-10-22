@@ -273,3 +273,26 @@ describe("boxes made with the drawing tool's own move and clone", () => {
     expect(overlay).toContain("shiftDrawing(clone, cloneDt, shiftB)");
   });
 });
+
+describe("open from the daily candle, lifecycle log, manual rectangles", () => {
+  const server = readFileSync(join(process.cwd(), "src/server/market.ts"), "utf8");
+  const desk = readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8");
+  const panel = readFileSync(join(process.cwd(), "src/components/strategy-panel.tsx"), "utf8");
+
+  it("takes today's open from the day's daily candle when published, else the 09:15 candle", () => {
+    expect(server).toContain("dhanPriorDaily(name, stored, dayOpen + 86_400)");
+    expect(server).toContain("const openPrice = session.ok && dayBar ? dayBar.open : first ? first.open : null;");
+  });
+
+  it("logs the reconciliation (created / updated / retained / removed) under one prefix", () => {
+    expect(desk).toContain("[TradeD Strategy] Rectangle A");
+    expect(desk).toContain("[TradeD Strategy] Rectangle B");
+    expect(desk).toContain("[TradeD Strategy] lifecycle");
+    expect(desk).toContain('before.get(id) === after.get(id) ? "retained" : "updated"');
+  });
+
+  it("tells the user when the chart also has their own rectangles", () => {
+    expect(desk).toContain('manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}');
+    expect(panel).toContain("not part of the Strategy (which draws only boxes A and B)");
+  });
+});

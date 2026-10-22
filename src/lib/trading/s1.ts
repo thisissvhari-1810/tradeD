@@ -29,8 +29,10 @@ export type S1Data = {
   status: "ready" | "waiting" | "closed" | "unavailable";
   message: string;
   previous: PreviousSession | null;
-  /** The session's opening price: the open of its 09:15 candle. Null until that candle exists. */
+  /** The session's opening price: its daily candle's open when the provider has it, else the 09:15 candle's open. */
   open: number | null;
+  /** Where `open` came from. */
+  openSource?: "daily" | "09:15" | null;
   /** The 09:15:00 IST 1-minute candle (time = its opening timestamp). Null if not returned or not finished. */
   firstMinute: S1FirstMinute | null;
   /** First 1-minute bar the provider returned for the session, for diagnosing a missing 09:15 bar. */

@@ -9,7 +9,7 @@ import { ChartToolbar, FavouritesBar, type RemoveScope, type VisibilityAction } 
 import { useDrawingPrefs } from "@/components/drawing-prefs";
 import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
-import { strategyView } from "@/components/strategy-overlay";
+import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
@@ -951,15 +951,45 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
-  // Debug trace: in development, or with localStorage "td-debug-strategy" = "1". Logged once per result.
+  // Strategy drawings are derived, not stored: each refresh reconciles to the same ids. The log below
+  // shows that (created / updated / retained / removed). On in development, or with
+  // localStorage "td-debug-strategy" = "1"; it runs only when the strategy result changes.
+  const strategyLog = useRef(new Map<string, string>());
   useEffect(() => {
-    const trace = strategyResult?.trace;
-    if (!trace) return;
     let wanted = process.env.NODE_ENV !== "production";
     try { wanted ||= localStorage.getItem("td-debug-strategy") === "1"; } catch { /* storage unavailable */ }
+    const before = strategyLog.current;
+    const after = new Map(strategyOverlay.map((drawing) => [drawing.id, JSON.stringify(drawing.points)]));
+    strategyLog.current = after;
     if (!wanted) return;
-    console.info("[strategy]", { symbol, session: s1Current?.data?.date, failures: strategyResult?.failures, ...trace });
-  }, [strategyResult, symbol, s1Current]);
+    const ids = new Set([...before.keys(), ...after.keys()]);
+    const lifecycle = [...ids].map((id) => ({
+      id,
+      action: !before.has(id) ? "created" : !after.has(id) ? "removed (strategy off, hidden, or session / symbol changed)" : before.get(id) === after.get(id) ? "retained" : "updated",
+    }));
+    const trace = strategyResult?.trace;
+    const data = s1Current?.data;
+    if (trace && data) {
+      console.info("[TradeD Strategy] Rectangle A", {
+        symbol, session: data.date, previous: trace.previous,
+        originalTop: trace.original.top, originalBottom: trace.original.bottom, originalMid: trace.original.mid, originalHeight: trace.original.height,
+        translationA: trace.shiftA, top: trace.boxA.top, bottom: trace.boxA.bottom, mid: trace.boxA.mid, height: trace.boxA.height,
+        midMinusClose: trace.boxA.mid - trace.previous.close,
+      });
+      console.info("[TradeD Strategy] Rectangle B", {
+        open: trace.open, openSource: data.openSource, cloneOf: `${STRATEGY_PREFIX}${data.symbol}:${data.date}:close-box`, cloneId: `${STRATEGY_PREFIX}${data.symbol}:${data.date}:open-box`,
+        cloneMidBefore: trace.cloneMidBefore, translationB: trace.shiftB, top: trace.boxB?.top, bottom: trace.boxB?.bottom, mid: trace.boxB?.mid, height: trace.boxB?.height,
+        midMinusOpen: trace.boxB && trace.open != null ? trace.boxB.mid - trace.open : null,
+      });
+    }
+    if (strategyResult?.failures.length) console.warn("[TradeD Strategy] validation failed", strategyResult.failures);
+    console.info("[TradeD Strategy] lifecycle", {
+      rectanglesBefore: [...before.keys()].filter((id) => id.endsWith("-box")).length,
+      rectanglesAfter: strategyOverlay.filter((drawing) => drawing.kind === "rect").length,
+      drawingsRendered: strategyOverlay.length,
+      lifecycle,
+    });
+  }, [strategyOverlay, strategyResult, symbol, s1Current]);
   const strategyDot = !s1Current ? "animate-pulse bg-muted" : s1Current.error || s1Current.data?.status === "unavailable" || strategyResult?.failures.length ? "bg-loss" : s1Current.data?.status === "ready" ? "bg-profit" : "bg-warning";
 
   useEffect(() => {
@@ -1141,6 +1171,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 onDates={setStrategyDates}
                 today={kolkataParts(new Date()).dateKey}
                 autoCurrent={replay.active && replay.date ? replay.date : kolkataParts(new Date()).dateKey}
+                manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}
                 onClose={() => setStrategyOpen(false)}
               />
             ) : null}

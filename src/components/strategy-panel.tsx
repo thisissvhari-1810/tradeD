@@ -15,7 +15,7 @@ const DASHES: Array<{ id: LineDash; label: string }> = [{ id: "solid", label: "S
  * The Strategy panel: on / off, which drawings show, the prices used and every drawing's style.
  * Changes apply to the chart at once and are saved; they never change a calculated price.
  */
-export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent }: {
+export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent, manualRectangles = 0 }: {
   settings: StrategySettings;
   onChange: (next: StrategySettings) => void;
   data: S1Data | null;
@@ -31,6 +31,8 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   today: string;
   /** The automatic current day: the replay date in replay, else today. */
   autoCurrent: string;
+  /** Rectangles the user drew on this chart (saved, not part of the strategy). */
+  manualRectangles?: number;
 }) {
   const set = (patch: Partial<StrategySettings>) => onChange({ ...settings, ...patch });
   const status = disabledReason
@@ -52,6 +54,11 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2.5">
         {status ? <p className={cx("text-micro leading-snug", settings.enabled || disabledReason ? tone : "text-muted")} role="status">{status}</p> : null}
+        {settings.enabled && manualRectangles > 0 ? (
+          <p className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro leading-snug text-warning">
+            This chart also has {manualRectangles} rectangle{manualRectangles === 1 ? "" : "s"} you drew yourself. {manualRectangles === 1 ? "It is" : "They are"} saved with the chart, not part of the Strategy (which draws only boxes A and B). Remove them from the object tree if they are old reference drawings.
+          </p>
+        ) : null}
 
         <div>
           <p className="eyebrow mb-1">Dates</p>
@@ -89,7 +96,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
             <Info label="Previous low" value={data?.previous?.low} />
             <Info label="Previous close" value={data?.previous?.close} />
             <Info label="Candle range" value={view?.levels?.range} />
-            <Info label="Today's open" value={data?.open} />
+            <Info label={data?.openSource === "daily" ? "Today's open (daily)" : data?.openSource === "09:15" ? "Today's open (09:15)" : "Today's open"} value={data?.open} />
             <Info label="9:15 high" value={data?.firstMinute?.high} />
             <Info label="9:15 low" value={data?.firstMinute?.low} />
             <Info label="Session" text={data ? `${data.date}${data.previous ? ` · prev ${data.previous.date}` : ""}` : "—"} />
