@@ -175,9 +175,7 @@ export function Home() {
             <MarketStatus />
           </header>
 
-          {desk.mode === "live" ? <LiveAccount /> : (
-            <PortfolioHero state={portfolioState} portfolio={portfolio} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} />
-          )}
+          <PortfolioHero state={portfolioState} portfolio={portfolio} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} />
 
           <IndexCards indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} />
 
@@ -607,88 +605,3 @@ function InlineState({ icon, title, body }: { icon: ReactNode; title: string; bo
   );
 }
 
-function holdingRows(payload: unknown): Array<{ symbol: string; qty: number; avg: number | null }> {
-  const list = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)
-      ? (payload as { data: unknown[] }).data
-      : null;
-  if (!list) return [];
-  return list.flatMap((row) => {
-    if (!row || typeof row !== "object") return [];
-    const item = row as Record<string, unknown>;
-    const symbol = String(item.tradingSymbol ?? item.symbol ?? "");
-    const qty = Number(item.totalQty ?? item.availableQty ?? item.quantity ?? 0);
-    if (!symbol || !Number.isFinite(qty) || qty === 0) return [];
-    const avg = Number(item.avgCostPrice ?? item.costPrice);
-    return [{ symbol, qty, avg: Number.isFinite(avg) && avg > 0 ? avg : null }];
-  });
-}
-
-function LiveAccount() {
-  const [note, setNote] = useState("");
-  const [available, setAvailable] = useState<string>("—");
-  const [holdings, setHoldings] = useState<Array<{ symbol: string; qty: number; avg: number | null }>>([]);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    api<{ broker: { funds: unknown; holdings: unknown; reason: string } }>("/api/account").then((data) => {
-      setNote(data.broker.reason);
-      const funds = data.broker.funds && typeof data.broker.funds === "object" ? data.broker.funds as Record<string, unknown> : null;
-      if (funds && "error" in funds) setNote(String(funds.error));
-      else setAvailable(inr(funds?.availabelBalance ?? funds?.availableBalance ?? funds?.withdrawableBalance));
-      const rows = holdingRows(data.broker.holdings);
-      setHoldings(rows);
-      if (data.broker.holdings && typeof data.broker.holdings === "object" && "error" in data.broker.holdings) setNote(String((data.broker.holdings as { error: unknown }).error));
-    }).catch((error: unknown) => setNote(error instanceof Error ? error.message : "Connected account unavailable.")).finally(() => setLoaded(true));
-  }, []);
-  useEffect(() => {
-    if (!holdings.length) return;
-    api<{ quotes: Array<Quote | { symbol: string; error: string }> }>(`/api/market/quotes?symbols=${holdings.map((row) => row.symbol).join(",")}`)
-      .then((data) => {
-        const next: Record<string, Quote> = {};
-        for (const row of data.quotes) if ("last" in row) next[row.symbol] = row;
-        setQuotes(next);
-      })
-      .catch(() => undefined);
-  }, [holdings]);
-  const invested = holdings.reduce((sum, row) => sum + (row.avg == null ? 0 : row.avg * row.qty), 0);
-  const current = holdings.reduce((sum, row) => {
-    const last = Number(quotes[row.symbol]?.last);
-    return sum + (Number.isFinite(last) ? last * row.qty : 0);
-  }, 0);
-  const marked = holdings.filter((row) => Number.isFinite(Number(quotes[row.symbol]?.last))).length;
-  const day = holdings.reduce((sum, row) => {
-    const move = moveOf(quotes[row.symbol]?.last, quotes[row.symbol]?.previousClose);
-    return sum + (move ? move.abs * row.qty : 0);
-  }, 0);
-  const hasCost = holdings.some((row) => row.avg != null);
-  const overall = marked && hasCost ? current - invested : null;
-  const today = marked ? day : null;
-  if (!loaded) return <HeroSkeleton />;
-  const value = marked ? inr(current) : "—";
-  const { prefix, body } = splitInr(value);
-  return (
-    <section className="hero-surface p-5 sm:p-6 lg:p-7" aria-label="Connected account summary">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="eyebrow">Current value</span>
-        <Badge tone="warning">Live view · read only</Badge>
-      </div>
-      <p className="num mt-3 flex items-baseline gap-1 font-semibold leading-none tracking-[-0.03em] text-text">
-        <span className="text-[clamp(22px,2.4vw,30px)] text-text-2">{prefix}</span>
-        <span className="text-[clamp(34px,4.2vw,48px)]">{body}</span>
-      </p>
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        {overall != null ? <DeltaPill tone={overall > 0 ? "profit" : overall < 0 ? "loss" : "neutral"} label="Overall" value={`${overall > 0 ? "+" : ""}${inr(overall)}`} /> : null}
-        {today != null ? <DeltaPill tone={today > 0 ? "profit" : today < 0 ? "loss" : "neutral"} label="Today" value={`${today > 0 ? "+" : ""}${inr(today)}`} /> : null}
-      </div>
-      <dl className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border-soft pt-5 md:grid-cols-4">
-        <Metric label="Investment" value={hasCost ? inr(invested) : "—"} />
-        <Metric label="Available" value={available} />
-        <Metric label="Holdings" value={String(holdings.length)} />
-        <Metric label="Marked" value={`${marked} / ${holdings.length}`} />
-      </dl>
-      <p className="mt-4 text-micro text-muted">{note || "Read-only connected account. TradeD does not place broker orders."}</p>
-    </section>
-  );
-}

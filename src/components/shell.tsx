@@ -471,10 +471,10 @@ export function Shell({ children }: { children: ReactNode }) {
                 {pendingMode === "live" ? <Eye className="h-5 w-5" /> : <FlaskConical className="h-5 w-5" />}
               </span>
               <h2 className="text-section font-semibold">Switch to {pendingMode === "live" ? "live view" : "demo"}?</h2>
-              <p className="mt-2 text-[13px] text-text-2">This does not move, cancel or submit any order. Demo orders stay on your practice account. Live view only reads broker account data. TradeD never sends orders to an exchange.</p>
+              <p className="mt-2 text-[13px] text-text-2">Demo and Live view each have their own ₹1,00,000 practice wallet, with separate positions and history. Live view paper-trades at live prices; nothing is sent to Dhan. Real orders are placed only from Accounts.</p>
               <div className="mt-5 flex justify-end gap-2">
                 <Button autoFocus onClick={() => setPendingMode(null)}>Stay</Button>
-                <Button variant="primary" onClick={() => { setMode(pendingMode); localStorage.setItem("td-mode", pendingMode); setPendingMode(null); }}>Switch</Button>
+                <Button variant="primary" onClick={() => { localStorage.setItem("td-mode", pendingMode); setMode(pendingMode); setPendingMode(null); window.location.reload(); }}>Switch</Button>
               </div>
             </div>
           </div>

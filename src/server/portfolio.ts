@@ -1,3 +1,4 @@
+import { ensurePracticeAccount, walletKey, type PracticeMode } from "@/server/practice-account";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { formatInr, formatSignedInr, formatSignedPercent, paiseToRupees } from "@/lib/money";
@@ -12,9 +13,10 @@ import { rupeesToPaise } from "@/lib/money";
 import { evaluateOpenOrders } from "@/server/trading";
 import type { DataMode } from "@prisma/client";
 
-export async function getStudentBundle(userId: string) {
+export async function getStudentBundle(userId: string, practiceMode: PracticeMode = "DEMO") {
+  const wallet = await ensurePracticeAccount(userId, practiceMode);
   const account = await prisma.virtualAccount.findUnique({
-    where: { userId },
+    where: { id: wallet.id },
     include: { currentPeriod: true },
   });
   if (!account?.currentPeriodId || !account.currentPeriod) throw new AppError("Practice account not found.", 404);
@@ -257,9 +259,9 @@ async function periodReturns(accountId: string, equity: bigint, starting: bigint
   };
 }
 
-export async function getAnalytics(userId: string) {
-  const bundle = await getStudentBundle(userId);
-  const account = await prisma.virtualAccount.findUniqueOrThrow({ where: { userId } });
+export async function getAnalytics(userId: string, mode: PracticeMode = "DEMO") {
+  const bundle = await getStudentBundle(userId, mode);
+  const account = await prisma.virtualAccount.findUniqueOrThrow({ where: walletKey(userId, mode) });
   const periodId = account.currentPeriodId as string;
   const executions = await prisma.execution.findMany({
     where: { order: { accountId: account.id, practicePeriodId: periodId }, realizedPaise: { not: 0 } },
@@ -300,8 +302,8 @@ export async function getAnalytics(userId: string) {
   };
 }
 
-export async function recentActivity(userId: string) {
-  const account = await prisma.virtualAccount.findUnique({ where: { userId } });
+export async function recentActivity(userId: string, mode: PracticeMode = "DEMO") {
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, mode) });
   if (!account?.currentPeriodId) return { orders: [], ledger: [], executions: [] };
   const [orders, ledger, executions] = await Promise.all([
     prisma.order.findMany({

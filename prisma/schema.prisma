@@ -113,7 +113,7 @@ model User {
   sessions             Session[]
   passwordResets       PasswordReset[]
   mfaChallenges        MfaChallenge[]
-  account              VirtualAccount?
+  accounts             VirtualAccount[]
   memberships          ClassMembership[]
   instructedClasses    Class[]             @relation("ClassInstructor")
   watchlists           Watchlist[]
@@ -215,9 +215,16 @@ model ClassMembership {
   @@index([userId])
 }
 
+/// Which practice wallet: DEMO (replay and demo screens) or LIVE (paper trading at live prices in Live view).
+enum PracticeMode {
+  DEMO
+  LIVE
+}
+
 model VirtualAccount {
   id               String   @id @default(cuid())
-  userId           String   @unique
+  userId           String
+  mode             PracticeMode @default(DEMO)
   user             User     @relation(fields: [userId], references: [id], onDelete: Restrict)
   currency         String   @default("INR")
   cashAvailable    BigInt   @default(0)
@@ -233,6 +240,8 @@ model VirtualAccount {
   positions Position[]
   snapshots PortfolioSnapshot[]
   closedTrades ClosedTrade[]
+
+  @@unique([userId, mode])
 }
 
 model PracticePeriod {

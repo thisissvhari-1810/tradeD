@@ -1,3 +1,4 @@
+import { walletKey } from "@/server/practice-account";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
@@ -16,7 +17,8 @@ export async function listDemoAccounts(actor: SessionUser) {
       name: true,
       email: true,
       status: true,
-      account: {
+      accounts: {
+        where: { mode: "DEMO" },
         select: {
           id: true,
           cashAvailable: true,
@@ -29,7 +31,7 @@ export async function listDemoAccounts(actor: SessionUser) {
   });
   const rows = [];
   for (const student of students) {
-    const account = student.account;
+    const account = student.accounts[0] ?? null;
     const periodId = account?.currentPeriod?.id;
     const realized = periodId
       ? (await prisma.position.aggregate({ where: { accountId: account.id, practicePeriodId: periodId }, _sum: { realizedPaise: true } }))._sum.realizedPaise ?? 0n
@@ -82,7 +84,7 @@ export async function resetDemoAccount(actor: SessionUser, userId: string, reaso
 
 export async function capitalHistory(actor: SessionUser, userId: string) {
   if (!can(actor.role, "funds.adjust")) throw new AppError("You cannot read allocation history.", 403);
-  const account = await prisma.virtualAccount.findUnique({ where: { userId } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "DEMO") });
   if (!account) throw new AppError("Student account not found.", 404);
   const entries = await prisma.ledgerEntry.findMany({
     where: { accountId: account.id, type: { in: ["ADMIN_ADJUSTMENT", "RESET_OPENING", "OPENING_BALANCE"] } },

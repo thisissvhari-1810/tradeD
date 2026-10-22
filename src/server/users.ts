@@ -1,4 +1,4 @@
-import type { Prisma, Role } from "@prisma/client";
+import type { PracticeMode, Prisma, Role } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { hashPassword, instructorStudentIds, type SessionUser } from "@/server/auth";
@@ -8,14 +8,14 @@ import { can } from "@/lib/auth/permissions";
 
 type Tx = Prisma.TransactionClient;
 
-export async function openStudentAccount(tx: Tx, userId: string, startingCapital: bigint, actorId: string) {
+export async function openStudentAccount(tx: Tx, userId: string, startingCapital: bigint, actorId: string, mode: PracticeMode = "DEMO") {
   const account = await tx.virtualAccount.create({
-    data: { userId, currency: "INR", cashAvailable: 0n, cashReserved: 0n },
+    data: { userId, mode, currency: "INR", cashAvailable: 0n, cashReserved: 0n },
   });
   const period = await tx.practicePeriod.create({
     data: { accountId: account.id, sequence: 1, label: "Practice period 1", startingCapital, createdById: actorId },
   });
-  await tx.virtualAccount.update({
+  const opened = await tx.virtualAccount.update({
     where: { id: account.id },
     data: { currentPeriodId: period.id, cashAvailable: startingCapital },
   });
@@ -32,8 +32,8 @@ export async function openStudentAccount(tx: Tx, userId: string, startingCapital
       actorId,
     },
   });
-  await tx.watchlist.create({ data: { userId, name: "Default" } });
-  return account;
+  if (mode === "DEMO") await tx.watchlist.create({ data: { userId, name: "Default" } });
+  return opened;
 }
 
 export async function createManagedUser(

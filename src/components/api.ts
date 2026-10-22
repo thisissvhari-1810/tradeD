@@ -13,12 +13,21 @@ export class ApiError extends Error {
   }
 }
 
+/** The active view (Demo or Live). The server keeps a separate practice wallet for each. */
+function viewMode() {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem("td-mode") === "live" ? "live" : "demo";
+  } catch {
+    return "demo";
+  }
+}
+
 export async function api<T>(path: string, body?: unknown): Promise<T> {
   let response: Response;
   try {
     response = await fetch(path, {
       method: body === undefined ? "GET" : "POST",
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), "x-td-mode": viewMode() },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {

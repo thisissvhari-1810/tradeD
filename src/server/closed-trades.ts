@@ -1,3 +1,4 @@
+import type { PracticeMode } from "@prisma/client";
 import { mayPractice } from "@/lib/auth/permissions";
 import type { Prisma, VirtualAccount } from "@prisma/client";
 import { formatInr, formatSignedInr, formatSignedPercent, paiseToRupees } from "@/lib/money";
@@ -147,14 +148,14 @@ export function presentTrade(row: {
   };
 }
 
-export async function listClosedTrades(user: SessionUser, scope: string | null) {
+export async function listClosedTrades(user: SessionUser, scope: string | null, mode: PracticeMode = "DEMO") {
   if (scope === "all") {
     if (user.role !== "SUPER_ADMIN") throw new AppError("You do not have access to other students' trades.", 403);
     const rows = await prisma.closedTrade.findMany({ orderBy: { exitAt: "desc" }, take: 100, include: { user: { select: { name: true, email: true } } } });
     return rows.map(presentTrade);
   }
   if (!mayPractice(user)) throw new AppError("Trade history is available on practice accounts.", 403);
-  const rows = await prisma.closedTrade.findMany({ where: { userId: user.id }, orderBy: { exitAt: "desc" }, take: 100 });
+  const rows = await prisma.closedTrade.findMany({ where: { userId: user.id, account: { mode } }, orderBy: { exitAt: "desc" }, take: 100 });
   return rows.map(presentTrade);
 }
 

@@ -28,7 +28,7 @@ const db = vi.hoisted(() => {
     $queryRaw: async () => [],
     appSetting: { findMany: async () => [], findUnique: async () => null },
     virtualAccount: {
-      findUnique: async ({ where }: { where: { id?: string; userId?: string } }) => state.accounts.find((row) => (where.id ? row.id === where.id : row.userId === where.userId)) ?? null,
+      findUnique: async ({ where }: { where: { id?: string; userId?: string; userId_mode?: { userId: string; mode: string } } }) => state.accounts.find((row) => (where.id ? row.id === where.id : where.userId_mode ? row.userId === where.userId_mode.userId && ((row as { mode?: string }).mode ?? "DEMO") === where.userId_mode.mode : row.userId === where.userId)) ?? null,
       update: async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(state.accounts.find((row) => row.id === where.id)!, data),
     },
     order: {

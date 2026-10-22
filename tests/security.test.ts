@@ -151,3 +151,24 @@ describe("practice trading has a single role rule", () => {
     }
   });
 });
+
+describe("separate practice wallets and broker isolation", () => {
+  it("picks the wallet from the view header, defaulting to demo", async () => {
+    const { practiceModeOf } = await import("../src/server/practice-account");
+    const req = (mode?: string) => new Request("https://traded.test/api/portfolio", { headers: mode ? { "x-td-mode": mode } : {} });
+    expect(practiceModeOf(req("live"))).toBe("LIVE");
+    expect(practiceModeOf(req("demo"))).toBe("DEMO");
+    expect(practiceModeOf(req())).toBe("DEMO");
+    expect(practiceModeOf(req("LIVE; drop table"))).toBe("DEMO");
+  });
+
+  it("shows real broker data only inside the Accounts dashboard", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const files = readdirSync("src/components", { recursive: true, withFileTypes: false }) as string[];
+    for (const file of files.filter((name) => /\.(tsx|ts)$/.test(name) && !name.split(String.fromCharCode(92)).join("/").startsWith("multi-account/"))) {
+      const source = readFileSync(`src/components/${file}`, "utf8");
+      expect(source, file).not.toMatch(/["'`]\/api\/account["'`?]/);
+      expect(source, file).not.toMatch(/\/api\/multi-account\/live/);
+    }
+  });
+});

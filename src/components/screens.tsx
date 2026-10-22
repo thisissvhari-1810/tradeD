@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowDownToLine, Landmark, Lock, PieChart, Receipt, Shield, Wallet } from "lucide-react";
+import { Landmark, Lock, PieChart, Receipt, Wallet } from "lucide-react";
 import { api, istStamp, istTime, money, type Instrument, type Quote } from "@/components/api";
 import { parseOptionLedgerSymbol } from "@/lib/options/contract";
 import { OptionChainBoard } from "@/components/option-chain";
@@ -42,17 +42,6 @@ type Portfolio = {
 type Activity = {
   orders: Array<{ id: string; symbol: string; side: string; type: string; quantity: number; filledQuantity: number; status: string; limit: string | null; stop?: string | null; avgFill: string | null; charges: string; reason: string | null; submittedAt: string }>;
   executions: Array<{ id: string; symbol: string; side: string; quantity: number; price: string; charges: string; realized: string; mode: string; source?: string; executedAt: string }>;
-};
-type Broker = {
-  liveTrading: boolean;
-  liveOrders: string;
-  reason: string;
-  token: { source: string; expiresAt: string | null; expired: boolean };
-  clientConfigured: boolean;
-  funds: Record<string, unknown> | null;
-  positions: unknown;
-  holdings: unknown;
-  orders: unknown;
 };
 type Chain = { side: string; strike: number; expiry: string; ltp: number | null; bid: number | null; ask: number | null; volume: number | null; oi: number | null; iv: number | null };
 type OptionsDesk = {
@@ -533,20 +522,17 @@ function ClosedTrades() {
 export function FundsScreen() {
   const desk = useDesk();
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
-  const [broker, setBroker] = useState<Broker | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     api<Portfolio>("/api/portfolio").then(setPortfolio).catch((caught) => setError(caught instanceof Error ? caught.message : "Practice funds unavailable."));
-    api<{ broker: Broker }>("/api/account").then((data) => setBroker(data.broker)).catch((caught) => setError(caught instanceof Error ? caught.message : "Broker status unavailable."));
   }, []);
-  const funds = broker?.funds && typeof broker.funds === "object" ? broker.funds : null;
   const loading = !portfolio && !error;
   return (
     <Page>
       <PageHeader
-        eyebrow={desk.mode === "demo" ? <><Badge tone="demo">Demo</Badge> Practice ledger</> : <><Badge tone="warning">Live view</Badge> Read only</>}
+        eyebrow={desk.mode === "demo" ? <><Badge tone="demo">Demo</Badge> Practice wallet</> : <><Badge tone="warning">Live view</Badge> Paper wallet · live prices</>}
         title="Money"
-        description="Practice balances are simulated and never mix with broker funds. The connected account below is read only."
+        description="Demo and Live view each have their own simulated wallet. Real Dhan funds are shown only in Accounts."
       />
       {error ? <Notice tone="loss">{error}</Notice> : null}
       <section aria-label="Practice balance" className="flex flex-col gap-3">
@@ -559,31 +545,6 @@ export function FundsScreen() {
           <StatCard size="sm" label="Charges" value={portfolio?.charges ?? "—"} icon={<Receipt className="text-muted" />} loading={loading} />
         </div>
       </section>
-      <Section title="Connected account" description="Read-only broker snapshot." actions={broker ? <Badge tone={broker.token.expired ? "loss" : "neutral"} dot>{broker.token.expired ? "Token expired" : "Token active"}</Badge> : null}>
-        <p className="text-dense text-text">{broker?.reason || "Checking the saved token…"}</p>
-        <dl className="mt-4 grid gap-x-6 gap-y-3 text-data sm:grid-cols-2 lg:grid-cols-4">
-          <div><dt className="text-muted">Token source</dt><dd className="mt-0.5 font-medium text-text-2">{broker?.token.source ?? "—"}</dd></div>
-          <div><dt className="text-muted">Expires</dt><dd className="mt-0.5 font-medium text-text-2">{broker?.token.expiresAt ? istTime(broker.token.expiresAt) : "Unknown"}</dd></div>
-          <div><dt className="text-muted">Client id configured</dt><dd className="mt-0.5 font-medium text-text-2">{broker ? (broker.clientConfigured ? "Yes" : "No") : "—"}</dd></div>
-          <div><dt className="text-muted">Live order placement</dt><dd className="mt-0.5 font-medium text-text-2">{broker?.liveOrders ?? "Unavailable"}</dd></div>
-        </dl>
-        <Notice tone="neutral" className="mt-4">Deposits, withdrawals, and payment apps are not connected here. This page only reads balances, so payment-provider marks are not shown.</Notice>
-        {funds && "error" in funds ? <Notice tone="loss" className="mt-3">{String(funds.error)}</Notice> : null}
-        {funds && !("error" in funds) ? (
-          <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-            {([
-              ["availabelBalance", "Available balance", <Wallet key="a" className="h-4 w-4 text-info" aria-hidden />],
-              ["availableBalance", "Available balance", <Wallet key="b" className="h-4 w-4 text-info" aria-hidden />],
-              ["utilizedAmount", "Used margin", <Landmark key="u" className="h-4 w-4 text-warning" aria-hidden />],
-              ["withdrawableBalance", "Withdrawable", <ArrowDownToLine key="w" className="h-4 w-4 text-profit" aria-hidden />],
-              ["sodLimit", "Opening limit", <Receipt key="s" className="h-4 w-4 text-muted" aria-hidden />],
-              ["collateralAmount", "Collateral", <Shield key="c" className="h-4 w-4 text-primary" aria-hidden />],
-            ] as const).map(([field, label, icon]) => (
-              funds[field] == null ? null : <Card key={field} label={label} value={String(funds[field])} icon={icon} />
-            ))}
-          </dl>
-        ) : null}
-      </Section>
     </Page>
   );
 }
@@ -708,11 +669,3 @@ export function SearchScreen() {
   );
 }
 
-function Card({ label, value, icon }: { label: string; value: string; icon?: ReactNode }) {
-  return (
-    <div className="rounded-md border border-border-soft bg-sunken/50 px-3.5 py-3">
-      <div className="flex items-center gap-1.5 text-data font-medium text-muted [&_svg]:h-3.5 [&_svg]:w-3.5">{icon}{label}</div>
-      <div className="num mt-1 text-title font-semibold text-text">{value}</div>
-    </div>
-  );
-}

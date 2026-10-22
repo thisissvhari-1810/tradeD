@@ -1,3 +1,4 @@
+import { walletKey } from "@/server/practice-account";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { paiseToRupees, rupeesToPaise } from "@/lib/money";
@@ -169,7 +170,7 @@ export type ReplayMark = {
  */
 export async function replayMarks(user: SessionUser, session: string, cursor: number, now = new Date()): Promise<{ marks: ReplayMark[]; summary: ReplaySummaryWire | null }> {
   checkReplayClock(session, cursor, now);
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account?.currentPeriodId) return { marks: [], summary: null };
   const positions = await prisma.position.findMany({
     where: { accountId: account.id, practicePeriodId: account.currentPeriodId, quantity: { gt: 0 }, instrument: { symbol: { endsWith: `|R:${session}` } } },

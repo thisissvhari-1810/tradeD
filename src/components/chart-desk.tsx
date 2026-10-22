@@ -144,30 +144,6 @@ function bookStorageKey(email: string) {
 const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: false, supertrend: false, oscillator: "none" };
 const LABEL_TOOLS = new Set<DrawTool>(["text", "note", "price", "callout", "marker"]);
 
-function brokerRows(payload: unknown): Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null {
-  if (payload && typeof payload === "object" && "error" in payload) return null;
-  const list = Array.isArray(payload)
-    ? payload
-    : payload && typeof payload === "object" && Array.isArray((payload as { data?: unknown }).data)
-      ? (payload as { data: unknown[] }).data
-      : null;
-  if (!list) return null;
-  return list.flatMap((row) => {
-    if (!row || typeof row !== "object") return [];
-    const item = row as Record<string, unknown>;
-    const symbol = String(item.tradingSymbol ?? item.symbol ?? "");
-    if (!symbol) return [];
-    const net = Number(item.netQty ?? item.netQuantity ?? 0);
-    return [{
-      symbol,
-      qty: String(item.netQty ?? item.netQuantity ?? "—"),
-      side: Number.isFinite(net) && net < 0 ? "SELL" : "BUY",
-      avg: String(item.buyAvg ?? item.costPrice ?? "—"),
-      pnl: String(item.unrealizedProfit ?? "—"),
-    }];
-  });
-}
-
 export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const desk = useDesk();
   const notify = desk.toast;
@@ -257,8 +233,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [practice, setPractice] = useState<PracticePosition[] | null>(null);
   const [practiceError, setPracticeError] = useState("");
   const [activity, setActivity] = useState<PracticeBook | null>(null);
-  const [brokerNote, setBrokerNote] = useState("");
-  const [brokerPositions, setBrokerPositions] = useState<Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null>(null);
   const [exitSymbol, setExitSymbol] = useState<PracticePosition | null>(null);
   const symbol = desk.symbol;
   const timeframeRef = useRef(timeframe);
@@ -473,15 +447,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         setPracticeError(error instanceof Error ? error.message : "Practice positions unavailable.");
       });
       api<PracticeBook>("/api/orders").then(setActivity).catch(() => setActivity(null));
-      if (desk.mode === "live") {
-        api<{ broker: { positions: unknown; reason: string; liveOrders: string } }>("/api/account").then((data) => {
-          setBrokerNote(data.broker.reason);
-          setBrokerPositions(brokerRows(data.broker.positions));
-        }).catch((error: unknown) => {
-          setBrokerPositions(null);
-          setBrokerNote(error instanceof Error ? error.message : "Broker positions unavailable.");
-        });
-      }
+
     };
     load();
     const timer = window.setInterval(load, 8000);
@@ -657,7 +623,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const practiceRow = practice?.find((row) => row.symbol === symbol) ?? null;
   const replayMark = replay.active && playCandle ? Number(rupeesToPaise(playCandle.close.toFixed(2))) : null;
   const paperPnl = held && replayMark != null ? demoUnrealized(book, { [symbol]: replayMark }) : null;
-  const openPositions = desk.mode === "live" ? brokerPositions : practice;
 
   // Replay option positions belong to one replay session per date. A session missing from this browser is adopted from the ledger.
   const adoptedSession = replay.active && replay.date ? practice?.find((row) => row.replaySession?.startsWith(`${replay.date}.`))?.replaySession ?? null : null;
@@ -1105,9 +1070,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               </div>
               {dockOpen ? (
                 <div className="flex max-h-60 min-h-0 flex-col">
-                  {dock === "open" ? <OpenTable mode={desk.mode} practice={practice} practiceError={practiceError} broker={brokerPositions} brokerNote={brokerNote} onPick={selectSymbol} /> : null}
+                  {dock === "open" ? <OpenTable mode="demo" practice={practice} practiceError={practiceError} broker={null} brokerNote="" onPick={selectSymbol} /> : null}
                   {dock === "closed" ? <ClosedTable rows={(activity?.executions ?? []).filter((row) => Number(row.realized) !== 0)} onPick={selectSymbol} /> : null}
-                  {dock === "orders" ? <OrderTable mode={desk.mode} rows={activity?.orders ?? []} note={brokerNote} onPick={selectSymbol} /> : null}
+                  {dock === "orders" ? <OrderTable mode="demo" rows={activity?.orders ?? []} note="" onPick={selectSymbol} /> : null}
                   {dock === "history" ? <HistoryTable rows={activity?.executions ?? []} onPick={selectSymbol} /> : null}
                   {dock === "replay" ? <ReplayTable book={book} mark={replayMark} symbol={symbol} onPick={selectSymbol} onCancel={(id) => setBook((current) => cancelDemoOrder(current, id))} /> : null}
                 </div>
@@ -1198,10 +1163,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           {variant === "positions" ? (
             <div className="max-h-64 overflow-auto border-t border-border p-3">
               <h2 className="text-sm font-semibold">Position</h2>
-              <p className="mt-1 text-[11px] text-muted">{desk.mode === "live" ? "Read-only broker snapshot." : "Practice ledger. Long only. This is not a broker position."}</p>
-              {desk.mode === "live" ? (
-                openPositions && openPositions.length === 0 ? <EmptyPositions symbol={symbol} live /> : <BrokerDetail rows={brokerPositions} symbol={symbol} note={brokerNote} />
-              ) : practiceRow ? <PracticeDetail row={practiceRow} onExit={() => setExitSymbol(practiceRow)} /> : (
+              <p className="mt-1 text-[11px] text-muted">{desk.mode === "live" ? "Live paper wallet. Not a broker position." : "Practice ledger. Long only. This is not a broker position."}</p>
+              {practiceRow ? <PracticeDetail row={practiceRow} onExit={() => setExitSymbol(practiceRow)} /> : (
                 <div className="mt-3 text-sm">
                   <p>No open practice position for {symbol}.</p>
                   {practiceError ? <p className="mt-2 text-xs text-loss">{practiceError}</p> : null}
@@ -1303,21 +1266,6 @@ function PracticeDetail({ row, onExit }: { row: PracticePosition; onExit: () => 
     </dl>
     <button className="mt-3 rounded-full bg-loss px-3 py-1 text-xs text-on-signal" onClick={onExit}>Exit practice position</button>
     </>
-  );
-}
-
-function BrokerDetail({ rows, symbol, note }: { rows: Array<{ symbol: string; qty: string; side: string; avg: string; pnl: string }> | null; symbol: string; note: string }) {
-  const row = rows?.find((item) => item.symbol === symbol) ?? null;
-  if (!rows) return <p className="mt-3 text-xs text-muted">{note || "The broker did not return a position list."}</p>;
-  if (!row) return <p className="mt-3 text-sm">No broker position is open for {symbol}.</p>;
-  return (
-    <dl className="mt-3 space-y-1 text-xs">
-      <Row label="Symbol" value={row.symbol} />
-      <Row label="Direction" value={row.side} />
-      <Row label="Net quantity" value={row.qty} />
-      <Row label="Average" value={row.avg} />
-      <Row label="Unrealized" value={row.pnl} />
-    </dl>
   );
 }
 
@@ -1448,11 +1396,3 @@ function ReplayTable({ book, mark, symbol, onPick, onCancel }: { book: DemoBook;
   );
 }
 
-function EmptyPositions({ symbol, live }: { symbol: string; live: boolean }) {
-  return (
-    <div className="mt-3 text-sm">
-      <p>{live ? "No open broker positions were returned." : `No open position for ${symbol}.`}</p>
-      <p className="mt-2 text-xs text-muted">Search a symbol above to load its chart. Opening a chart does not place an order.</p>
-    </div>
-  );
-}

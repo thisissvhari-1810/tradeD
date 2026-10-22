@@ -1,3 +1,4 @@
+import { ensurePracticeAccount, walletKey, type PracticeMode } from "@/server/practice-account";
 import { mayPractice } from "@/lib/auth/permissions";
 import type { Prisma, VirtualAccount } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -96,10 +97,11 @@ function quoteViewFrom(quote: Awaited<ReturnType<typeof getQuote>>): QuoteView {
 export async function placeOrder(
   user: SessionUser,
   input: { symbol: string; side: "BUY" | "SELL"; type: "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "TARGET"; quantity: number; limitRupees?: string; stopRupees?: string; idempotencyKey: string },
+  mode: PracticeMode = "DEMO",
 ) {
   if (!mayPractice(user)) throw new AppError("This account cannot place practice orders.", 403);
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account.", 403);
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await ensurePracticeAccount(user.id, mode);
   if (!account?.currentPeriodId) throw new AppError("No active practice period.", 409);
   const existing = await prisma.order.findUnique({
     where: { accountId_idempotencyKey: { accountId: account.id, idempotencyKey: input.idempotencyKey } },
@@ -532,7 +534,7 @@ export async function placeReplayOrder(
   if (revealed == null) throw new AppError("Demo mode has no candle at the replay time.", 409);
   const instrument = await practiceInstrument(symbol, revealed);
   if (!instrument?.isActive) throw new AppError("Instrument is not available.", 404);
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account?.currentPeriodId) throw new AppError("No demo capital has been assigned to this account.", 409);
   const key = input.idempotencyKey.startsWith("replay:") ? input.idempotencyKey : `replay:${input.date}:${input.idempotencyKey}`;
   const existing = await prisma.order.findUnique({
@@ -668,7 +670,7 @@ export async function settleReplayOrders(user: SessionUser, input: { symbol: str
   const revealed = replayFillPrice(session.tape, input.cursor);
   const minute = session.tape.find((item) => input.cursor >= item.time && input.cursor < item.time + 60);
   if (revealed == null || !minute) return { filled: 0 };
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account) return { filled: 0 };
   const orders = await prisma.order.findMany({
     where: { accountId: account.id, status: "OPEN", idempotencyKey: { startsWith: `replay:${input.date}:` }, instrument: { symbol } },
@@ -716,12 +718,13 @@ export async function settleReplayOrders(user: SessionUser, input: { symbol: str
 export async function placeOptionDemo(
   user: SessionUser,
   input: { symbol: string; expiry: string; strike: number; right: "CE" | "PE"; action: "BUY" | "SELL"; lots: number; idempotencyKey: string; referencePremium?: number },
+  mode: PracticeMode = "DEMO",
 ) {
   if (!mayPractice(user)) throw new AppError("This account cannot buy or sell practice options.", 403, "ROLE_NOT_ALLOWED");
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account. Ask your instructor to enable it.", 403, "TRADING_DISABLED");
   if (!Number.isInteger(input.lots) || input.lots <= 0 || input.lots > 50) throw new AppError("Enter between 1 and 50 lots.", 400, "INVALID_QUANTITY", { field: "lots" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry)) throw new AppError("Choose an expiry from the option chain.", 400, "INVALID_EXPIRY", { field: "expiry" });
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await ensurePracticeAccount(user.id, mode);
   if (!account?.currentPeriodId) throw new AppError("No demo capital has been assigned to this account yet. Ask your instructor to assign capital.", 409, "NO_DEMO_ACCOUNT");
   const key = input.idempotencyKey.startsWith("option:") ? input.idempotencyKey : `option:${input.idempotencyKey}`;
   const existing = await prisma.order.findUnique({
@@ -818,7 +821,7 @@ export async function placeOptionReplay(
   if (!Number.isInteger(input.lots) || input.lots <= 0 || input.lots > 50) throw new AppError("Enter between 1 and 50 lots.", 400, "INVALID_QUANTITY", { field: "lots" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry)) throw new AppError("Choose an expiry from the option chain.", 400, "INVALID_EXPIRY", { field: "expiry" });
   const { date } = checkReplayClock(input.session, input.cursor, now);
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account?.currentPeriodId) throw new AppError("No demo capital has been assigned to this account yet. Ask your instructor to assign capital.", 409, "NO_DEMO_ACCOUNT");
   const prefix = `optreplay:${input.session}:`;
   const key = `${prefix}${input.idempotencyKey.replace(/^optreplay:[^:]*:/, "")}`;
@@ -928,7 +931,7 @@ export function premiumMoved(reviewed: number, latest: number) {
 
 export async function adjustFunds(actor: SessionUser, userId: string, amountPaise: bigint, reason: string, ip?: string, idempotencyKey?: string) {
   if (!reason.trim()) throw new AppError("A reason is required for a balance adjustment.");
-  const account = await prisma.virtualAccount.findUnique({ where: { userId } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "DEMO") });
   if (!account?.currentPeriodId) throw new AppError("Student account not found.", 404);
   if (idempotencyKey) {
     const prior = await prisma.ledgerEntry.findUnique({ where: { idempotencyKey } });
@@ -966,7 +969,7 @@ export async function adjustFunds(actor: SessionUser, userId: string, amountPais
 export async function resetPracticePeriod(actor: SessionUser, userId: string, reason: string, ip?: string) {
   if (!reason.trim()) throw new AppError("A reason is required to reset a practice period.");
   const settings = await getTradingSettings();
-  const account = await prisma.virtualAccount.findUnique({ where: { userId }, include: { currentPeriod: true } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "DEMO"), include: { currentPeriod: true } });
   if (!account?.currentPeriodId || !account.currentPeriod) throw new AppError("Student account not found.", 404);
   return ledgerTx(async (tx) => {
     const locked = await lockAccount(tx, account.id);

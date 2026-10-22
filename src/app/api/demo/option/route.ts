@@ -1,3 +1,4 @@
+import { practiceModeOf } from "@/server/practice-account";
 import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
 import { AppError } from "@/lib/http";
@@ -25,7 +26,7 @@ export const POST = mutation(async (request) => {
     const issue = parsed.error.issues[0];
     throw new AppError(issue?.message ?? "Check the order details and try again.", 400, "INVALID_INPUT", { field: issue?.path.join(".") || undefined });
   }
-  const result = await placeOptionDemo(user, parsed.data);
+  const result = await placeOptionDemo(user, parsed.data, practiceModeOf(request));
   const order = result.order;
   return Response.json({
     id: order.id,

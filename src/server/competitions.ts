@@ -1,3 +1,4 @@
+import { walletKey } from "@/server/practice-account";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { maxDrawdownBps } from "@/lib/trading/accounting";
@@ -26,7 +27,7 @@ export async function joinCompetition(user: SessionUser, competitionId: string) 
   if (!competition || competition.status !== "ACTIVE") throw new AppError("This competition is not open.", 404);
   const now = new Date();
   if (now < competition.startsAt || now > competition.endsAt) throw new AppError("This competition is outside its entry window.");
-  const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account?.currentPeriodId) throw new AppError("Practice account not found.", 409);
   if (competition.classId) {
     const member = await prisma.classMembership.findUnique({ where: { classId_userId: { classId: competition.classId, userId: user.id } } });
@@ -52,7 +53,7 @@ export async function refreshCompetition(competitionId: string) {
   for (const participant of competition.participants) {
     if (participant.status === "DISQUALIFIED") continue;
     const period = await prisma.practicePeriod.findUnique({ where: { id: participant.practicePeriodId } });
-    const account = await prisma.virtualAccount.findFirst({ where: { userId: participant.userId } });
+    const account = await prisma.virtualAccount.findFirst({ where: { userId: participant.userId, mode: "DEMO" } });
     if (!account || !period) continue;
     const frozen = participant.status === "COMPLETED" || period.endedAt != null || account.currentPeriodId !== period.id;
     const snap = await prisma.portfolioSnapshot.findFirst({
