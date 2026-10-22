@@ -63,7 +63,7 @@ export function ChartHeaderTools({
         onClick={onIndicators}
       >
         <ChartIcon name="indicators" />
-        <span className="hidden xl:inline">Indicators</span>
+        <span className="hidden 2xl:inline">Indicators</span>
       </button>
       <HeaderDivider />
       <HeaderButton label="Undo" icon="undo" disabled={!canUndo} onClick={onUndo} />

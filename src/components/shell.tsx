@@ -266,20 +266,20 @@ export function Shell({ children }: { children: ReactNode }) {
               const current = active(href);
               return (
                 <Fragment key={href}>
-                  {href === "/positions" || href === "/markets" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft" aria-hidden /> : null}
+                  {href === "/positions" || href === "/markets" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
                   <Link
                     href={href}
                     aria-current={current ? "page" : undefined}
                     aria-label={title}
                     title={title}
                     className={cx(
-                      "group relative flex flex-col items-center gap-1 rounded-md px-1 py-2 text-micro font-medium transition-colors duration-150",
+                      "group relative flex flex-col items-center gap-1 rounded-md px-1 py-2 text-micro font-medium transition-colors duration-150 [@media(max-height:820px)]:gap-0.5 [@media(max-height:820px)]:py-1",
                       current ? "text-text" : "text-muted hover:text-text",
                     )}
                   >
                     {current ? <span className="absolute -left-2 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden /> : null}
                     <span className={cx(
-                      "relative grid h-8 w-11 place-items-center rounded-input transition-colors duration-150",
+                      "relative grid h-8 w-11 place-items-center rounded-input transition-colors duration-150 [@media(max-height:820px)]:h-7",
                       current ? "bg-primary-soft text-primary" : "group-hover:bg-hover",
                     )}>
                       <Icon className="h-5 w-5 shrink-0" aria-hidden />
@@ -290,7 +290,7 @@ export function Shell({ children }: { children: ReactNode }) {
               );
             })}
           </nav>
-          <div className="flex shrink-0 flex-col items-center gap-1 border-t border-border-soft py-3">
+          <div className="flex shrink-0 flex-col items-center gap-1 border-t border-border-soft py-3 [@media(max-height:820px)]:py-1.5">
             <Tooltip side="right" content={theme === "light" ? "Dark theme" : "Light theme"}>
               <button type="button" className="grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
                 {theme === "light" ? <Moon className="h-[18px] w-[18px]" aria-hidden /> : <Sun className="h-[18px] w-[18px]" aria-hidden />}
@@ -308,7 +308,7 @@ export function Shell({ children }: { children: ReactNode }) {
               ) : (indices.some((item) => TICKER_LABEL[item.name]) ? indices.filter((item) => TICKER_LABEL[item.name]) : indices).map((item) => (
                 <IndexChip key={item.name} label={TICKER_LABEL[item.name] ?? item.name} last={item.last} previous={item.previous} volatility={item.name === "India VIX"} />
               ))}
-              <span className="ml-1 hidden shrink-0 items-center gap-1.5 rounded-pill border border-border-soft px-2.5 py-1 text-micro font-medium text-text-2 xl:inline-flex" title={health?.marketMessage || feed.label}>
+              <span className="ml-1 hidden shrink-0 items-center gap-1.5 rounded-pill border border-border-soft px-2.5 py-1 text-micro font-medium text-text-2 2xl:inline-flex" title={health?.marketMessage || feed.label}>
                 <span className={cx("h-1.5 w-1.5 rounded-full", feed.tone, feed.label === "Live" && "live-dot text-profit")} aria-hidden />
                 {feed.label}
               </span>

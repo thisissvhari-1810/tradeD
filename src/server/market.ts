@@ -438,8 +438,9 @@ async function dhanQuoteBatch(symbols: string[]): Promise<Array<DemoQuote | { sy
   try {
     book = priced.length ? await dhanFeed(priced.map((item) => Number(item.id))) : {};
   } catch (error) {
+    // Dhan rate-limits bursts. Serve the last real quote this instance saw rather than blanking the row.
     const message = error instanceof Error ? error.message : "Quote request failed.";
-    return [...rows, ...equitySymbols.map((symbol) => ({ symbol, error: message }))];
+    return [...rows, ...equitySymbols.map((symbol) => quoteMemo.get(symbol)?.quote ?? { symbol, error: message })];
   }
   const bySymbol = new Map(priced.map((item) => [item.symbol, item.id]));
   const built: Array<{ quote: DemoQuote; id: string }> = [];

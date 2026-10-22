@@ -235,7 +235,7 @@ function RailSplit({
         aria-haspopup={menuOnly ? "menu" : undefined}
         aria-expanded={menuOnly ? Boolean(expanded) : undefined}
         className={cx(
-          "relative grid h-9 w-10 place-items-center rounded-md transition-colors duration-[var(--dur-fast)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]",
+          "relative grid h-9 w-10 place-items-center rounded-md [@media(max-height:820px)]:h-8 transition-colors duration-[var(--dur-fast)] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--focus-ring)]",
           active ? "bg-primary-soft text-primary" : expanded ? "bg-hover text-text" : "text-text-2 hover:bg-hover hover:text-text",
         )}
         onPointerDown={onPointerDown}

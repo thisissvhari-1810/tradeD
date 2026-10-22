@@ -371,7 +371,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         .then((data) => {
           const next: Record<string, Quote> = {};
           for (const row of data.quotes) if ("last" in row) next[row.symbol] = row;
-          setSideQuotes(next);
+          setSideQuotes((current) => ({ ...current, ...next }));
         })
         .catch(() => undefined);
     };
@@ -898,7 +898,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </div>
           {replay.active
             ? <span className="inline-flex items-center gap-1 rounded-pill bg-demo-soft px-2 py-0.5 text-micro font-medium text-demo"><span className="h-1.5 w-1.5 rounded-full bg-demo" aria-hidden />Replay</span>
-            : <span className={`hidden items-center gap-1 text-micro sm:inline-flex ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stamp}><span className={`h-1.5 w-1.5 rounded-full ${feedLabel === "Live" ? "bg-profit" : "bg-muted"}`} aria-hidden />{feedLabel}</span>}
+            : <span className={`hidden items-center gap-1 whitespace-nowrap text-micro 2xl:inline-flex ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stamp}><span className={`h-1.5 w-1.5 rounded-full ${feedLabel === "Live" ? "bg-profit" : "bg-muted"}`} aria-hidden />{feedLabel}</span>}
           {optionView ? <button type="button" className="rounded-full border border-border px-2 py-0.5 text-micro text-muted" onClick={() => setOptionView(null)}>Back to {optionView.underlying}</button> : null}
           <IconButton label={watched ? "Remove from watchlist" : "Add to watchlist"} active={watched} onClick={toggleWatch}>
             <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
@@ -1159,7 +1159,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                   <button className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left" onClick={() => selectSymbol(item.symbol)} title={item.name}>
                     <SymbolTitle symbol={item.symbol} name={item.name} size={24} />
                     <span className="ml-auto shrink-0 text-right">
-                      <span className={`num block whitespace-nowrap text-xs ${tone(move?.abs)}`}>{rowQuote ? money(rowQuote.last) : "…"}</span>
+                      <span className={`num block whitespace-nowrap text-xs ${tone(move?.abs)}`}>{rowQuote ? money(rowQuote.last) : "—"}</span>
                       <span className={`num block whitespace-nowrap text-[10px] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
                     </span>
                   </button>

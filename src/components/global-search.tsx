@@ -25,7 +25,7 @@ export function GlobalSearch({ pages, onSymbol, onPage }: { pages: SearchPage[];
   const [mobileOpen, setMobileOpen] = useState(false);
   return (
     <>
-      <div className="relative hidden w-[clamp(280px,26vw,380px)] shrink-0 md:block">
+      <div className="relative hidden w-[clamp(200px,20vw,380px)] shrink-0 md:block">
         <SearchField pages={pages} onSymbol={onSymbol} onPage={onPage} />
     </div>
       <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-input text-muted hover:bg-elevated hover:text-text md:hidden" aria-label="Search stocks, options and pages" onClick={() => setMobileOpen(true)}>
