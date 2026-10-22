@@ -693,9 +693,38 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     return () => { stop = true; };
   }, [optionSession, markMinute, sessionOpenCount, ledgerTick, notify]);
 
+  // Live revaluation: open option paper positions get the last traded price every 2 seconds.
+  const liveSymbols = useMemo(() => (practice ?? []).filter((row) => row.contract && row.quantity > 0 && !row.replaySession).map((row) => row.symbol).sort().join(","), [practice]);
+  const [livePrices, setLivePrices] = useState<{ asOf: string; prices: Record<string, number> } | null>(null);
+  useEffect(() => {
+    if (replay.active || !practises || !liveSymbols) return;
+    let stop = false;
+    let busy = false;
+    const tick = () => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      const query = liveSymbols.split(",").map((symbol) => `s=${encodeURIComponent(symbol)}`).join("&");
+      api<{ asOf: string; prices: Record<string, number> }>(`/api/market/option-ltp?${query}`)
+        .then((data) => { if (!stop) setLivePrices(data); })
+        .catch(() => undefined)
+        .finally(() => { busy = false; });
+    };
+    tick();
+    const timer = window.setInterval(tick, 2000);
+    return () => { stop = true; window.clearInterval(timer); };
+  }, [liveSymbols, replay.active, practises]);
+
   const bookRows = useMemo<BookPosition[]>(() => {
     const rows = practice ?? [];
-    if (!replay.active) return rows;
+    if (!replay.active) {
+      if (!livePrices) return rows;
+      return rows.map((row) => {
+        const last = livePrices.prices[row.symbol];
+        const avg = Number(row.averageCost);
+        if (last == null || !row.contract || row.quantity <= 0 || !Number.isFinite(avg)) return row;
+        return { ...row, mark: last.toFixed(2), marketValue: (last * row.quantity).toFixed(2), unrealized: ((last - avg) * row.quantity).toFixed(2), asOf: livePrices.asOf, mode: "REALTIME", stale: false };
+      });
+    }
     const cursor = replay.cursor;
     return rows.filter((row) => row.contract && row.replaySession && row.replaySession === optionSession).map((row) => {
       const beforeEntry = cursor != null && row.openedAt != null && cursor * 1000 < Date.parse(row.openedAt);
@@ -707,7 +736,25 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       const serverUsable = row.asOf != null && cursor != null && Date.parse(row.asOf) <= cursor * 1000;
       return serverUsable ? row : { ...row, mark: null, marketValue: null, unrealized: null, mode: "UNAVAILABLE", pending: true, note: "Loading the replay premium…" };
     });
-  }, [practice, replay.active, replay.cursor, optionSession, replayMarks]);
+  }, [practice, replay.active, replay.cursor, optionSession, replayMarks, livePrices]);
+  const liveTotals = useMemo(() => {
+    if (replay.active || !livePrices || !ledger) return null;
+    let valueShift = 0;
+    let pnlShift = 0;
+    for (const row of practice ?? []) {
+      const live = bookRows.find((item) => item.symbol === row.symbol);
+      if (!live || live === row) continue;
+      valueShift += Number(live.marketValue ?? 0) - Number(row.marketValue ?? 0);
+      pnlShift += Number(live.unrealized ?? 0) - Number(row.unrealized ?? 0);
+    }
+    // Ledger totals arrive formatted ("+₹1,234.50"); keep that format for the panel.
+    const parse = (text: string) => Number(String(text).replace(/[₹,+\s]/g, "").replace("−", "-"));
+    const format = (value: number, signed: boolean) => `${value < 0 ? "-" : signed && value > 0 ? "+" : ""}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const holdings = parse(ledger.holdingsValue);
+    const unrealized = parse(ledger.unrealized);
+    if (!Number.isFinite(holdings) || !Number.isFinite(unrealized)) return null;
+    return { holdings: format(holdings + valueShift, false), unrealized: format(unrealized + pnlShift, true) };
+  }, [replay.active, livePrices, ledger, practice, bookRows]);
   const currentSummary = replay.active && sessionSummary && sessionSummary.session === optionSession ? sessionSummary : null;
   const summaryHasActivity = Boolean(currentSummary && (currentSummary.trades.length > 0 || currentSummary.openCount > 0 || currentSummary.waitingCount > 0));
   const completionKey = replay.active && replay.status === "completed" && summaryHasActivity ? optionSession : null;
@@ -1087,8 +1134,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <OptionBook
               buyingPower={ledger?.cashAvailable ?? "—"}
               reserved={ledger?.cashReserved ?? "—"}
-              holdings={replayTotals?.holdings ?? ledger?.holdingsValue ?? "—"}
-              unrealized={replayTotals?.unrealized ?? ledger?.unrealized ?? "—"}
+              holdings={replayTotals?.holdings ?? liveTotals?.holdings ?? ledger?.holdingsValue ?? "—"}
+              unrealized={replayTotals?.unrealized ?? liveTotals?.unrealized ?? ledger?.unrealized ?? "—"}
               realized={ledger?.realized ?? "—"}
               realizedToday={ledger?.realizedToday ?? "—"}
               positions={bookRows}
