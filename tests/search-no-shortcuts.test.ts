@@ -45,8 +45,8 @@ describe("top-bar search", () => {
     expect(rule).toContain("white-space: nowrap");
   });
 
-  it("is at least 280px on desktop and an icon button on small screens", () => {
-    expect(search).toContain("w-[clamp(280px,26vw,380px)]");
+  it("is at least 200px on desktop (so the index chips fit) and an icon button on small screens", () => {
+    expect(search).toContain("w-[clamp(200px,20vw,380px)]");
     expect(search).toMatch(/hidden w-\[clamp[^"]*md:block/);
     expect(search).toMatch(/md:hidden" aria-label="Search stocks, options and pages"/);
   });
