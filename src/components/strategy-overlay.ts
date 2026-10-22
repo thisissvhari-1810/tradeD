@@ -27,10 +27,13 @@ export function strategyView(data: S1Data, cursor: number | null, settings: Stra
   if (failures.length) return { levels, failures, drawings: [] };
   const show = s1Reveal(data, levels, cursor);
   const tag = `${STRATEGY_PREFIX}${data.symbol}:${data.date}`;
-  const left = data.sessionOpen;
-  const right = data.sessionClose;
+  // Like the manual drawing: box 1 around the previous candle (session before it -> today),
+  // box 2 the same width one session right. Without daily anchors, or by choice: today's session.
+  const anchors = settings.boxSpan === "candles" ? data.anchors ?? null : null;
+  const closeSpan: [number, number] = anchors ? [anchors.before, anchors.day] : [data.sessionOpen, data.sessionClose];
+  const openSpan: [number, number] = anchors ? [anchors.previous, anchors.after] : [data.sessionOpen, data.sessionClose];
 
-  const box = (id: string, style: StrategyBox, top: number, bottom: number, text: string): Drawing | null => {
+  const box = (id: string, style: StrategyBox, [left, right]: [number, number], top: number, bottom: number, text: string): Drawing | null => {
     if (!style.visible && !style.mid.visible) return null;
     return {
       id: `${tag}:${id}`,
@@ -67,9 +70,9 @@ export function strategyView(data: S1Data, cursor: number | null, settings: Stra
   };
 
   const drawings = [
-    box("close-box", settings.closeBox, levels.closeBox.top, levels.closeBox.bottom, `Prev ${data.previous.date} · range ${price(levels.range)} · mid = close ${price(data.previous.close)}`),
+    box("close-box", settings.closeBox, closeSpan, levels.closeBox.top, levels.closeBox.bottom, `Prev ${data.previous.date} · range ${price(levels.range)} · mid = close ${price(data.previous.close)}`),
     show.openBox && levels.openBox && data.open != null
-      ? box("open-box", settings.openBox, levels.openBox.top, levels.openBox.bottom, `Same range · mid = open ${price(data.open)}`)
+      ? box("open-box", settings.openBox, openSpan, levels.openBox.top, levels.openBox.bottom, `Same range · mid = open ${price(data.open)}`)
       : null,
     show.openingRange && levels.openingRange ? line("high", settings.high, levels.openingRange.high, levels.openingRange.time, `9:15 High ${price(levels.openingRange.high)}`) : null,
     show.openingRange && levels.openingRange ? line("low", settings.low, levels.openingRange.low, levels.openingRange.time, `9:15 Low ${price(levels.openingRange.low)}`) : null,

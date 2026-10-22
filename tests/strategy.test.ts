@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { s1Checks, s1Levels, s1Reveal, type S1Data } from "@/lib/trading/s1";
+import { s1Checks, s1Levels, s1Reveal, translate, type S1Data } from "@/lib/trading/s1";
 import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { STRATEGY_DEFAULTS, parseStrategySettings, setAllVisible } from "@/components/strategy-settings";
 
@@ -176,5 +176,61 @@ describe("choosing the previous and current day", () => {
 
   it("the replay clock only limits the replayed session", () => {
     expect(desk).toContain("replay.active && s1Current.data.date === replay.date ? (replay.cursor ?? 0) : null");
+  });
+});
+
+describe("the manual-drawing workflow (illustrative numbers)", () => {
+  // Previous H 22,900 L 22,800 C 22,870; today open 22,910.
+  const prev = { date: "2026-10-21", open: 22850, high: 22900, low: 22800, close: 22870 };
+  const levels = s1Levels(prev, 22910, null)!;
+
+  it("step 1: the original box is the previous candle, high to low", () => {
+    expect(levels.rawBox).toEqual({ top: 22900, bottom: 22800, mid: 22850 });
+    expect(levels.range).toBe(100);
+  });
+
+  it("step 2: moved +20 so its midpoint is the close, height 100", () => {
+    expect(levels.shift1).toBe(20);
+    expect(levels.closeBox).toEqual({ top: 22920, bottom: 22820, mid: 22870 });
+  });
+
+  it("step 3: the moved box is cloned and moved +40 so its midpoint is the open, height 100", () => {
+    expect(levels.shift2).toBe(40);
+    expect(levels.openBox).toEqual({ top: 22960, bottom: 22860, mid: 22910 });
+  });
+
+  it("translate keeps the height", () => {
+    expect(translate({ top: 10, bottom: 4, mid: 7 }, -3)).toEqual({ top: 7, bottom: 1, mid: 4 });
+  });
+});
+
+describe("box placement matches the manual drawing", () => {
+  const DAY = 86_400;
+  const anchors = { before: 1_792_454_400, previous: 1_792_454_400 + DAY, day: 1_792_454_400 + 2 * DAY, after: 1_792_454_400 + 3 * DAY };
+  const withAnchors: S1Data = { ...data, anchors };
+
+  it("box 1 spans the session before the previous day to today; box 2 is one session to the right", () => {
+    const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
+    expect(closeBox.points.map((point) => point.time)).toEqual([anchors.before, anchors.day]);
+    expect(openBox.points.map((point) => point.time)).toEqual([anchors.previous, anchors.after]);
+    expect(openBox.points[1].time - openBox.points[0].time).toBe(closeBox.points[1].time - closeBox.points[0].time);
+  });
+
+  it("can instead span today's session only", () => {
+    const [closeBox] = strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, boxSpan: "session" }).drawings;
+    expect(closeBox.points.map((point) => point.time)).toEqual([OPEN_0915, CLOSE_1530]);
+  });
+
+  it("the drawn boxes carry the translated prices exactly", () => {
+    const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
+    const levels = s1Levels(previous, candle0915.open, candle0915)!;
+    expect(closeBox.points.map((point) => point.price)).toEqual([levels.closeBox.top, levels.closeBox.bottom]);
+    expect(openBox.points.map((point) => point.price)).toEqual([levels.openBox!.top, levels.openBox!.bottom]);
+  });
+
+  it("the server anchors boxes on the provider's daily-bar stamps", () => {
+    const server = readFileSync(join(process.cwd(), "src/server/market.ts"), "utf8");
+    expect(server).toContain("const offset = previousBar ? previousBar.time - midnight(previous.date) : 0;");
+    expect(server).toContain("before: beforeBar ? beforeBar.time : previousTime - (dayTime - previousTime),");
   });
 });

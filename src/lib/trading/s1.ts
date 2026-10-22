@@ -6,8 +6,12 @@
  * Step 3: a clone of the step-2 box moved so its midpoint sits on the session's opening price.
  * Step 4: the 09:15 IST 1-minute candle's high and low as horizontal lines (never the 09:16 candle).
  *
- *   range = previousHigh − previousLow, half = range / 2
- *   box 1 = previousClose ± half      box 2 = todayOpen ± half
+ * Done as the manual drawing is done, in price space:
+ *   original  = [previousLow, previousHigh], originalMid = (high + low) / 2
+ *   shift1    = previousClose − originalMid      box 1 = original moved by shift1
+ *   clone     = box 1,  shift2 = todayOpen − clone mid      box 2 = clone moved by shift2
+ * Horizontally, box 1 spans from the session before the previous day to the current day (two daily
+ * bars, centred on the previous candle) and box 2 is the same box one session to the right.
  */
 import type { PreviousSession } from "@/lib/trading/replay-engine";
 
@@ -31,11 +35,20 @@ export type S1Data = {
   firstMinute: S1FirstMinute | null;
   /** First 1-minute bar the provider returned for the session, for diagnosing a missing 09:15 bar. */
   firstBarTime?: number | null;
+  /**
+   * Daily-bar times (UTC seconds, the provider's daily stamps): the session before the previous day,
+   * the previous day, the current day and one session after it. Box edges sit on these.
+   */
+  anchors?: { before: number; previous: number; day: number; after: number } | null;
 };
 
 export type S1Box = { top: number; bottom: number; mid: number };
 
 export type S1Levels = {
+  /** previousClose − originalMid: how far the original box moves to become box 1. */
+  shift1: number;
+  /** todayOpen − box 1 mid: how far the clone moves to become box 2. Null until the open is known. */
+  shift2: number | null;
   /** Previous session's full range (high − low): the height of both boxes. */
   range: number;
   /** Step 1: the raw previous-day box. */
@@ -58,18 +71,26 @@ export function centreOn(box: S1Box, target: number): S1Box {
   return { top: box.top + shift, bottom: box.bottom + shift, mid: target };
 }
 
+/** Moves a box up or down by `shift` without changing its height. */
+export function translate(box: S1Box, shift: number): S1Box {
+  return { top: box.top + shift, bottom: box.bottom + shift, mid: (box.top + shift + box.bottom + shift) / 2 };
+}
+
 export function s1Levels(previous: PreviousSession | null, open: number | null, firstMinute: S1FirstMinute | null): S1Levels | null {
   if (!previous || !valid(previous.high) || !valid(previous.low) || !valid(previous.close) || previous.high < previous.low) return null;
   const range = previous.high - previous.low;
-  const half = range / 2;
+  // Step 1: the previous day's candle, high to low.
   const rawBox: S1Box = { top: previous.high, bottom: previous.low, mid: (previous.high + previous.low) / 2 };
-  // The previous candle's own midpoint is not used for alignment: only its height.
-  const closeBox: S1Box = { top: previous.close + half, bottom: previous.close - half, mid: previous.close };
-  const openBox: S1Box | null = valid(open) ? { top: open + half, bottom: open - half, mid: open } : null;
+  // Step 2: move that box so its midpoint is the previous close.
+  const shift1 = previous.close - rawBox.mid;
+  const closeBox = translate(rawBox, shift1);
+  // Step 3: clone the moved box and move the clone so its midpoint is the open.
+  const shift2 = valid(open) ? open - closeBox.mid : null;
+  const openBox = shift2 != null ? translate({ ...closeBox }, shift2) : null;
   const openingRange = firstMinute && valid(firstMinute.high) && valid(firstMinute.low) && firstMinute.high >= firstMinute.low
     ? { time: firstMinute.time, high: firstMinute.high, low: firstMinute.low }
     : null;
-  return { range, rawBox, closeBox, openBox, openingRange };
+  return { shift1, shift2, range, rawBox, closeBox, openBox, openingRange };
 }
 
 /**

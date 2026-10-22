@@ -518,7 +518,7 @@ export async function getMarketMovers() {
 
 export { DEMO_UNIVERSE };
 
-// v2: the opening candle is the exact 09:15 bar.
+// v3: exact 09:15 bar; daily-bar anchors for the boxes.
 const s1Cache = new Map<string, { at: number; value: S1Data }>();
 
 /**
@@ -565,6 +565,27 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
     normalizeTape(minutes.filter(until)),
     previousDate ? nextDay(upTo) : day,
   );
+
+  // Box edges sit on the provider's own daily-bar stamps (the same bars the daily chart draws).
+  let anchors: S1Data["anchors"] = null;
+  if (previous) {
+    const midnight = (key: string) => {
+      const [y, m, d] = key.split("-").map(Number);
+      return Math.floor(Date.UTC(y, m - 1, d) / 1000) - 19_800;
+    };
+    const bars = normalizeTape(daily.filter((bar) => istDay(bar.time) <= previous.date));
+    const previousBar = bars.filter((bar) => istDay(bar.time) === previous.date).at(-1);
+    const offset = previousBar ? previousBar.time - midnight(previous.date) : 0;
+    const previousTime = midnight(previous.date) + offset;
+    const dayTime = midnight(day) + offset;
+    const beforeBar = bars.filter((bar) => istDay(bar.time) < previous.date).at(-1);
+    anchors = {
+      before: beforeBar ? beforeBar.time : previousTime - (dayTime - previousTime),
+      previous: previousTime,
+      day: dayTime,
+      after: dayTime + (dayTime - previousTime),
+    };
+  }
 
   let first: Candle | null = null;
   let firstBarTime: number | null = null;
@@ -615,6 +636,7 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
     open: first ? first.open : null,
     firstMinute: first ? { time: first.time, open: first.open, high: first.high, low: first.low } : null,
     firstBarTime,
+    anchors,
   };
   s1Cache.set(cacheKey, { at: Date.now(), value });
   return value;

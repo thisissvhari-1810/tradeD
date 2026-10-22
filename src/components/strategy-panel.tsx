@@ -97,8 +97,33 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
           </dl>
         </div>
 
+        {levels ? (
+          <details className="rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5">
+            <summary className="cursor-pointer list-none font-medium text-text-2 hover:text-text">Calculation (price space)</summary>
+            <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1">
+              <Info label="Original top / bottom" text={`${price(levels.rawBox.top)} / ${price(levels.rawBox.bottom)}`} />
+              <Info label="Original mid" value={levels.rawBox.mid} />
+              <Info label="Shift to close" text={signed(levels.shift1)} />
+              <Info label="Box 1 mid" value={levels.closeBox.mid} />
+              <Info label="Box 1 top / bottom" text={`${price(levels.closeBox.top)} / ${price(levels.closeBox.bottom)}`} />
+              <Info label="Box 1 height" value={levels.closeBox.top - levels.closeBox.bottom} />
+              <Info label="Shift to open" text={levels.shift2 == null ? "—" : signed(levels.shift2)} />
+              <Info label="Box 2 mid" value={levels.openBox?.mid} />
+              <Info label="Box 2 top / bottom" text={levels.openBox ? `${price(levels.openBox.top)} / ${price(levels.openBox.bottom)}` : "—"} />
+              <Info label="Box 2 height" value={levels.openBox ? levels.openBox.top - levels.openBox.bottom : null} />
+            </dl>
+          </details>
+        ) : null}
+
         <div>
           <p className="eyebrow mb-1">Drawing settings</p>
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-muted">Box width</span>
+            <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label="Box width" value={settings.boxSpan} onChange={(event) => set({ boxSpan: event.target.value === "session" ? "session" : "candles" })}>
+              <option value="candles">Around the daily candles</option>
+              <option value="session">Today&apos;s session only</option>
+            </select>
+          </div>
           <div className="divide-y divide-border-soft rounded-md border border-border-soft">
             <BoxSection title="Previous-close box" value={settings.closeBox} onChange={(closeBox) => set({ closeBox })} />
             <BoxSection title="Today's-open box" value={settings.openBox} onChange={(openBox) => set({ openBox })} />
@@ -116,6 +141,10 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
       </footer>
     </section>
   );
+}
+
+function signed(value: number) {
+  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${price(Math.abs(value))}`;
 }
 
 /** A date picker with an Auto option: empty value means automatic. */
