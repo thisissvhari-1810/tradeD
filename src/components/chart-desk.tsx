@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -210,6 +211,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [lists, setLists] = useState<Array<{ id: string; name: string; items: Array<{ symbol: string; name: string; exchange: string }> }>>([]);
   const [sideQuotes, setSideQuotes] = useState<Record<string, Quote>>({});
   const [replay, setReplay] = useState<Replay>({ active: false, date: "", cursor: null, speed: 1, status: "idle", message: "", sessionOpen: null, sessionClose: null });
+  // Replay is a demo tool. Switching to Live mode ends any running replay (state adjusted during render,
+  // so no effect is needed) and its controls stay hidden while Live.
+  const live = desk.mode === "live";
+  const [liveSeen, setLiveSeen] = useState(live);
+  if (live !== liveSeen) {
+    setLiveSeen(live);
+    if (live && replay.active) setReplay((current) => ({ ...current, active: false, status: "idle" }));
+  }
   const replayRef = useRef(replay);
   const tapeRef = useRef<Candle[]>([]);
   const priorRef = useRef<Candle[]>([]);
@@ -895,7 +904,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           full={full}
           onFull={toggleFullScreen}
         >
-          <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>
+          {live ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
           {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
           <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
         </ChartHeaderTools>
@@ -984,6 +993,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 onClose={() => setChainOpen(false)}
                 onOpenChart={(contract) => setOptionView(contract)}
                 onOrder={orderFromChain}
+                allowOrders={!live}
                 ledgerTick={ledgerTick}
               />
             ) : null}
@@ -1077,7 +1087,13 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             )}
             <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-label={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
           </div>
-          {railCollapsed ? null : sideRail === "positions" ? (
+          {railCollapsed ? null : sideRail === "positions" && live ? (
+            <div className="flex flex-col gap-2 p-3 text-data">
+              <p className="font-semibold text-text">Live mode</p>
+              <p className="text-muted">Practice positions and replay are hidden while Live. Your real Dhan funds, positions and orders are in Accounts.</p>
+              <Link href="/multi-account" className="inline-flex h-8 w-fit items-center rounded-input bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover">Open Accounts</Link>
+            </div>
+          ) : sideRail === "positions" ? (
             <OptionBook
               buyingPower={ledger?.cashAvailable ?? "—"}
               reserved={ledger?.cashReserved ?? "—"}
