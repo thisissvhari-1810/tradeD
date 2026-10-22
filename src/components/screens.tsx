@@ -460,7 +460,7 @@ export function HoldingsScreen() {
         ) : <p className="px-4 py-6 text-data text-muted">No equity snapshots yet.</p>}
       </Section>
 
-      <ClosedTrades />
+      <div id="trade-history" className="scroll-mt-4"><ClosedTrades /></div>
     </Page>
   );
 }

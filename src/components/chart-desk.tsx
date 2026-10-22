@@ -290,6 +290,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         sessionClose: null,
       }));
     }
+    // Home's "Practice replay" links here with ?replay=1. Live view and accounts without the Replay
+    // permission never start it (the canReplay guard above switches it off again).
+    if (params.get("replay") === "1" && localStorage.getItem("td-mode") !== "live") {
+      setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) }));
+    }
     setBook(loadDemoBook(storedBook));
     // The saved session is read once. Later symbol changes come from the desk.
     // eslint-disable-next-line react-hooks/exhaustive-deps
