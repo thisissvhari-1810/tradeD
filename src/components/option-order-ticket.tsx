@@ -92,18 +92,38 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
   // A completed one-minute candle is the smallest step that can change the replay premium.
   const quoteKey = replay && replayCursor != null ? `${replay.session}|${Math.floor(replayCursor / 60)}` : null;
 
+  // Latest-wins without cancelling: one request at a time; when it returns and the replay clock has moved on,
+  // ask again for the newest minute. Dropping in-flight requests meant a playing replay never got a premium.
+  const wantedKey = useRef<string | null>(null);
+  const inflight = useRef(false);
+  const alive = useRef(true);
   useEffect(() => {
-    const cursor = cursorRef.current;
-    if (!replay || !quoteKey || cursor == null) return;
-    let stop = false;
-    api<ReplayQuote>("/api/demo/option-replay", { action: "quote", symbol: draft.underlying, expiry: draft.expiry, strike: draft.strike, right: draft.right, session: replay.session, cursor })
-      .then((quote) => { if (!stop) setHistorical({ key: quoteKey, quote, error: "" }); })
-      .catch((reason: unknown) => { if (!stop) setHistorical({ key: quoteKey, quote: null, error: reason instanceof Error ? reason.message : "The replay premium could not be loaded." }); });
-    return () => { stop = true; };
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
+  useEffect(() => {
+    wantedKey.current = quoteKey;
+    if (!replay || !quoteKey || inflight.current) return;
+    const load = () => {
+      const key = wantedKey.current;
+      const cursor = cursorRef.current;
+      if (!key || cursor == null) return;
+      inflight.current = true;
+      api<ReplayQuote>("/api/demo/option-replay", { action: "quote", symbol: draft.underlying, expiry: draft.expiry, strike: draft.strike, right: draft.right, session: replay.session, cursor })
+        .then((quote) => { if (alive.current) setHistorical({ key, quote, error: "" }); })
+        .catch((reason: unknown) => { if (alive.current) setHistorical((current) => ({ key, quote: current?.quote ?? null, error: reason instanceof Error ? reason.message : "The replay premium could not be loaded." })); })
+        .finally(() => {
+          inflight.current = false;
+          if (alive.current && wantedKey.current && wantedKey.current !== key) load();
+        });
+    };
+    load();
   }, [quoteKey, replay, draft.underlying, draft.expiry, draft.strike, draft.right]);
 
   const replayQuote = historical?.quote ?? null;
   const replayLoading = Boolean(replay) && historical?.key !== quoteKey;
+  // The last premium stays usable while the next minute loads; the server fills at the exact replay time
+  // and answers PRICE_MOVED with the fresh premium if it has drifted.
   const replayReady = Boolean(replay && replayQuote?.available && replayQuote.premium != null);
   const premium = replay ? (replayReady ? replayQuote!.premium : null) : livePremium;
   const lotSize = draft.lotSize ?? replayQuote?.lotSize ?? null;
