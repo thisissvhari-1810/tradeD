@@ -211,14 +211,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [lists, setLists] = useState<Array<{ id: string; name: string; items: Array<{ symbol: string; name: string; exchange: string }> }>>([]);
   const [sideQuotes, setSideQuotes] = useState<Record<string, Quote>>({});
   const [replay, setReplay] = useState<Replay>({ active: false, date: "", cursor: null, speed: 1, status: "idle", message: "", sessionOpen: null, sessionClose: null });
-  // Replay is a demo tool. Switching to Live mode ends any running replay (state adjusted during render,
-  // so no effect is needed) and its controls stay hidden while Live.
+  // Replay is a demo tool: its controls are hidden in Live mode and it never runs there.
   const live = desk.mode === "live";
-  const [liveSeen, setLiveSeen] = useState(live);
-  if (live !== liveSeen) {
-    setLiveSeen(live);
-    if (live && replay.active) setReplay((current) => ({ ...current, active: false, status: "idle" }));
-  }
+  // Standing rule, checked every render: while Live, replay is off. This also catches a replay restored
+  // from storage after the page opened in Live mode. Converges in one extra render.
+  if (live && replay.active) setReplay((current) => (current.active ? { ...current, active: false, status: "idle" } : current));
   const replayRef = useRef(replay);
   const tapeRef = useRef<Candle[]>([]);
   const priorRef = useRef<Candle[]>([]);
@@ -306,7 +303,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       const date = typeof parsed.date === "string" ? parsed.date : typeof parsed.day === "string" ? parsed.day : "";
       setReplay((current) => ({
         ...current,
-        active: Boolean(parsed.active),
+        active: Boolean(parsed.active) && localStorage.getItem("td-mode") !== "live",
         date,
         cursor: null,
         speed,
@@ -881,7 +878,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           {CHART_SPANS.map((span) => (
             <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden 2xl:inline-flex 2xl:items-center", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
-          <select aria-label="More timeframes" className="h-7 w-[4.5rem] shrink-0 rounded-xs border-0 bg-transparent px-1.5 py-0 text-data text-muted 2xl:hidden" value={PRIMARY_SPANS.has(timeframe) ? "" : timeframe} onChange={(event) => { if (event.target.value) setTimeframe(event.target.value as ChartSpan); }}>
+          <select aria-label="More timeframes" className="h-7 w-[5.5rem] shrink-0 rounded-xs border-0 bg-transparent py-0 pl-2 pr-6 text-data text-muted 2xl:hidden" value={PRIMARY_SPANS.has(timeframe) ? "" : timeframe} onChange={(event) => { if (event.target.value) setTimeframe(event.target.value as ChartSpan); }}>
             <option value="">More</option>
             {CHART_SPANS.filter((span) => !PRIMARY_SPANS.has(span)).map((span) => <option key={span} value={span}>{SPAN_LABEL[span]}</option>)}
           </select>
