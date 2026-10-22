@@ -46,7 +46,7 @@ const CHIPS = ["NIFTY", "BANKNIFTY", "FINNIFTY"];
 export type ChainReplay = { date: string; session: string | null; cursor: number | null; spot: number | null; spotSymbol: string };
 
 /** Docked to the left of the chart area so the order ticket on the right never covers it. */
-export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder, ledgerTick = 0, allowOrders = true }: { allowOrders?: boolean; symbol: string; replay: ChainReplay | null; onClose: () => void; onOpenChart: (contract: OptionChartRequest) => void; onOrder: (draft: OptionOrderDraft) => void; ledgerTick?: number }) {
+export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder, ledgerTick = 0, livePaper = false }: { livePaper?: boolean; symbol: string; replay: ChainReplay | null; onClose: () => void; onOpenChart: (contract: OptionChartRequest) => void; onOrder: (draft: OptionOrderDraft) => void; ledgerTick?: number }) {
   const [underlying, setUnderlying] = useState(symbol);
   const [shownSymbol, setShownSymbol] = useState(symbol);
   const [expiry, setExpiry] = useState("");
@@ -177,8 +177,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       });
     };
     return {
-      // Live mode: the chain is for reading only; real orders go through Accounts.
-      ...(!allowOrders ? { canTrade: () => false } : replayDate ? { canTrade: (_right: Right, _strike: number, side: ChainSide | null) => side != null } : {}),
+      ...(replayDate ? { canTrade: (_right: Right, _strike: number, side: ChainSide | null) => side != null } : {}),
       canSell: (right, strike) => (heldLots(right, strike) ?? 0) > 0,
       onBuy: open("BUY"),
       onSell: open("SELL"),
@@ -203,7 +202,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
           .catch((reason: unknown) => setNote({ tone: "error", text: reason instanceof Error ? reason.message : "The watchlist could not be updated." }));
       },
     };
-  }, [chain, underlying, replayDate, replaySession, onOrder, onOpenChart, heldLots, heldRow, lists, contractKey, allowOrders]);
+  }, [chain, underlying, replayDate, replaySession, onOrder, onOpenChart, heldLots, heldRow, lists, contractKey]);
 
   const move = replaying ? null : spotMove(chain?.spot ?? null, quote);
   const spotShown = replaying ? replaySpot : chain?.spot ?? null;
@@ -278,7 +277,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       />
 
       {note ? <p className={cx("border-t border-border px-3 py-1.5 text-data", note.tone === "error" ? "text-loss" : "text-info")} role={note.tone === "error" ? "alert" : "status"}>{note.text}</p> : null}
-      <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{!allowOrders ? "Live mode: click a premium to chart that contract. Place real orders from Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover a row for Buy / Sell. Click a premium to chart that contract."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
+      <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{livePaper ? "Paper trading at live prices: hover a row for Buy / Sell (virtual, nothing is sent to Dhan). Real orders: Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover a row for Buy / Sell. Click a premium to chart that contract."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
     </section>
   );
 }

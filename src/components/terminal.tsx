@@ -313,7 +313,8 @@ export function Terminal() {
   const marketClosed = quote != null && !quote.marketOpen && quote.mode !== "DEMO";
   const useFeed = quote?.mode === "REALTIME" || quote?.mode === "HISTORICAL" || stream.status === "live" || stream.status === "delayed";
   const feedBadge = !useFeed ? state.toUpperCase() : marketClosed ? "Market closed" : feedStatusLabel(stream.status);
-  const canTrade = desk.mode === "demo" && Boolean(desk.user && mayPractice(desk.user)) && desk.user?.tradingEnabled && desk.user.status === "ACTIVE";
+  // Paper orders work in both views; Live view only means live prices. Real orders go through Accounts.
+  const canTrade = Boolean(desk.user && mayPractice(desk.user)) && desk.user?.tradingEnabled && desk.user.status === "ACTIVE";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -551,7 +552,7 @@ export function Terminal() {
               <div className="mt-1 flex justify-between"><span>Illustrative charges</span><span className="num text-text">{estimate ? money(estimate.charges) : "—"}</span></div>
               <p className="mt-1">Charges follow the practice model, not a broker margin statement.</p>
             </div>
-            {desk.mode === "live" ? <p className="text-loss">Live order entry is disabled. TradeD can read a connected account, and it does not submit exchange orders.</p> : null}
+            {desk.mode === "live" ? <p className="text-warning">Paper order at live prices. Virtual money only; nothing is sent to Dhan. Real orders: Accounts → Live.</p> : null}
             {desk.user && !mayPractice(desk.user) ? <p className="text-muted">Practice orders are available on accounts with trading enabled.</p> : null}
             {orderMessage ? <p className="text-text">{orderMessage}</p> : null}
             <button className={`mt-auto py-2 text-white ${side === "BUY" ? "bg-profit" : "bg-loss"}`} disabled={!canTrade}>Review {side.toLowerCase()}</button>

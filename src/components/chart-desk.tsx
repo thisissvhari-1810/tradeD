@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -990,7 +989,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 onClose={() => setChainOpen(false)}
                 onOpenChart={(contract) => setOptionView(contract)}
                 onOrder={orderFromChain}
-                allowOrders={!live}
+                livePaper={live}
                 ledgerTick={ledgerTick}
               />
             ) : null}
@@ -1084,13 +1083,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             )}
             <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-label={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
           </div>
-          {railCollapsed ? null : sideRail === "positions" && live ? (
-            <div className="flex flex-col gap-2 p-3 text-data">
-              <p className="font-semibold text-text">Live mode</p>
-              <p className="text-muted">Practice positions and replay are hidden while Live. Your real Dhan funds, positions and orders are in Accounts.</p>
-              <Link href="/multi-account" className="inline-flex h-8 w-fit items-center rounded-input bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover">Open Accounts</Link>
-            </div>
-          ) : sideRail === "positions" ? (
+          {railCollapsed ? null : sideRail === "positions" ? (
             <OptionBook
               buyingPower={ledger?.cashAvailable ?? "—"}
               reserved={ledger?.cashReserved ?? "—"}

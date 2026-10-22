@@ -165,7 +165,7 @@ export function OptionBook({
   return (
     <div className="flex min-h-0 flex-1 flex-col text-xs">
       <p className={cx("flex items-center gap-2 border-b border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-wide", replay ? "bg-demo/10 text-demo" : context.mode === "live" ? "bg-profit/10 text-profit" : "bg-demo/10 text-demo")}>
-        {replay ? "Historical replay" : context.mode === "live" ? "Live data" : "Demo paper trading"}
+        {replay ? "Historical replay" : context.mode === "live" ? "Paper trading · live prices" : "Demo paper trading"}
         {replay ? <span className="num font-normal normal-case tracking-normal">{replay.date}{replay.cursor == null ? "" : ` · ${clockOf(replay.cursor)} IST`}</span> : null}
       </p>
       {replay ? <SessionHero summary={summary} /> : null}
