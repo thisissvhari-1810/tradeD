@@ -119,9 +119,10 @@ describe("wiring in the drawing layer", () => {
   });
 });
 
-describe("trend line default colour", () => {
-  it("creates new trend lines in red unless a default style was saved", () => {
-    expect(layer).toContain('export const TREND_COLOR = "#F23645";');
-    expect(layer).toContain('color: style?.color ?? (shape ? SHAPE_COLOR : kind === "trend" ? TREND_COLOR : "#D4AF37")');
+describe("line tools default colour", () => {
+  it("creates every Lines-menu tool in dark red unless a default style was saved", () => {
+    expect(layer).toContain('export const LINE_COLOR = "#B71C1C";');
+    expect(layer).toContain('LINE_KINDS = new Set<string>(["trend", "ray", "infoline", "extended", "angle", "hline", "hray", "vline", "crossline", "channel", "regression"])');
+    expect(layer).toContain('LINE_KINDS.has(kind) ? LINE_COLOR : "#D4AF37"');
   });
 });
