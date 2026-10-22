@@ -118,3 +118,10 @@ describe("wiring in the drawing layer", () => {
     expect(layer).toContain('["right", { time: geometry.right, price: geometry.entry }]');
   });
 });
+
+describe("trend line default colour", () => {
+  it("creates new trend lines in red unless a default style was saved", () => {
+    expect(layer).toContain('export const TREND_COLOR = "#F23645";');
+    expect(layer).toContain('color: style?.color ?? (shape ? SHAPE_COLOR : kind === "trend" ? TREND_COLOR : "#D4AF37")');
+  });
+});
