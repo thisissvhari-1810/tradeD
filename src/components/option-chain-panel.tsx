@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { RefreshCw, Search, Settings, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { GripVertical, Maximize2, Minimize2, RefreshCw, Search, Settings, X } from "lucide-react";
 import { api, istTime } from "@/components/api";
 import { OptionChainTable, type ChainActions, type ChainSide, type ChainStrike, type Right } from "@/components/option-chain-table";
 import type { OptionOrderDraft } from "@/components/option-order-ticket";
@@ -41,6 +41,46 @@ type Held = { symbol: string; quantity: number; averageCost: string };
 type Lists = Array<{ id: string; items: Array<{ symbol: string }> }>;
 
 const SETTINGS_KEY = "td-option-chain-panel";
+const PLACE_KEY = "td-option-chain-place";
+/** Gap kept between the panel and the chart edges, and the smallest height a drag may leave. */
+const EDGE = 8;
+const MIN_HEIGHT = 260;
+
+type Placement = { pos: { x: number; y: number } | null; max: boolean };
+
+function readPlacement(): Placement {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(PLACE_KEY) || "{}") as Partial<Placement>;
+    const pos = parsed.pos && Number.isFinite(parsed.pos.x) && Number.isFinite(parsed.pos.y) ? parsed.pos : null;
+    return { pos, max: parsed.max === true };
+  } catch {
+    return { pos: null, max: false };
+  }
+}
+
+/** Keeps the whole panel inside the chart area: fully visible left to right, and at least MIN_HEIGHT tall. */
+function fitInside(node: HTMLElement, x: number, y: number) {
+  const parent = node.offsetParent as HTMLElement | null;
+  const width = parent?.clientWidth ?? window.innerWidth;
+  const height = parent?.clientHeight ?? window.innerHeight;
+  return {
+    x: Math.round(Math.min(Math.max(EDGE, x), Math.max(EDGE, width - node.offsetWidth - EDGE))),
+    y: Math.round(Math.min(Math.max(EDGE, y), Math.max(EDGE, height - MIN_HEIGHT - EDGE))),
+  };
+}
+
+type FeedState = { label: string; tone: "profit" | "warning" | "muted" };
+
+/** NSE F&O hours (Mon-Fri 09:15-15:30 IST). Holidays are not known here, so an old snapshot reads as Delayed. */
+function feedState(asOf: string | undefined, now: number): FeedState {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(now));
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  const minutes = Number(part("hour")) * 60 + Number(part("minute"));
+  const open = !["Sat", "Sun"].includes(part("weekday")) && minutes >= 555 && minutes <= 930;
+  if (!open) return { label: "Market closed", tone: "muted" };
+  const age = asOf ? now - Date.parse(asOf) : Infinity;
+  return age <= 90_000 ? { label: "Live", tone: "profit" } : { label: "Delayed", tone: "warning" };
+}
 const CHIPS = ["NIFTY", "BANKNIFTY", "FINNIFTY"];
 
 export type ChainReplay = { date: string; session: string | null; cursor: number | null; spot: number | null; spotSymbol: string };
@@ -66,6 +106,64 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
   const [quote, setQuote] = useState<{ last: string; previousClose: string } | null>(null);
   const [lists, setLists] = useState<Lists>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [feed, setFeed] = useState<FeedState | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const [placement, setPlacement] = useState<Placement>(readPlacement);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ id: number; dx: number; dy: number; x: number; y: number } | null>(null);
+
+  const place = useCallback((next: Placement) => {
+    setPlacement(next);
+    try { sessionStorage.setItem(PLACE_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  }, []);
+
+  // Keep a moved panel inside the chart when the window or the docked order ticket changes its size.
+  useEffect(() => {
+    const node = panelRef.current;
+    const parent = node?.offsetParent as HTMLElement | null;
+    if (!node || !parent || !placement.pos || placement.max) return;
+    const pos = placement.pos;
+    const observer = new ResizeObserver(() => {
+      const next = fitInside(node, pos.x, pos.y);
+      if (next.x !== pos.x || next.y !== pos.y) place({ pos: next, max: false });
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [placement, place]);
+
+  useEffect(() => () => { document.body.style.userSelect = ""; }, []);
+
+  // The header drags the panel. Controls inside it keep working; the table is never a drag surface.
+  // While moving, left/top are written straight to the element so the table does not re-render.
+  function startDrag(event: ReactPointerEvent<HTMLElement>) {
+    const node = panelRef.current;
+    if (!node || placement.max || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button, input, select, textarea, a, [data-no-drag]")) return;
+    drag.current = { id: event.pointerId, dx: event.clientX - node.offsetLeft, dy: event.clientY - node.offsetTop, x: node.offsetLeft, y: node.offsetTop };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.userSelect = "none";
+    setDragging(true);
+    event.preventDefault();
+  }
+  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
+    const state = drag.current;
+    const node = panelRef.current;
+    if (!state || state.id !== event.pointerId || !node) return;
+    const next = fitInside(node, event.clientX - state.dx, event.clientY - state.dy);
+    state.x = next.x;
+    state.y = next.y;
+    node.style.left = `${next.x}px`;
+    node.style.top = `${next.y}px`;
+    node.style.bottom = `${EDGE}px`;
+  }
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    const state = drag.current;
+    if (!state || state.id !== event.pointerId) return;
+    drag.current = null;
+    document.body.style.userSelect = "";
+    setDragging(false);
+    place({ pos: { x: state.x, y: state.y }, max: false });
+  }
 
   if (shownSymbol !== symbol) {
     setShownSymbol(symbol);
@@ -86,6 +184,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
         .then((data) => {
           if (stop) return;
           setChain(data);
+          setFeed(feedState(data.asOf, Date.now()));
           setError("");
           if (!expiry && data.expiry) setExpiry(data.expiry);
         })
@@ -158,6 +257,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
   const actions = useMemo<ChainActions>(() => {
     const open = (action: "BUY" | "SELL") => (right: Right, strike: number, side: ChainSide) => {
       if (!chain?.expiry || (!replayDate && side.ltp == null)) return;
+      setSelected(`${strike}|${right}`);
       const position = heldRow(right, strike);
       const avg = position ? Number(position.averageCost) : NaN;
       onOrder({
@@ -169,6 +269,8 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
         action,
         ltp: replayDate ? null : side.ltp,
         previousClose: replayDate ? null : side.previousClose ?? null,
+        bid: replayDate ? null : side.bid ?? null,
+        ask: replayDate ? null : side.ask ?? null,
         asOf: replayDate ? null : chain.asOf,
         lotSize: chain.lotSize,
         heldLots: heldLots(right, strike),
@@ -209,18 +311,41 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
   const spotShown = replaying ? replaySpot : chain?.spot ?? null;
   const daysToExpiry = replaying ? (chain?.expiry && replay?.date ? Math.round((Date.parse(`${chain.expiry}T00:00:00Z`) - Date.parse(`${replay.date}T00:00:00Z`)) / 86_400_000) : null) : chain?.daysToExpiry ?? null;
   const heldCount = replaying ? held.filter((row) => replay?.session && row.symbol.endsWith(`|R:${replay.session}`)).length : held.filter((row) => !row.symbol.includes("|R:")).length;
-  const choose = (next: string) => { setUnderlying(next); setExpiry(""); setQuery(""); setHits([]); };
+  const choose = (next: string) => { setUnderlying(next); setExpiry(""); setSelected(null); setQuery(""); setHits([]); };
+  const maximized = placement.max;
 
   return (
-    <section className="anim-fade absolute inset-y-2 left-2 z-30 flex w-[min(760px,calc(100%-1rem))] flex-col overflow-hidden rounded-sheet border border-border bg-panel text-text shadow-e3" aria-label="Option chain">
-      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+    <section
+      ref={panelRef}
+      className={cx(
+        "anim-fade absolute z-30 flex flex-col overflow-hidden rounded-sheet border bg-panel text-text",
+        maximized ? "inset-2" : cx("w-[min(780px,calc(100%-1rem))]", !placement.pos && "bottom-2 left-2 top-2"),
+        dragging ? "border-primary/50 shadow-e4" : "border-border shadow-e3",
+      )}
+      style={!maximized && placement.pos ? { left: placement.pos.x, top: placement.pos.y, bottom: EDGE } : undefined}
+      aria-label="Option chain"
+    >
+      <header
+        className={cx(
+          "flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 transition-colors",
+          !maximized && "cursor-move touch-none select-none hover:bg-elevated/50",
+          dragging && "bg-elevated/60",
+        )}
+        title={maximized ? undefined : "Drag to move. Double-click to reset."}
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, select, textarea, a, [data-no-drag]")) place({ pos: null, max: false }); }}
+      >
+        <GripVertical className={cx("h-4 w-4 shrink-0", maximized ? "text-disabled" : "text-muted")} aria-hidden />
         <h2 className="shrink-0 text-[15px] font-semibold">Option chain</h2>
-        <div className="flex shrink-0 gap-1">
+        <div className="flex shrink-0 gap-0.5 rounded-input bg-sunken p-0.5">
           {FEATURED_INDICES.filter((item) => CHIPS.includes(item.symbol)).map((item) => (
-            <button key={item.symbol} type="button" aria-pressed={underlying === item.symbol} className={cx("h-7 rounded-input px-2.5 text-data font-semibold", underlying === item.symbol ? "bg-primary/15 text-primary" : "text-muted hover:bg-elevated hover:text-text")} onClick={() => choose(item.symbol)}>{item.symbol}</button>
+            <button key={item.symbol} type="button" aria-pressed={underlying === item.symbol} className={cx("h-7 rounded-sm px-2.5 text-data font-semibold transition-colors", underlying === item.symbol ? "bg-panel text-primary shadow-e1" : "text-muted hover:text-text")} onClick={() => choose(item.symbol)}>{item.symbol}</button>
           ))}
         </div>
-        <div className="relative min-w-0 flex-1">
+        <div className="relative min-w-0 flex-1" data-no-drag>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden />
           <input className="oc-search w-full min-w-0" value={query} placeholder="Search underlying" aria-label="Search underlying" onChange={(event) => setQuery(event.target.value)} />
           {query ? <button type="button" className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center text-muted hover:text-text" aria-label="Clear search" onClick={() => { setQuery(""); setHits([]); }}><X className="h-3 w-3" aria-hidden /></button> : null}
@@ -230,11 +355,12 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
             </div>
           ) : null}
         </div>
-        <select aria-label="Expiry" className="oc-select w-[7.5rem] shrink-0" value={expiry} onChange={(event) => setExpiry(event.target.value)}>
+        <select aria-label="Expiry" className="oc-select w-[7.5rem] shrink-0" value={expiry} onChange={(event) => { setExpiry(event.target.value); setSelected(null); }}>
           {(chain?.expiries.length ? chain.expiries : expiry ? [expiry] : []).map((day) => <option key={day} value={day}>{day}</option>)}
         </select>
         <IconAction label={loading ? "Refreshing option chain" : "Refresh option chain"} onClick={() => setReload((value) => value + 1)}><RefreshCw className={cx("h-4 w-4", loading && "animate-spin")} aria-hidden /></IconAction>
         <IconAction label="Option chain settings" active={settingsOpen} onClick={() => setSettingsOpen((value) => !value)}><Settings className="h-4 w-4" aria-hidden /></IconAction>
+        <IconAction label={maximized ? "Restore option chain size" : "Maximize option chain"} onClick={() => place({ pos: placement.pos, max: !maximized })}>{maximized ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />}</IconAction>
         <IconAction label="Close option chain" onClick={onClose}><X className="h-4 w-4" aria-hidden /></IconAction>
       </header>
 
@@ -256,6 +382,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
         {replaying ? null : <Stat label="PCR" value={chain?.pcr == null ? "N/A" : chain.pcr.toFixed(2)} />}
         <Stat label="Lot" value={chain?.lotSize == null ? "N/A" : String(chain.lotSize)} />
         <Stat label="Days to expiry" value={daysToExpiry == null ? "N/A" : String(daysToExpiry)} />
+        {replaying ? <FeedPill state={{ label: "Replay", tone: "warning" }} /> : feed ? <FeedPill state={feed} /> : null}
         <span className="ml-auto text-[11px] text-muted" title={chain?.message}>{replaying ? `Replay ${replay?.date ?? ""} ${replay?.cursor == null ? "" : `${clock(replay.cursor)} IST`}` : chain?.asOf ? `Snapshot ${istTime(chain.asOf)}` : loading ? "Loading…" : ""}</span>
       </div>
       {replaying ? (
@@ -278,7 +405,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       />
 
       {note ? <p className={cx("border-t border-border px-3 py-1.5 text-data", note.tone === "error" ? "text-loss" : "text-info")} role={note.tone === "error" ? "alert" : "status"}>{note.text}</p> : null}
-      <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{livePaper ? "Paper trading at live prices: hover a row for Buy / Sell (virtual, nothing is sent to Dhan). Real orders: Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover a row for Buy / Sell. Click a premium to chart that contract."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
+      <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{livePaper ? "Paper trading at live prices: hover or tab to a call or put for Buy / Sell (virtual, nothing is sent to Dhan). Real orders: Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover or tab to a call or put for Buy / Sell. Click a premium to chart that contract. Drag the header to move this panel."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
     </section>
   );
 }
@@ -303,6 +430,16 @@ function readSettings() {
     localStorage.removeItem(SETTINGS_KEY);
     return fallback;
   }
+}
+
+function FeedPill({ state }: { state: FeedState }) {
+  const tone = state.tone === "profit" ? "bg-profit-soft text-profit" : state.tone === "warning" ? "bg-warning-soft text-warning" : "bg-sunken text-muted";
+  return (
+    <span className={cx("inline-flex h-6 items-center gap-1.5 self-center rounded-pill px-2 text-micro font-semibold", tone)} title="Based on NSE F&O hours and the age of this snapshot">
+      <span className={cx("h-1.5 w-1.5 rounded-full", state.tone === "profit" ? "bg-profit" : state.tone === "warning" ? "bg-warning" : "bg-muted")} aria-hidden />
+      {state.label}
+    </span>
+  );
 }
 
 function IconAction({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: ReactNode }) {

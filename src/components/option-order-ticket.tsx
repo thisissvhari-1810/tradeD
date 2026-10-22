@@ -20,6 +20,9 @@ export type OptionOrderDraft = {
   action: "BUY" | "SELL";
   ltp: number | null;
   previousClose?: number | null;
+  /** Best bid and ask from the chain snapshot, when the feed returned them. */
+  bid?: number | null;
+  ask?: number | null;
   asOf: string | null;
   lotSize: number | null;
   heldLots: number | null;
@@ -238,8 +241,10 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
       <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border-strong sm:hidden" aria-hidden />
       <header className="border-b border-border px-4 pb-4 pt-3">
         <div className="flex items-start gap-2">
-          <h2 className="num min-w-0 flex-1 truncate text-[22px] font-semibold leading-tight tracking-tight">{draft.underlying} {draft.strike} {draft.right}</h2>
-          {replay ? <Badge tone="info" title="Priced from historical data at the replay clock">Historical replay</Badge> : <Badge tone="demo">Demo</Badge>}
+          <h2 className="num min-w-0 flex-1 truncate text-[20px] font-semibold leading-tight tracking-tight">
+            <span className={buy ? "text-profit" : "text-loss"}>{buy ? "BUY" : "SELL"}</span> {draft.underlying} {draft.strike.toLocaleString("en-IN")} {draft.right}
+          </h2>
+          {replay ? <Badge tone="info" title="Priced from historical data at the replay clock">Historical replay</Badge> : <Badge tone="demo" title="Virtual order on your practice wallet. Nothing is sent to a broker.">{desk.mode === "live" ? "Paper · live prices" : "Demo"}</Badge>}
           <button type="button" aria-label="Close order ticket" className="-mr-1 grid h-8 w-8 place-items-center rounded-input text-muted hover:bg-elevated hover:text-text" onClick={onClose}>
             <X className="h-4 w-4" aria-hidden />
           </button>
@@ -264,7 +269,12 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
             <p><span className="font-medium text-text-2">Replay clock</span> <span className="num">{shortDate(replay.date)} · {replayCursor == null ? "—" : `${clockOf(replayCursor, true)} IST`}</span></p>
             <p>{replayQuote?.candleTime != null ? <>1-min close of the <span className="num">{clockOf(replayQuote.candleTime)}</span> IST candle{replayQuote.coverage.status !== "unavailable" ? ` · data ${replayQuote.coverage.status === "complete" ? "complete" : `partial (${replayQuote.coverage.minutes}/${replayQuote.coverage.expected} min)`}` : ""}</> : replayLoading ? "Loading historical premium…" : "No historical premium at this time"}</p>
           </div>
-        ) : <p className="mt-1 text-data text-muted">Chain snapshot {asOf ? istTime(asOf) : "time unknown"} IST</p>}
+        ) : (
+          <p className="mt-1 text-data text-muted">
+            {draft.bid != null || draft.ask != null ? <span className="num mr-2 text-text-2">Bid {draft.bid?.toFixed(2) ?? "—"} · Ask {draft.ask?.toFixed(2) ?? "—"}</span> : null}
+            Chain snapshot {asOf ? istTime(asOf) : "time unknown"} IST
+          </p>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">

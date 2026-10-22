@@ -37,7 +37,8 @@ describe("order ticket layout", () => {
   const ticket = read("src/components/option-order-ticket.tsx");
 
   it("has the header chips, demo badge and segmented buy / sell", () => {
-    expect(ticket).toContain('<Badge tone="demo">Demo</Badge>');
+    expect(ticket).toContain('<Badge tone="demo"');
+    expect(ticket).toContain('"Paper · live prices" : "Demo"');
     expect(ticket).toContain('draft.right === "CE" ? "Call" : "Put"');
     expect(ticket).toContain("Exp {shortDate(draft.expiry)}");
     expect(ticket).toMatch(/id: "BUY", label: "Buy", tone: "profit"/);
@@ -74,7 +75,10 @@ describe("option chain grid", () => {
   });
 
   it("shows Buy / Sell only on hover or focus and draws OI bars", () => {
-    expect(table).toContain("group-hover/half:flex");
+    // Hidden by opacity (not display:none) so keyboard focus can still reach Buy / Sell.
+    expect(table).toContain("group-hover/half:opacity-100");
+    expect(table).toContain("group-focus-within/half:opacity-100");
+    expect(table).not.toContain("group-hover/half:flex");
     expect(table).toContain("linear-gradient(to ${call ? \"left\" : \"right\"}");
   });
 });
