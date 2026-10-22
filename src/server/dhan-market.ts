@@ -2,6 +2,7 @@ import { AppError } from "@/lib/http";
 import { applyAdverseSlippage, rupeesToPaise } from "@/lib/money";
 import { nseCashSession } from "@/lib/market/clock";
 import type { Candle, DemoQuote } from "@/lib/market/demo";
+import { foldSessions, istDateKey } from "@/lib/market/fold-sessions";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
@@ -133,6 +134,23 @@ async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", fr
   return candlesFromSeries(series).sort((a, b) => a.time - b.time);
 }
 
+/**
+ * The daily history can lag: the last session (and today's) may not be published yet. Sessions after
+ * the last daily bar are folded from that session's 5-minute bars (open of the first, close of the
+ * last, highest high, lowest low, summed volume) and stamped like the provider's daily bars.
+ */
+export async function withRecentSessions(daily: Candle[], id: string, segment: string, kind: string, now: Date): Promise<Candle[]> {
+  const last = daily.at(-1);
+  const lastDay = last ? istDateKey(last.time) : "";
+  let minutes: Candle[] = [];
+  try {
+    minutes = await intradayHistory(id, "5", new Date(now.getTime() - 7 * 86_400_000), now, segment, kind);
+  } catch {
+    return daily;
+  }
+  return [...daily, ...foldSessions(minutes, lastDay, last?.time ?? null)];
+}
+
 export async function dhanSessionTape(symbol: string, storedSecurityId: string, open: number, close: number): Promise<Candle[]> {
   const index = findIndex(symbol);
   const id = index?.id ?? securityId(symbol, storedSecurityId);
@@ -164,7 +182,8 @@ export async function dhanPriorDaily(symbol: string, storedSecurityId: string, o
   const end = new Date(open * 1000);
   const start = new Date(end.getTime() - 6 * 365 * 86_400_000);
   // The daily end date is exclusive. Ending on the previous calendar day drops that session, so the request includes the selected morning and the caller keeps earlier dates.
-  return dailyHistory(id, start, end, segment, kind);
+  // Sessions the daily history has not published yet are folded from intraday bars.
+  return withRecentSessions(await dailyHistory(id, start, end, segment, kind), id, segment, kind, end);
 }
 
 /** One session of one-minute option candles for a single contract. */
@@ -223,7 +242,7 @@ export async function dhanCandles(symbol: string, storedSecurityId: string, time
     : timeframe === "5y"
       ? new Date(now.getTime() - 5 * 365 * 86_400_000)
       : new Date(Date.UTC(2005, 0, 1));
-  let candles = await dailyHistory(id, from, tomorrow, segment, kind);
+  let candles = await withRecentSessions(await dailyHistory(id, from, tomorrow, segment, kind), id, segment, kind, now);
   if (timeframe === "1w") candles = aggregatePeriod(candles, "week");
   if (timeframe === "1mo") candles = aggregatePeriod(candles, "month");
   if (!candles.length) throw new AppError("Daily candles were not returned for this symbol.", 502);
