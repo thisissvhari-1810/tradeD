@@ -1,5 +1,6 @@
 "use client";
 
+import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
@@ -239,8 +240,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   optionViewRef.current = optionView;
   const [ledger, setLedger] = useState<(LedgerSnapshot & { realizedToday?: string }) | null>(null);
   const settledMinute = useRef(-1);
-  const roleRef = useRef(desk.user?.role);
-  roleRef.current = desk.user?.role;
+  // Paper trading is open to students and the trading-enabled owner (see mayPractice).
+  const practises = desk.user ? mayPractice(desk.user) : false;
+  const practiseRef = useRef(practises);
+  practiseRef.current = practises;
   const [restart, setRestart] = useState(false);
   const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [startRupees, setStartRupees] = useState("1000000");
@@ -438,7 +441,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [symbol, timeframe, replay.active, optionView]);
 
   useEffect(() => {
-    if (desk.user?.role !== "STUDENT") return;
+    if (!practises) return;
     const load = () => {
       api<LedgerSnapshot & { positions: PracticePosition[]; realizedToday?: string }>("/api/portfolio").then((data) => { setLedger(data); setPractice(data.positions); setPracticeError(""); }).catch((error: unknown) => {
         setPracticeError(error instanceof Error ? error.message : "Practice positions unavailable.");
@@ -455,7 +458,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       window.removeEventListener("td-ledger", load);
       refreshPractice.current = () => undefined;
     };
-  }, [desk.user?.role]);
+  }, [practises]);
 
   useEffect(() => {
     if (variant !== "positions") return;
@@ -611,7 +614,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       const moved = advanceCursor(current.cursor, current.sessionOpen, current.sessionClose, elapsed, current.speed);
       setBook((bookNow) => settleReplayBook(bookNow, moved.cursor, current.date));
       const minute = Math.floor(moved.cursor / 60);
-      if (minute !== settledMinute.current && roleRef.current === "STUDENT") {
+      if (minute !== settledMinute.current && practiseRef.current) {
         settledMinute.current = minute;
         void api<{ filled: number }>("/api/demo/replay", { action: "settle", symbol, date: current.date, cursor: moved.cursor, timeframe: SPAN_LABEL[timeframeRef.current] })
           .then((data) => (data.filled > 0 ? api<LedgerSnapshot>("/api/portfolio").then(setLedger) : undefined))
@@ -659,7 +662,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
 
   useEffect(() => {
     const cursor = replayRef.current.cursor;
-    if (!optionSession || markMinute == null || cursor == null || roleRef.current !== "STUDENT") return;
+    if (!optionSession || markMinute == null || cursor == null || !practiseRef.current) return;
     let stop = false;
     api<{ marks: ReplayMarkRow[]; summary: ReplaySummaryWire | null }>("/api/demo/option-replay", { action: "marks", session: optionSession, cursor })
       .then((data) => {

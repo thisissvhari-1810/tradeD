@@ -45,7 +45,7 @@ export const PRACTICE_ROLES: AppRole[] = ["STUDENT", "SUPER_ADMIN"];
  * Paper trading (demo, replay and options practice). Students as before; the super admin too, because in
  * TradeD the owner runs the terminal and practises on it. Instructors never trade.
  */
-export function mayPractice(user: { role: AppRole; status: string; tradingEnabled: boolean }): boolean {
+export function mayPractice(user: { role: AppRole | string; status: string; tradingEnabled: boolean }): boolean {
   if (user.role === "STUDENT") return true;
   return user.role === "SUPER_ADMIN" && user.status === "ACTIVE" && user.tradingEnabled;
 }

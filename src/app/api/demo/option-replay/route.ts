@@ -10,7 +10,8 @@ import { placeOptionReplay } from "@/server/trading";
 
 const clock = {
   session: z.string().regex(REPLAY_SESSION_PATTERN, "This replay session is not recognised. Restart the replay."),
-  cursor: z.number({ invalid_type_error: "The replay time is missing." }).int("The replay time must be whole seconds."),
+  // Playback advances in fractions of a second; the replay clock is whole seconds, so round down.
+  cursor: z.number({ invalid_type_error: "The replay time is missing." }).finite("The replay time is missing.").transform((value) => Math.floor(value)),
 };
 const contract = {
   symbol: z.string().trim().min(1, "Choose an underlying.").max(20),

@@ -1,5 +1,6 @@
 "use client";
 
+import { mayPractice } from "@/lib/auth/permissions";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
@@ -312,7 +313,7 @@ export function Terminal() {
   const marketClosed = quote != null && !quote.marketOpen && quote.mode !== "DEMO";
   const useFeed = quote?.mode === "REALTIME" || quote?.mode === "HISTORICAL" || stream.status === "live" || stream.status === "delayed";
   const feedBadge = !useFeed ? state.toUpperCase() : marketClosed ? "Market closed" : feedStatusLabel(stream.status);
-  const canTrade = desk.mode === "demo" && desk.user?.role === "STUDENT" && desk.user.tradingEnabled && desk.user.status === "ACTIVE";
+  const canTrade = desk.mode === "demo" && Boolean(desk.user && mayPractice(desk.user)) && desk.user?.tradingEnabled && desk.user.status === "ACTIVE";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -551,7 +552,7 @@ export function Terminal() {
               <p className="mt-1">Charges follow the practice model, not a broker margin statement.</p>
             </div>
             {desk.mode === "live" ? <p className="text-loss">Live order entry is disabled. TradeD can read a connected account, and it does not submit exchange orders.</p> : null}
-            {desk.user && desk.user.role !== "STUDENT" ? <p className="text-muted">Practice orders are available on student accounts.</p> : null}
+            {desk.user && !mayPractice(desk.user) ? <p className="text-muted">Practice orders are available on accounts with trading enabled.</p> : null}
             {orderMessage ? <p className="text-text">{orderMessage}</p> : null}
             <button className={`mt-auto py-2 text-white ${side === "BUY" ? "bg-profit" : "bg-loss"}`} disabled={!canTrade}>Review {side.toLowerCase()}</button>
           </form>

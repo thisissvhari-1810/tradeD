@@ -106,7 +106,7 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
     if (!replay || !quoteKey || inflight.current) return;
     const load = () => {
       const key = wantedKey.current;
-      const cursor = cursorRef.current;
+      const cursor = cursorRef.current == null ? null : Math.floor(cursorRef.current);
       if (!key || cursor == null) return;
       inflight.current = true;
       api<ReplayQuote>("/api/demo/option-replay", { action: "quote", symbol: draft.underlying, expiry: draft.expiry, strike: draft.strike, right: draft.right, session: replay.session, cursor })
