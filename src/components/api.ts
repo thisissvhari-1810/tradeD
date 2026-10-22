@@ -29,8 +29,12 @@ export async function api<T>(path: string, body?: unknown): Promise<T> {
       method: body === undefined ? "GET" : "POST",
       headers: { ...(body === undefined ? {} : { "Content-Type": "application/json" }), "x-td-mode": viewMode() },
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Reads give up after 35s (just past the 30s server limit) so screens such as the chart never wait forever. Writes (orders) are
+      // never cut short: an abandoned order request could still complete on the server.
+      signal: body === undefined ? AbortSignal.timeout(35_000) : undefined,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError("TradeD took too long to respond. Retry in a moment.", 0, "TIMEOUT");
     throw new ApiError("No connection to TradeD. Check your internet and retry.", 0, "NETWORK");
   }
   const data = await response.json().catch(() => ({}));

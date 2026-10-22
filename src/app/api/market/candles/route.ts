@@ -3,6 +3,8 @@ import { query } from "@/server/http";
 import { requireUser } from "@/server/auth";
 import { getCandles, getReplay } from "@/server/market";
 
+export const maxDuration = 30;
+
 export const GET = query(async (request) => {
   await requireUser();
   const url = new URL(request.url);
