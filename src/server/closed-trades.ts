@@ -1,3 +1,4 @@
+import { mayPractice } from "@/lib/auth/permissions";
 import type { Prisma, VirtualAccount } from "@prisma/client";
 import { formatInr, formatSignedInr, formatSignedPercent, paiseToRupees } from "@/lib/money";
 import { summarizeRoundTrip, type FillLeg } from "@/lib/trading/closed-trade";
@@ -152,7 +153,7 @@ export async function listClosedTrades(user: SessionUser, scope: string | null) 
     const rows = await prisma.closedTrade.findMany({ orderBy: { exitAt: "desc" }, take: 100, include: { user: { select: { name: true, email: true } } } });
     return rows.map(presentTrade);
   }
-  if (user.role !== "STUDENT") throw new AppError("Trade history is available on student accounts.", 403);
+  if (!mayPractice(user)) throw new AppError("Trade history is available on practice accounts.", 403);
   const rows = await prisma.closedTrade.findMany({ where: { userId: user.id }, orderBy: { exitAt: "desc" }, take: 100 });
   return rows.map(presentTrade);
 }

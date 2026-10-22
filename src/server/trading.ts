@@ -1,3 +1,4 @@
+import { mayPractice } from "@/lib/auth/permissions";
 import type { Prisma, VirtualAccount } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
@@ -96,7 +97,7 @@ export async function placeOrder(
   user: SessionUser,
   input: { symbol: string; side: "BUY" | "SELL"; type: "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "TARGET"; quantity: number; limitRupees?: string; stopRupees?: string; idempotencyKey: string },
 ) {
-  if (user.role !== "STUDENT") throw new AppError("Only student practice accounts can place simulated orders.", 403);
+  if (!mayPractice(user)) throw new AppError("This account cannot place practice orders.", 403);
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account.", 403);
   const account = await prisma.virtualAccount.findUnique({ where: { userId: user.id } });
   if (!account?.currentPeriodId) throw new AppError("No active practice period.", 409);

@@ -38,6 +38,18 @@ const MATRIX: Record<AppRole, Action[]> = {
   STUDENT: ["trade.self", "learn.self"],
 };
 
+/** Roles whose API routes accept paper-trading requests. Each route still calls mayPractice. */
+export const PRACTICE_ROLES: AppRole[] = ["STUDENT", "SUPER_ADMIN"];
+
+/**
+ * Paper trading (demo, replay and options practice). Students as before; the super admin too, because in
+ * TradeD the owner runs the terminal and practises on it. Instructors never trade.
+ */
+export function mayPractice(user: { role: AppRole; status: string; tradingEnabled: boolean }): boolean {
+  if (user.role === "STUDENT") return true;
+  return user.role === "SUPER_ADMIN" && user.status === "ACTIVE" && user.tradingEnabled;
+}
+
 export function can(role: AppRole, action: Action): boolean {
   return MATRIX[role].includes(action);
 }

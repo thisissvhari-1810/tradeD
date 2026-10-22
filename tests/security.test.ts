@@ -125,3 +125,14 @@ describe("rate limit", () => {
     expect(() => rateLimit("k", 3, 1000, 1000)).not.toThrow();
   });
 });
+
+describe("who may paper trade", () => {
+  it("allows students and the trading-enabled super admin, never instructors", async () => {
+    const { mayPractice } = await import("../src/lib/auth/permissions");
+    expect(mayPractice({ role: "STUDENT", status: "ACTIVE", tradingEnabled: true })).toBe(true);
+    expect(mayPractice({ role: "SUPER_ADMIN", status: "ACTIVE", tradingEnabled: true })).toBe(true);
+    expect(mayPractice({ role: "SUPER_ADMIN", status: "ACTIVE", tradingEnabled: false })).toBe(false);
+    expect(mayPractice({ role: "SUPER_ADMIN", status: "SUSPENDED", tradingEnabled: true })).toBe(false);
+    expect(mayPractice({ role: "INSTRUCTOR", status: "ACTIVE", tradingEnabled: true })).toBe(false);
+  });
+});

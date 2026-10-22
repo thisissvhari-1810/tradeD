@@ -1,3 +1,4 @@
+import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { z } from "zod";
 import { AppError } from "@/lib/http";
 import { paiseToRupees } from "@/lib/money";
@@ -17,7 +18,7 @@ const schema = z.object({
 });
 
 export const POST = mutation(async (request) => {
-  const user = await requireUser(["STUDENT"]);
+  const user = await requireUser(PRACTICE_ROLES);
   const body = await request.json().catch(() => null);
   const parsed = schema.safeParse(body);
   if (!parsed.success) {

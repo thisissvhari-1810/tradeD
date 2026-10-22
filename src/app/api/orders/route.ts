@@ -1,3 +1,4 @@
+import { PRACTICE_ROLES } from "@/lib/auth/permissions";
 import { paiseToRupees } from "@/lib/money";
 import { orderSchema } from "@/lib/schemas";
 import { readJson } from "@/lib/http";
@@ -7,12 +8,12 @@ import { placeOrder } from "@/server/trading";
 import { recentActivity } from "@/server/portfolio";
 
 export const GET = query(async () => {
-  const user = await requireUser(["STUDENT"]);
+  const user = await requireUser(PRACTICE_ROLES);
   return Response.json(await recentActivity(user.id));
 });
 
 export const POST = mutation(async (request) => {
-  const user = await requireUser(["STUDENT"]);
+  const user = await requireUser(PRACTICE_ROLES);
   const input = await readJson(request, orderSchema);
   const result = await placeOrder(user, input);
   const order = result.order;

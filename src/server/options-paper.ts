@@ -1,3 +1,4 @@
+import { mayPractice } from "@/lib/auth/permissions";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
@@ -28,7 +29,7 @@ export function paperCapitalPaise() {
 
 export async function optionsDesk(user: SessionUser) {
   assertSimulated();
-  if (user.role !== "STUDENT" || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Options practice is available on active student accounts.", 403);
+  if (!mayPractice(user) || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Options practice is available on active accounts with trading enabled.", 403);
   const snapshot = await loadOptionsSnapshot();
   const account = await freshAccount(user.id);
   const open = account.positions.find((position) => position.status === "OPEN") ?? null;
@@ -112,7 +113,7 @@ export async function optionsDesk(user: SessionUser) {
 
 export async function placeOptionPaper(user: SessionUser, input: { action: "BUY" | "CLOSE"; idempotencyKey: string }) {
   assertSimulated();
-  if (user.role !== "STUDENT" || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Options practice is available on active student accounts.", 403);
+  if (!mayPractice(user) || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Options practice is available on active accounts with trading enabled.", 403);
   if (!/^[A-Za-z0-9:_-]{8,80}$/.test(input.idempotencyKey)) throw new AppError("Enter an idempotency key of 8 to 80 letters or numbers.");
   const snapshot = await loadOptionsSnapshot();
   const account = await freshAccount(user.id);
