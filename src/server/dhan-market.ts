@@ -140,7 +140,10 @@ export async function dhanSessionTape(symbol: string, storedSecurityId: string, 
   const kind = index ? "INDEX" : "EQUITY";
   // The history end is exclusive. Stopping at 15:30 drops that session, so the request runs through the next morning and the caller keeps one date.
   const to = new Date((close + 17 * 60 * 60) * 1000);
-  return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);
+  // The start is sent as "<day> 09:15:00". Starting the request on the session day itself can leave the
+  // 09:15 bar on the edge of the range (the first bar returned was 09:16), so it starts three days earlier
+  // and the caller keeps only the selected date.
+  return intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);
 }
 
 /** One-minute bars that end before the selected open. The selected session is not part of this request. */

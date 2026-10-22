@@ -518,6 +518,7 @@ export async function getMarketMovers() {
 
 export { DEMO_UNIVERSE };
 
+// v2: the opening candle is the exact 09:15 bar.
 const s1Cache = new Map<string, { at: number; value: S1Data }>();
 
 /**
@@ -560,11 +561,16 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
   );
 
   let first: Candle | null = null;
+  let firstBarTime: number | null = null;
   if (session.ok) {
+    // Sorted and de-duplicated, then only this session's bars.
     const tape = normalizeTape((await dhanSessionTape(name, stored, session.open, session.close).catch(() => [] as Candle[]))
       .filter((bar) => istDay(bar.time) === day && bar.time >= session.open && bar.time < session.close));
-    // Only a finished minute: during 09:15 the first candle is still forming.
-    if (tape[0] && tape[0].time + 60 <= now) first = tape[0];
+    firstBarTime = tape[0]?.time ?? null;
+    // The candle that opens at exactly 09:15:00 IST (it covers 09:15:00-09:15:59). Never the 09:16 candle,
+    // and only once that minute has finished.
+    const opening = tape.find((bar) => bar.time === session.open) ?? null;
+    if (opening && opening.time + 60 <= now) first = opening;
   }
 
   let status: S1Data["status"];
@@ -576,13 +582,20 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
     status = "closed";
     message = `${session.message} Showing the previous session (${previous.date}) range only.`;
   } else if (!first) {
-    status = "waiting";
-    message = now < session.open + 60
-      ? `Waiting for the first 1-minute candle of ${day} (09:15 IST). Previous session ${previous.date} is drawn.`
-      : `The first 1-minute candle of ${day} was not returned yet. Previous session ${previous.date} is drawn.`;
+    const clock = (seconds: number) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
+    if (now < session.open + 60) {
+      status = "waiting";
+      message = `Waiting for the 09:15 candle of ${day} to finish. Previous session ${previous.date} is drawn.`;
+    } else if (firstBarTime != null && firstBarTime !== session.open) {
+      status = "unavailable";
+      message = `The 09:15 candle of ${day} was not returned (first bar: ${clock(firstBarTime)} IST). The open and 9:15 lines are not drawn; no other candle is substituted.`;
+    } else {
+      status = "waiting";
+      message = `The 09:15 candle of ${day} was not returned yet. Previous session ${previous.date} is drawn.`;
+    }
   } else {
     status = "ready";
-    message = `Previous session ${previous.date}: H ${previous.high} L ${previous.low} C ${previous.close}. ${day} open ${first.open}, first minute H ${first.high} L ${first.low}.`;
+    message = `Previous session ${previous.date}: H ${previous.high} L ${previous.low} C ${previous.close}. ${day} 09:15 candle: open ${first.open}, high ${first.high}, low ${first.low}.`;
   }
   const value: S1Data = {
     ...base,
@@ -593,6 +606,7 @@ export async function getS1Data(symbol: string, date?: string | null): Promise<S
     previous,
     open: first ? first.open : null,
     firstMinute: first ? { time: first.time, open: first.open, high: first.high, low: first.low } : null,
+    firstBarTime,
   };
   s1Cache.set(cacheKey, { at: Date.now(), value });
   return value;

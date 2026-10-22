@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "lightweight-charts";
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
-import { S1_PREFIX } from "@/components/s1-overlay";
+import { STRATEGY_PREFIX } from "@/components/strategy-overlay";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
 import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, editPosition, isPositionHandle, positionGeometry, positionMetrics, positionPoints, setAnchor, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
@@ -73,7 +73,7 @@ export function DrawingLayer({
   magnet: MagnetMode | boolean;
   stay?: boolean;
   lockAll?: boolean;
-  /** Strategy drawings (S1): drawn like the rest, never selectable, never saved, never in undo. */
+  /** Strategy drawings: drawn like the rest, never selectable, never saved, never in undo. */
   overlays?: Drawing[];
   hidden: boolean;
   annotation: string;
@@ -907,7 +907,7 @@ export function DrawingLayer({
           const ink = mark.kind === "handle" ? "" : doomed ? "var(--loss)" : mark.color;
           const pointer = tool === "eraser" ? "pointer" : undefined;
           // Strategy overlays never take the pointer, so the chart still pans and zooms through them.
-          const passive = mark.id.startsWith(S1_PREFIX);
+          const passive = mark.id.startsWith(STRATEGY_PREFIX);
           const hit = passive ? "none" : hitAll;
           const hitStroke = passive ? "none" : hitStrokeAll;
           if (mark.kind === "hline") {

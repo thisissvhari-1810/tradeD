@@ -4,7 +4,10 @@
  * Step 1: a box from the previous completed session's low to high (its full range).
  * Step 2: that box moved vertically so its midpoint sits on the previous close (height unchanged).
  * Step 3: a clone of the step-2 box moved so its midpoint sits on the session's opening price.
- * Step 4: the first completed 1-minute candle's high and low as horizontal lines.
+ * Step 4: the 09:15 IST 1-minute candle's high and low as horizontal lines (never the 09:16 candle).
+ *
+ *   range = previousHigh − previousLow, half = range / 2
+ *   box 1 = previousClose ± half      box 2 = todayOpen ± half
  */
 import type { PreviousSession } from "@/lib/trading/replay-engine";
 
@@ -22,9 +25,12 @@ export type S1Data = {
   status: "ready" | "waiting" | "closed" | "unavailable";
   message: string;
   previous: PreviousSession | null;
-  /** The session's opening price: the open of its first 1-minute candle. Null until that candle exists. */
+  /** The session's opening price: the open of its 09:15 candle. Null until that candle exists. */
   open: number | null;
+  /** The 09:15:00 IST 1-minute candle (time = its opening timestamp). Null if not returned or not finished. */
   firstMinute: S1FirstMinute | null;
+  /** First 1-minute bar the provider returned for the session, for diagnosing a missing 09:15 bar. */
+  firstBarTime?: number | null;
 };
 
 export type S1Box = { top: number; bottom: number; mid: number };
@@ -54,13 +60,35 @@ export function centreOn(box: S1Box, target: number): S1Box {
 
 export function s1Levels(previous: PreviousSession | null, open: number | null, firstMinute: S1FirstMinute | null): S1Levels | null {
   if (!previous || !valid(previous.high) || !valid(previous.low) || !valid(previous.close) || previous.high < previous.low) return null;
+  const range = previous.high - previous.low;
+  const half = range / 2;
   const rawBox: S1Box = { top: previous.high, bottom: previous.low, mid: (previous.high + previous.low) / 2 };
-  const closeBox = centreOn(rawBox, previous.close);
-  const openBox = valid(open) ? centreOn(closeBox, open) : null;
+  // The previous candle's own midpoint is not used for alignment: only its height.
+  const closeBox: S1Box = { top: previous.close + half, bottom: previous.close - half, mid: previous.close };
+  const openBox: S1Box | null = valid(open) ? { top: open + half, bottom: open - half, mid: open } : null;
   const openingRange = firstMinute && valid(firstMinute.high) && valid(firstMinute.low) && firstMinute.high >= firstMinute.low
     ? { time: firstMinute.time, high: firstMinute.high, low: firstMinute.low }
     : null;
-  return { range: previous.high - previous.low, rawBox, closeBox, openBox, openingRange };
+  return { range, rawBox, closeBox, openBox, openingRange };
+}
+
+/**
+ * The checks the levels must pass before anything is drawn. Returns the failures (empty when valid):
+ * both boxes as tall as the previous range, centred on the close and the open, and the opening
+ * candle stamped exactly at the session open.
+ */
+export function s1Checks(levels: S1Levels, previous: PreviousSession, open: number | null, sessionOpen: number) {
+  const close = (a: number, b: number) => Math.abs(a - b) <= Math.max(1e-6, Math.abs(b) * 1e-9);
+  const failures: string[] = [];
+  const range = previous.high - previous.low;
+  if (!close(levels.closeBox.top - levels.closeBox.bottom, range)) failures.push("Box 1 height differs from the previous range.");
+  if (!close((levels.closeBox.top + levels.closeBox.bottom) / 2, previous.close)) failures.push("Box 1 midpoint is not the previous close.");
+  if (levels.openBox && open != null) {
+    if (!close(levels.openBox.top - levels.openBox.bottom, range)) failures.push("Box 2 height differs from the previous range.");
+    if (!close((levels.openBox.top + levels.openBox.bottom) / 2, open)) failures.push("Box 2 midpoint is not the open.");
+  }
+  if (levels.openingRange && levels.openingRange.time !== sessionOpen) failures.push("The opening candle is not the 09:15 candle.");
+  return failures;
 }
 
 /**
