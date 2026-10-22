@@ -74,8 +74,8 @@ export function SessionDateField({ value, today, onChange }: { value: string; to
 
   return (
     <div className="relative" ref={ref}>
-      <button type="button" aria-label="Replay date" aria-expanded={open} className="flex items-center gap-2 rounded-input border border-border bg-elevated px-2.5 py-1.5 text-text" onClick={() => { setView({ year: initial.year, month: initial.month }); setOpen((current) => !current); }}>
-        <span className="text-[10px] uppercase tracking-wide text-muted">Date</span>
+      <button type="button" aria-label="Replay date" aria-expanded={open} className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-input bg-sunken px-2 text-text" onClick={() => { setView({ year: initial.year, month: initial.month }); setOpen((current) => !current); }}>
+        <span className="hidden text-micro text-muted xl:inline">Date</span>
         <span className="num text-xs">{value ? prettyDate(value) : "Choose"}</span>
       </button>
       {open ? (
@@ -150,8 +150,8 @@ export function SessionTimeField({
 
   return (
     <div className="relative" ref={ref}>
-      <button type="button" aria-label="Replay time" aria-expanded={open} disabled={disabled} className="flex items-center gap-2 rounded-input border border-border bg-elevated px-2.5 py-1.5 text-info disabled:opacity-40" onClick={() => setOpen((current) => !current)}>
-        <span className="text-[10px] uppercase tracking-wide text-muted">Time</span>
+      <button type="button" aria-label="Replay time" aria-expanded={open} disabled={disabled} className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-input bg-sunken px-2 text-info disabled:opacity-40" onClick={() => setOpen((current) => !current)}>
+        <span className="hidden text-micro text-muted xl:inline">Time</span>
         <span className="num text-xs">{label}</span>
       </button>
       {open && !disabled ? (

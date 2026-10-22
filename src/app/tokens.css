@@ -53,9 +53,9 @@
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-slow: 240ms;
-  --topbar: 56px;
+  --topbar: 52px;
   --tabbar: 60px;
-  --rail: 84px;
+  --rail: 76px;
 }
 
 :root,

@@ -53,7 +53,7 @@ import { formatPnl, formatSignedBps, rupeesToPaise } from "@/lib/money";
 import { fromSummaryWire, newlyClosed, type ReplaySessionSummary, type ReplaySummaryWire } from "@/lib/trading/replay-summary";
 import { replayChipLabel } from "@/lib/trading/position-view";
 import { ReplaySummaryDialog } from "@/components/replay-summary-dialog";
-import { Star } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Star } from "lucide-react";
 
 type Hit = { symbol: string; name: string; exchange: string };
 type PracticePosition = {
@@ -76,6 +76,9 @@ type PracticePosition = {
   replaySession?: string | null;
 };
 type ReplayMarkRow = { symbol: string; cursor: number; mark: string | null; marketValue: string | null; unrealized: string | null; asOf: string | null; stale: boolean; beforeEntry: boolean; openedAt: string | null; message: string };
+
+/** Shown inline on laptop widths; the rest sit in the "More" menu below the 2xl breakpoint. */
+const PRIMARY_SPANS = new Set<ChartSpan>(["1m", "5m", "15m", "1h", "1d", "1w"]);
 
 function optionSessionKey(email: string) {
   return `td-option-replay-sessions:${email}`;
@@ -123,7 +126,7 @@ function PreviousSessionStrip({ session }: { session: PreviousSession | null }) 
     return <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-warning">Previous session open and close were not returned.</p>;
   }
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">
+    <div className="no-scrollbar flex h-6 shrink-0 items-center gap-x-3 overflow-x-auto whitespace-nowrap border-b border-border bg-panel px-3 text-micro text-muted">
       <span className="font-semibold text-info">Prev session {session.date}</span>
       <span>Open <span className="num text-text">{session.open.toFixed(2)}</span></span>
       <span>Close <span className="num text-text">{session.close.toFixed(2)}</span></span>
@@ -843,28 +846,33 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-panel px-3 py-2">
-        <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={36} />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <span>{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
-            <span className="text-[11px] font-normal text-muted">{optionView ? optionView.expiry : "NSE"}</span>
-            {optionView ? <button type="button" className="rounded-full border border-border px-2 py-0.5 text-[10px] font-normal text-muted" onClick={() => setOptionView(null)}>Back to {optionView.underlying}</button> : null}
-            {replay.active ? <span className="text-[11px] font-semibold uppercase tracking-wide text-info">Historical replay</span> : <span className={`text-[11px] font-normal ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stream.detail || undefined}>{feedLabel}</span>}
+      {/* One compact row: identity never shrinks; only the tool strip scrolls when space runs out. */}
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-panel pl-2 pr-1">
+        <div className="flex shrink-0 items-center gap-2" title={stamp}>
+          <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={26} />
+          <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+            <span className="text-dense font-semibold">{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
+            <span className="text-micro text-muted">{optionView ? optionView.expiry : "NSE"}</span>
+            <span className="num text-dense font-semibold">{priceLabel}</span>
+            {changeLabel ? <span className={`num text-data ${changeTone}`}>{changeLabel}</span> : null}
           </div>
-          <div className="flex items-baseline gap-2 whitespace-nowrap">
-            <span className="num text-sm font-semibold">{priceLabel}</span>
-            {changeLabel ? <span className={`num text-xs ${changeTone}`}>{changeLabel}</span> : null}
-          </div>
-          <div className="text-[10px] text-muted">{stamp}</div>
+          {replay.active
+            ? <span className="inline-flex items-center gap-1 rounded-pill bg-demo-soft px-2 py-0.5 text-micro font-medium text-demo"><span className="h-1.5 w-1.5 rounded-full bg-demo" aria-hidden />Replay</span>
+            : <span className={`hidden items-center gap-1 text-micro sm:inline-flex ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stamp}><span className={`h-1.5 w-1.5 rounded-full ${feedLabel === "Live" ? "bg-profit" : "bg-muted"}`} aria-hidden />{feedLabel}</span>}
+          {optionView ? <button type="button" className="rounded-full border border-border px-2 py-0.5 text-micro text-muted" onClick={() => setOptionView(null)}>Back to {optionView.underlying}</button> : null}
+          <IconButton label={watched ? "Remove from watchlist" : "Add to watchlist"} active={watched} onClick={toggleWatch}>
+            <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
+          </IconButton>
         </div>
-        <IconButton label={watched ? "Remove from watchlist" : "Add to watchlist"} active={watched} onClick={toggleWatch}>
-          <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
-        </IconButton>
-        <div className="flex shrink-0 gap-0.5 rounded-input border border-border bg-elevated p-0.5" role="toolbar" aria-label="Timeframe">
+        <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div className="flex shrink-0 items-center gap-0.5 rounded-input bg-sunken p-0.5" role="toolbar" aria-label="Timeframe">
           {CHART_SPANS.map((span) => (
-            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2.5 text-data", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
+            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden 2xl:inline-flex 2xl:items-center", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
+          <select aria-label="More timeframes" className="h-7 w-[4.5rem] shrink-0 rounded-xs border-0 bg-transparent px-1.5 py-0 text-data text-muted 2xl:hidden" value={PRIMARY_SPANS.has(timeframe) ? "" : timeframe} onChange={(event) => { if (event.target.value) setTimeframe(event.target.value as ChartSpan); }}>
+            <option value="">More</option>
+            {CHART_SPANS.filter((span) => !PRIMARY_SPANS.has(span)).map((span) => <option key={span} value={span}>{SPAN_LABEL[span]}</option>)}
+          </select>
         </div>
         <ChartHeaderTools
           chartType={chartType}
@@ -884,10 +892,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           full={full}
           onFull={toggleFullScreen}
         >
-          <button type="button" aria-pressed={replay.active} className={cx("h-10 shrink-0 rounded-input px-3 text-[13px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>
-          {replay.active && replay.date ? <span className="num shrink-0 whitespace-nowrap rounded-full border border-demo/30 px-2.5 py-1 text-[11px] font-medium text-demo" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
-          <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-10 shrink-0 rounded-input px-3 text-[13px] font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
+          <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>
+          {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
+          <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
         </ChartHeaderTools>
+        </div>
       </div>
       {LABEL_TOOLS.has(tool) ? (
         <label className="flex items-center gap-2 border-b border-border bg-panel px-3 py-1.5 text-xs text-muted">
@@ -1018,7 +1027,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           onSpeed={(speed) => setReplay((current) => ({ ...current, speed }))}
         />
       ) : null}
-          <p className="border-t border-border px-3 py-1 text-[11px] text-muted">{replay.active ? stamp : `${stamp}${candleMeta.mode ? ` · ${candleMeta.mode}` : ""} ${candleMeta.message}`}</p>
+          {replay.active ? null : <p className="truncate border-t border-border px-3 py-0.5 text-micro text-muted" title={`${stamp} ${candleMeta.message}`}>{`${stamp}${candleMeta.mode ? ` · ${candleMeta.mode}` : ""} ${candleMeta.message}`}</p>}
           {variant === "positions" ? (
             <section className="border-t border-border bg-panel">
               <div className="flex h-10 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Positions and orders">
@@ -1055,7 +1064,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             }}
           />
         ) : null}
-        <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "h-12 lg:w-12" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[22rem]" : "h-64 lg:w-72"}`}>
+        <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "h-11 lg:w-11" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[clamp(17rem,24vw,21rem)]" : "h-64 lg:w-[clamp(16rem,20vw,18rem)]"}`}>
           <div className="flex items-center gap-1 border-b border-border px-2 py-1">
             {railCollapsed ? null : (
               <>
@@ -1063,7 +1072,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 <button type="button" className={`rounded-full px-2 py-1 text-xs ${sideRail === "positions" ? "bg-primary font-semibold text-on-primary" : "text-muted"}`} onClick={() => setSideRail("positions")}>Positions{practice ? ` ${bookRows.filter((row) => row.contract).length}` : ""}</button>
               </>
             )}
-            <button type="button" className="ml-auto rounded px-2 py-1 text-[11px] text-muted" title={railCollapsed ? "Expand side panel" : "Minimize side panel"} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? "Open" : "Min"}</button>
+            <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-label={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
           </div>
           {railCollapsed ? null : sideRail === "positions" ? (
             <OptionBook

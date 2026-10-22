@@ -59,11 +59,11 @@ export function ChartHeaderTools({
         type="button"
         aria-pressed={indicatorsOpen}
         title="Indicators"
-        className={cx("flex h-9 shrink-0 items-center gap-1 rounded-md pl-1 pr-2.5 text-dense font-medium focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", indicatorsOpen ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover hover:text-text")}
+        className={cx("flex h-8 shrink-0 items-center gap-1 rounded-md pl-1 pr-2 text-data font-medium focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", indicatorsOpen ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover hover:text-text")}
         onClick={onIndicators}
       >
         <ChartIcon name="indicators" />
-        Indicators
+        <span className="hidden xl:inline">Indicators</span>
       </button>
       <HeaderDivider />
       <HeaderButton label="Undo" icon="undo" disabled={!canUndo} onClick={onUndo} />
@@ -71,9 +71,10 @@ export function ChartHeaderTools({
       {children ? <><HeaderDivider />{children}</> : null}
       <span aria-hidden className="min-w-2 flex-1" />
       <HeaderButton label={volumeVisible ? "Hide volume" : "Show volume"} icon={volumeVisible ? "volume" : "volumeOff"} active={volumeVisible} onClick={onToggleVolume} />
-      <HeaderButton label="Zoom out" icon="zoomOut" onClick={() => onZoom(-1)} />
-      <HeaderButton label="Zoom in" icon="zoomIn" onClick={() => onZoom(1)} />
-      <HeaderButton label="Reset chart view" icon="reset" onClick={onReset} />
+      {/* Wheel, pinch and double-click already zoom and reset; the buttons return on wide screens. */}
+      <HeaderButton label="Zoom out" icon="zoomOut" className="hidden 2xl:grid" onClick={() => onZoom(-1)} />
+      <HeaderButton label="Zoom in" icon="zoomIn" className="hidden 2xl:grid" onClick={() => onZoom(1)} />
+      <HeaderButton label="Reset chart view" icon="reset" className="hidden 2xl:grid" onClick={onReset} />
       <HeaderButton label={refreshing ? "Refreshing chart" : "Refresh chart"} icon="refresh" disabled={refreshing} onClick={onRefresh} />
       <HeaderButton label={full ? "Exit full screen" : "Full screen"} icon={full ? "minimize" : "maximize"} onClick={onFull} />
     </>
@@ -81,10 +82,10 @@ export function ChartHeaderTools({
 }
 
 function HeaderDivider() {
-  return <span aria-hidden className="mx-0.5 h-6 w-px shrink-0 bg-border" />;
+  return <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border" />;
 }
 
-function HeaderButton({ label, icon, active, disabled, onClick }: { label: string; icon: ChartIconName; active?: boolean; disabled?: boolean; onClick: () => void }) {
+function HeaderButton({ label, icon, active, disabled, className, onClick }: { label: string; icon: ChartIconName; active?: boolean; disabled?: boolean; className?: string; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -92,7 +93,7 @@ function HeaderButton({ label, icon, active, disabled, onClick }: { label: strin
       aria-label={label}
       aria-pressed={active}
       disabled={disabled}
-      className={cx("grid h-9 w-9 shrink-0 place-items-center rounded-md focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:pointer-events-none disabled:text-disabled", active ? "text-primary hover:bg-hover" : "text-text-2 hover:bg-hover hover:text-text")}
+      className={cx("grid h-8 w-8 shrink-0 place-items-center rounded-md focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:pointer-events-none disabled:text-disabled", active ? "text-primary hover:bg-hover" : "text-text-2 hover:bg-hover hover:text-text", className)}
       onClick={onClick}
     >
       <ChartIcon name={icon} />
@@ -147,7 +148,7 @@ function ChartTypeMenu({ current, onChange }: { current: (typeof CHART_TYPES)[nu
         aria-label={`Chart type: ${current.label}`}
         aria-haspopup="menu"
         aria-expanded={Boolean(anchor)}
-        className={cx("flex h-9 shrink-0 items-center rounded-md pl-0.5 pr-1 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", anchor ? "bg-hover text-text" : "text-text-2 hover:bg-hover hover:text-text")}
+        className={cx("flex h-8 shrink-0 items-center rounded-md pl-0.5 pr-1 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", anchor ? "bg-hover text-text" : "text-text-2 hover:bg-hover hover:text-text")}
         onClick={toggle}
       >
         <ChartIcon name={current.icon} />

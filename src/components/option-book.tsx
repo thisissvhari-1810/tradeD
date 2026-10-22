@@ -237,9 +237,9 @@ export function OptionBook({
 function SessionHero({ summary }: { summary: ReplaySessionSummary | null }) {
   if (!summary || (summary.trades.length === 0 && summary.openCount === 0 && summary.waitingCount === 0 && summary.realizedPaise === 0n)) {
     return (
-      <section aria-label="Replay session P&L" className="border-b border-border px-3 py-3">
+      <section aria-label="Replay session P&L" className="border-b border-border px-3 py-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Replay session P&L</p>
-        <p className="num mt-1 text-xl font-semibold text-text-2">{formatPnl(0n)}</p>
+        <p className="num mt-0.5 text-title font-semibold text-text-2">{formatPnl(0n)}</p>
         <p className="mt-0.5 text-[11px] text-muted">No trades in this replay session yet. Buy from the Option Chain to start.</p>
       </section>
     );

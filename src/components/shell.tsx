@@ -503,7 +503,7 @@ function IndexChip({ label, last, previous, volatility }: { label: string; last:
   const tone = volatility || direction === "flat" ? "bg-sunken text-text-2" : direction === "up" ? "bg-profit-soft text-profit" : "bg-loss-soft text-loss";
   const Arrow = direction === "up" ? ArrowUpRight : direction === "down" ? ArrowDownRight : null;
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2.5 rounded-input border border-border-soft bg-panel/70 pl-3 pr-1.5">
+    <div className="flex h-8 shrink-0 items-center gap-2 rounded-input bg-panel/70 pl-2.5 pr-1">
       <span className="text-micro font-semibold tracking-[0.04em] text-muted">{label}</span>
       <PriceCell value={last} className="text-dense font-semibold text-text" />
       {change != null && pct != null ? (
@@ -512,7 +512,7 @@ function IndexChip({ label, last, previous, volatility }: { label: string; last:
           <span className="sr-only">{direction === "up" ? "Up" : direction === "down" ? "Down" : "Unchanged"}</span>
           {pct >= 0 ? "+" : "−"}{Math.abs(pct).toFixed(2)}%
         </span>
-      ) : <span className="px-1.5 text-micro text-muted">Change N/A</span>}
+      ) : <span className="px-1.5 text-micro text-muted" title="Change not available yet">–</span>}
     </div>
   );
 }
