@@ -1170,7 +1170,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 dates={strategyDates}
                 onDates={setStrategyDates}
                 today={kolkataParts(new Date()).dateKey}
-                autoCurrent={replay.active && replay.date ? replay.date : kolkataParts(new Date()).dateKey}
+                autoCurrent={replay.active && replay.date ? replay.date : s1Current?.data?.date ?? kolkataParts(new Date()).dateKey}
                 manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}
                 onClose={() => setStrategyOpen(false)}
               />

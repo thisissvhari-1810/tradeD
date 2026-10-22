@@ -78,7 +78,7 @@ describe("strategy drawings and styles", () => {
     expect([openBox.color, openBox.fill, openBox.fillOpacity]).toEqual(["#C2410C", "#F97316", 0.12]);
     expect(closeBox.center).toEqual({ color: "#7E22CE", width: 2, dash: "dashed", visible: true });
     expect([high.color, high.width, high.dash, high.kind]).toEqual(["#15803D", 2, "solid", "hray"]);
-    expect([low.color, low.width]).toEqual(["#B91C1C", 2]);
+    expect([low.color, low.width, low.dash]).toEqual(["#15803D", 2, "solid"]);
     expect(high.text).toBe("9:15 High 23,640.00");
     expect(high.points[0].time).toBe(OPEN_0915);
   });
@@ -294,5 +294,21 @@ describe("open from the daily candle, lifecycle log, manual rectangles", () => {
   it("tells the user when the chart also has their own rectangles", () => {
     expect(desk).toContain('manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}');
     expect(panel).toContain("not part of the Strategy (which draws only boxes A and B)");
+  });
+});
+
+describe("latest session before the open; matching 9:15 colours", () => {
+  const server = readFileSync(join(process.cwd(), "src/server/market.ts"), "utf8");
+
+  it("before today's open (or with no session today) the automatic day is the latest traded session", () => {
+    expect(server).toContain("if (date == null && previous && (!session.ok || now < session.open + 60)");
+    expect(server).toContain("const latest = await getS1Data(symbol, previous.date, previousDate);");
+  });
+
+  it("the low line defaults to the high line's solid green, and the old saved red is upgraded", () => {
+    expect(STRATEGY_DEFAULTS.low.color).toBe(STRATEGY_DEFAULTS.high.color);
+    expect(STRATEGY_DEFAULTS.low.dash).toBe("solid");
+    expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C", width: 3 } })).low).toMatchObject({ color: "#15803D", width: 3 });
+    expect(parseStrategySettings(JSON.stringify({ low: { color: "#123456" } })).low.color).toBe("#123456");
   });
 });

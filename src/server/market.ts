@@ -546,7 +546,8 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
   if (configuredProvider() !== "dhan") return { ...base, status: "unavailable", message: "S1 needs exchange candles. This data source is not Dhan, so no levels were drawn." };
   const cacheKey = `${key}|${day}|${previousDate ?? "auto"}`;
   const hit = s1Cache.get(cacheKey);
-  if (hit && Date.now() - hit.at < (hit.value.firstMinute ? 30 * 60_000 : 45_000)) return hit.value;
+  // A stand-in latest session (before today's open) is kept briefly so today takes over right after 09:16.
+  if (hit && Date.now() - hit.at < (hit.value.firstMinute && hit.value.date === day ? 30 * 60_000 : 45_000)) return hit.value;
 
   const holidays = await getHolidays();
   const session = describeSession(day, holidays, today);
@@ -566,6 +567,16 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
     normalizeTape(minutes.filter(until)),
     previousDate ? nextDay(upTo) : day,
   );
+
+  // Automatic day before today's open (or on a weekend / holiday): the latest session that has traded is
+  // the current day, so its open and 9:15 lines show instead of waiting on a session that has not started.
+  if (date == null && previous && (!session.ok || now < session.open + 60) && (previousDate == null || previousDate < previous.date)) {
+    const latest = await getS1Data(symbol, previous.date, previousDate);
+    const why = session.ok ? `${day} has not opened yet` : `${day} has no session`;
+    const shown = { ...latest, message: `${why}, so the latest session (${previous.date}) is shown. ${latest.message}` };
+    s1Cache.set(cacheKey, { at: Date.now(), value: shown });
+    return shown;
+  }
 
   // Box edges sit on the provider's own daily-bar stamps (the same bars the daily chart draws).
   let anchors: S1Data["anchors"] = null;

@@ -28,7 +28,8 @@ export const STRATEGY_DEFAULTS: StrategySettings = {
   closeBox: { border: "#7E22CE", fill: "#A855F7", width: 2, opacity: 0.15, dash: "solid", visible: true, mid: { color: "#7E22CE", width: 2, dash: "dashed", visible: true } },
   openBox: { border: "#C2410C", fill: "#F97316", width: 2, opacity: 0.12, dash: "solid", visible: true, mid: { color: "#C2410C", width: 2, dash: "dashed", visible: true } },
   high: { color: "#15803D", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
-  low: { color: "#B91C1C", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
+  // Same solid dark green as the high line.
+  low: { color: "#15803D", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
 };
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
@@ -86,7 +87,8 @@ export function parseStrategySettings(raw: string | null, legacyOn = false): Str
     closeBox: box(row.closeBox, STRATEGY_DEFAULTS.closeBox),
     openBox: box(row.openBox, STRATEGY_DEFAULTS.openBox),
     high: level(row.high, STRATEGY_DEFAULTS.high),
-    low: level(row.low, STRATEGY_DEFAULTS.low),
+    // The low line's old default red becomes the new default green; a colour the user chose stays.
+    low: level(row.low && typeof row.low === "object" && (row.low as Partial<StrategyLevel>).color?.toUpperCase() === "#B91C1C" ? { ...row.low, color: STRATEGY_DEFAULTS.low.color } : row.low, STRATEGY_DEFAULTS.low),
   };
 }
 
