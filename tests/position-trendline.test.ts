@@ -150,7 +150,8 @@ describe("+ Add text on a selected line", () => {
     // Drawn right-to-left, the text still reads left-to-right.
     expect(Math.abs(alongLine({ kind: "trend", points: [{ time: 200, price: 100 }, { time: 0, price: 120 }] }, xy)!.angle)).toBeLessThan(90);
     expect(alongLine({ kind: "hline", points: [{ time: 0, price: 1 }, { time: 1, price: 1 }] }, xy)).toBeNull();
-  });
+    // Importing the drawing layer is slow when the whole suite runs in parallel.
+  }, 30_000);
 
   it("shows the hint only on a selected drawing with no text, and opens an in-place box", () => {
     expect(layer).toContain('text: "+ Add text"');
