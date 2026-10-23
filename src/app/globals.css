@@ -42,6 +42,9 @@
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
+/* Nothing may widen the page sideways: on phones that zooms the whole layout out and pushes the
+   fixed bottom bar off screen. Rows meant to scroll sideways scroll inside their own box. */
+html, body { overflow-x: clip; }
 
 /*
  * The whole interface is sized in rem, so it scales with the screen: 16px up to about 1700px wide

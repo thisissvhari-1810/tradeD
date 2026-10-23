@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useHydrated } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -61,7 +62,7 @@ import { formatPnl, formatSignedBps, rupeesToPaise } from "@/lib/money";
 import { fromSummaryWire, newlyClosed, type ReplaySessionSummary, type ReplaySummaryWire } from "@/lib/trading/replay-summary";
 import { replayChipLabel } from "@/lib/trading/position-view";
 import { ReplaySummaryDialog } from "@/components/replay-summary-dialog";
-import { PanelRightClose, PanelRightOpen, Star } from "lucide-react";
+import { ChevronDown, PanelRightClose, PanelRightOpen, Star } from "lucide-react";
 
 type Hit = { symbol: string; name: string; exchange: string };
 type PracticePosition = {
@@ -1106,9 +1107,17 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </IconButton>
         </div>
         <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto max-lg:h-11 max-lg:basis-full">
-        <div className="flex shrink-0 items-center gap-0.5 rounded-input bg-sunken p-0.5" role="toolbar" aria-label="Timeframe">
+        {/* Phones and tablets: one compact menu with every timeframe (the current one shown). */}
+        <label className="relative shrink-0 lg:hidden">
+          <span className="sr-only">Timeframe</span>
+          <select className="h-9 appearance-none rounded-input border border-border bg-sunken py-0 pl-3 pr-7 font-semibold text-text" value={timeframe} onChange={(event) => setTimeframe(event.target.value as ChartSpan)} aria-label="Timeframe">
+            {CHART_SPANS.map((span) => <option key={span} value={span}>{SPAN_LABEL[span]}</option>)}
+          </select>
+          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
+        </label>
+        <div className="flex shrink-0 items-center gap-0.5 rounded-input bg-sunken p-0.5 max-lg:hidden" role="toolbar" aria-label="Timeframe">
           {CHART_SPANS.map((span) => (
-            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "lg:hidden", "max-lg:h-8 max-lg:px-2.5", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
+            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
         </div>
         <ChartHeaderTools
@@ -1268,6 +1277,13 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                   {tool !== "cursor" ? toolEntry(tool)?.label ?? "Drawing" : "Draw"}
                 </button>
                 {tool !== "cursor" ? <button type="button" className="surface-overlay pointer-events-auto inline-flex h-11 items-center rounded-pill px-3.5 text-data font-semibold text-text shadow-e3" onClick={() => setTool("cursor")}>Done</button> : null}
+              </div>
+            ) : null}
+            {/* Phones (Kite-style): Buy and Sell under the thumb; they open the paper order ticket for this stock. */}
+            {shown.length > 0 && !replay.active && !optionView && practises && canPaperTrade && tool === "cursor" ? (
+              <div className="absolute bottom-9 right-[4.25rem] z-20 flex gap-2 lg:hidden">
+                <Link href={`/terminal?symbol=${encodeURIComponent(symbol)}&side=BUY`} className="inline-flex h-11 min-w-[4.5rem] items-center justify-center rounded-pill bg-profit px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Buy</Link>
+                <Link href={`/terminal?symbol=${encodeURIComponent(symbol)}&side=SELL`} className="inline-flex h-11 min-w-[4.5rem] items-center justify-center rounded-pill bg-loss px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Sell</Link>
               </div>
             ) : null}
             {strategyOpen ? (

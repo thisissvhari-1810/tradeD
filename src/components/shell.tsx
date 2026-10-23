@@ -332,7 +332,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
             <div className="lg:hidden"><BrandMark /></div>
-            <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Index prices">
+            <div className="no-scrollbar relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Index prices">
               {indices.length === 0 ? (
                 <span className="truncate text-data text-muted">{indexNote || "Loading index prices…"}</span>
               ) : (indices.some((item) => TICKER_LABEL[item.name]) ? indices.filter((item) => TICKER_LABEL[item.name]) : indices).map((item) => (

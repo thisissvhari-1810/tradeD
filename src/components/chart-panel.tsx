@@ -223,7 +223,10 @@ export function ChartPanel({
     }
     chart.applyOptions({ leftPriceScale: { visible: compareRef.current.length > 0, borderColor: chartPalette(schemeRef.current).border } });
     const lastBar = rows.length;
-    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, lastBar - 140), to: lastBar + 2 });
+    // About 8px per candle: 140 candles on a wide chart, fewer (and readable) on a phone.
+    const plotWidth = chart.timeScale().width() || 1120;
+    const initialBars = Math.max(30, Math.min(140, Math.round(plotWidth / 8)));
+    chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, lastBar - initialBars), to: lastBar + 2 });
     oscChartRef.current = oscillatorChart;
     setChartEpoch((value) => value + 1);
     if (handleRef) {

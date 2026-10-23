@@ -363,7 +363,7 @@ export function Terminal() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex border-b border-border bg-panel lg:hidden">
         {(["watch", "chart", "order"] as const).map((item) => (
-          <button key={item} className={`flex-1 py-2 text-xs ${mobile === item ? "text-primary" : "text-muted"}`} onClick={() => setMobile(item)}>{item}</button>
+          <button key={item} type="button" aria-pressed={mobile === item} className={`relative h-11 flex-1 text-data font-semibold ${mobile === item ? "text-primary after:absolute after:inset-x-6 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted"}`} onClick={() => setMobile(item)}>{item === "watch" ? "Watchlist" : item === "chart" ? "Chart" : "Order"}</button>
         ))}
       </div>
       <div className="grid min-h-0 flex-1 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
