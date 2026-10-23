@@ -361,23 +361,16 @@ export function Shell({ children }: { children: ReactNode }) {
             <Tooltip content={mode === "demo" ? "Simulated orders on your practice account. Click to switch view." : "Read-only broker view. Click to switch back to demo."}>
               <button
                 type="button"
+                // The same round mark on every screen size: a flask for Demo, a pulsing dot for Live.
                 className={cx(
-                  "inline-flex h-8 shrink-0 items-center gap-1.5 transition-opacity",
-                  mode === "demo"
-                    ? "rounded-pill border border-demo/35 bg-demo-soft px-2.5 text-micro font-semibold uppercase tracking-[0.05em] text-demo hover:border-demo/60"
-                    // Live: a broadcast-style status mark (pulsing dot + "Live"), not a button shape.
-                    : "px-1.5 text-dense font-bold tracking-[0.02em] hover:opacity-80",
+                  "grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-colors",
+                  mode === "demo" ? "border-demo/35 bg-demo-soft hover:border-demo/60" : "border-profit/35 bg-profit-soft hover:border-profit/60",
                 )}
-                style={mode === "live" ? { color: "var(--loss)", fontWeight: 700, letterSpacing: "0.02em" } : undefined}
+                style={{ color: mode === "demo" ? "var(--demo)" : "var(--profit)" }}
                 onClick={() => setPendingMode(mode === "demo" ? "live" : "demo")}
                 aria-label={mode === "demo" ? "Demo mode. Switch to live view" : "Live view. Switch to demo"}
               >
-                {mode === "demo" ? <FlaskConical className="h-3.5 w-3.5" aria-hidden /> : (
-                  <span className="relative grid h-2.5 w-2.5 place-items-center" aria-hidden>
-                    <span className="live-dot h-2.5 w-2.5 rounded-full bg-loss" />
-                  </span>
-                )}
-                {mode === "demo" ? <span className="hidden sm:inline">Demo</span> : <span>Live</span>}
+                {mode === "demo" ? <FlaskConical className="h-4 w-4" aria-hidden /> : <span className="live-dot h-2.5 w-2.5 rounded-full bg-profit" aria-hidden />}
               </button>
             </Tooltip>
 
