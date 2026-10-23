@@ -100,7 +100,7 @@ export function FamilyAccountDrawer({ open, onClose, account, requirements, onCh
   const needsSignIn = account?.connection === "AUTH_REQUIRED" || account?.connection === "EXPIRED" || account?.connection === "ERROR";
 
   return (
-    <Drawer open={open} onClose={onClose} modal label="Family broker account" title={self ? "Sign in with Dhan" : accountId ? nickname || "Family account" : "Add family account"} subtitle={self ? `Your account · Client ID ${account?.clientId ?? ""}` : family ? family.relationshipLabel : "Your own or your family's Dhan account"} width="w-[520px]" footer={
+    <Drawer open={open} onClose={onClose} modal label="Family broker account" title={self ? "Sign in with Dhan" : accountId ? nickname || "Family account" : "Add family account"} subtitle={self ? `Your account · Client ID ${account?.clientId ?? ""}` : family ? family.relationshipLabel : "Your own or your family's Dhan account"} width="w-[32.5rem]" footer={
       <div className="flex flex-col gap-2">
         {error ? <Notice tone="loss">{error}</Notice> : null}
         {note ? <p className="text-micro text-profit">{note}</p> : null}

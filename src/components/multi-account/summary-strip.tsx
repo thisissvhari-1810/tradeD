@@ -38,7 +38,7 @@ export function SummaryStrip({ summary }: { summary: Summary }) {
   const TrendIcon = total == null || total === 0 ? Minus : total > 0 ? TrendingUp : TrendingDown;
   const { combined, orderCounts } = summary;
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+    <div className="grid gap-3 lg:grid-cols-[minmax(18.75rem,23.75rem)_minmax(0,1fr)]">
       <section aria-label="Combined P&L" className={cx("surface relative overflow-hidden px-4 py-3.5", tone === "profit" && "border-profit/30", tone === "loss" && "border-loss/30")}>
         <span className={cx("absolute inset-y-0 left-0 w-1", tone === "profit" ? "bg-profit" : tone === "loss" ? "bg-loss" : "bg-border")} aria-hidden />
         <p className="text-micro font-medium uppercase tracking-[0.05em] text-muted">Combined P&L · all accounts</p>
@@ -75,10 +75,10 @@ export function SummaryStrip({ summary }: { summary: Summary }) {
 
 export function SummarySkeleton() {
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]" aria-hidden>
-      <Skeleton className="h-[132px] rounded-card" />
+    <div className="grid gap-3 lg:grid-cols-[minmax(18.75rem,23.75rem)_minmax(0,1fr)]" aria-hidden>
+      <Skeleton className="h-[8.25rem] rounded-card" />
       <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-[66px]" />)}</div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">{Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-[4.125rem]" />)}</div>
         <Skeleton className="h-9" />
       </div>
     </div>

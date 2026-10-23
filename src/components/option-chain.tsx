@@ -132,7 +132,7 @@ export function OptionChainBoard() {
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel px-4 py-3">
           <h1 className="text-title font-semibold">Option chain</h1>
-          <div className="relative min-w-[220px] max-w-sm flex-1">
+          <div className="relative min-w-[13.75rem] max-w-sm flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a stock or index" aria-label="Search option underlying" className="search-field w-full bg-elevated py-2 text-sm" />
             {q && hits.q === q && shownHits.length === 0 ? <p className="absolute left-0 right-0 top-11 z-30 rounded-card border border-border bg-overlay px-3 py-2 text-data text-muted shadow-e3">No results. Try a company name or symbol such as RELIANCE.</p> : null}
@@ -141,7 +141,7 @@ export function OptionChainBoard() {
                 {shownHits.map((hit) => (
                   <button key={`${hit.exchange}-${hit.symbol}`} type="button" className="flex w-full items-center gap-2 rounded-xs px-2 py-1.5 text-left hover:bg-elevated" onClick={() => choose(hit.symbol)}>
                     <StockLogo symbol={hit.symbol} name={hit.name} size={24} />
-                    <span className="min-w-0"><span className="block truncate text-[13px] font-medium">{hit.name}</span><span className="text-[11px] text-muted">{hit.symbol} · {hit.sector || hit.exchange}</span></span>
+                    <span className="min-w-0"><span className="block truncate text-[0.8125rem] font-medium">{hit.name}</span><span className="text-[0.6875rem] text-muted">{hit.symbol} · {hit.sector || hit.exchange}</span></span>
                   </button>
                 ))}
               </div>
@@ -172,7 +172,7 @@ export function OptionChainBoard() {
         <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
           <input value={strikeQuery} onChange={(event) => setStrikeQuery(event.target.value)} placeholder="Find a strike" aria-label="Filter strikes" inputMode="numeric" className="oc-search w-40 !pl-2" />
           <button type="button" className="text-data font-medium text-primary" onClick={() => setAllStrikes((value) => !value)}>{allStrikes ? "Show strikes near spot" : "Show every strike"}</button>
-          <span className="ml-auto truncate text-[11px] text-muted">{error ? `${error}${chain ? " Showing the last snapshot." : ""}` : chain?.message}</span>
+          <span className="ml-auto truncate text-[0.6875rem] text-muted">{error ? `${error}${chain ? " Showing the last snapshot." : ""}` : chain?.message}</span>
         </div>
 
         <OptionChainTable
@@ -193,5 +193,5 @@ export function OptionChainBoard() {
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
-  return <div className="bg-panel px-4 py-2.5"><div className="text-[11px] text-muted">{label}</div><div className="num mt-0.5 text-[15px] font-semibold">{value}</div></div>;
+  return <div className="bg-panel px-4 py-2.5"><div className="text-[0.6875rem] text-muted">{label}</div><div className="num mt-0.5 text-[0.9375rem] font-semibold">{value}</div></div>;
 }

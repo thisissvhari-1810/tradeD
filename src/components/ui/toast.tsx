@@ -13,7 +13,7 @@ const COLOR = { info: "text-info", success: "text-profit", error: "text-loss", w
 
 export function ToastStack({ items, onDismiss }: { items: ToastItem[]; onDismiss: (id: number) => void }) {
   return (
-    <div className="pointer-events-none fixed inset-x-3 bottom-[calc(var(--tabbar)+12px)] z-[70] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[360px] lg:bottom-4" aria-live="polite" aria-relevant="additions">
+    <div className="pointer-events-none fixed inset-x-3 bottom-[calc(var(--tabbar)+0.75rem)] z-[70] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22.5rem] lg:bottom-4" aria-live="polite" aria-relevant="additions">
       {items.map((item) => {
         const Icon = ICON[item.tone];
         return (
@@ -21,7 +21,7 @@ export function ToastStack({ items, onDismiss }: { items: ToastItem[]; onDismiss
             <Icon className={cx("mt-0.5 h-4 w-4 shrink-0", COLOR[item.tone])} aria-hidden />
             <p className="min-w-0 flex-1 leading-5">{item.message}</p>
             {item.action ? (
-              <button type="button" className="shrink-0 rounded-xs px-1.5 py-0.5 text-[13px] font-semibold text-primary hover:bg-primary/10" onClick={() => { item.action?.onClick(); onDismiss(item.id); }}>
+              <button type="button" className="shrink-0 rounded-xs px-1.5 py-0.5 text-[0.8125rem] font-semibold text-primary hover:bg-primary/10" onClick={() => { item.action?.onClick(); onDismiss(item.id); }}>
                 {item.action.label}
               </button>
             ) : null}

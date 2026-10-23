@@ -46,7 +46,7 @@ export function AccountSettings({ account, busy, onClose, onSave, onReset }: { a
   const err = (text: string) => (text ? <span className="text-micro font-normal text-loss">{text}</span> : null);
 
   return (
-    <Drawer open onClose={onClose} modal width="w-[440px]" label={`Settings for ${account.nickname}`} title={account.nickname} subtitle={`${simId(account)} · demo account`} footer={
+    <Drawer open onClose={onClose} modal width="w-[27.5rem]" label={`Settings for ${account.nickname}`} title={account.nickname} subtitle={`${simId(account)} · demo account`} footer={
       <div className="flex gap-2">
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
         <Button className="flex-1" variant="primary" disabled={invalid} onClick={() => onSave({ nickname, tradingEnabled: enabled, lots: Math.min(account.lots, lots), risk: { maxLots: lots, maxCapitalPaise: capPaise ?? 0, maxDailyLossPaise: lossPaise ?? 0, maxOpenPositions: open, underlyings: underlyings.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean), sides } })}>Save settings</Button>

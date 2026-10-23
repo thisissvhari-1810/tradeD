@@ -79,13 +79,13 @@ export function SessionDateField({ value, today, onChange }: { value: string; to
         <span className="num text-xs">{value ? prettyDate(value) : "Choose"}</span>
       </button>
       {open ? (
-        <div className="absolute left-0 bottom-[calc(100%+6px)] z-40 w-[280px] rounded-card border border-border bg-elevated p-3 shadow-e3">
+        <div className="absolute left-0 bottom-[calc(100%+0.375rem)] z-40 w-[17.5rem] rounded-card border border-border bg-elevated p-3 shadow-e3">
           <div className="mb-2 flex items-center justify-between">
             <button type="button" className="grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-overlay hover:text-text" aria-label="Previous month" onClick={() => shift(-1)}><ChevronLeft className="h-4 w-4" /></button>
             <p className="text-sm font-semibold text-text">{monthTitle(view.year, view.month)}</p>
             <button type="button" className="grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-overlay hover:text-text" aria-label="Next month" onClick={() => shift(1)}><ChevronRight className="h-4 w-4" /></button>
           </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-muted">
+          <div className="grid grid-cols-7 gap-1 text-center text-[0.625rem] text-muted">
             {WEEKDAYS.map((day) => <span key={day} className="py-1">{day}</span>)}
           </div>
           <div className="grid grid-cols-7 gap-1">
@@ -109,7 +109,7 @@ export function SessionDateField({ value, today, onChange }: { value: string; to
               );
             })}
           </div>
-          <p className="mt-2 text-[10px] text-muted">Weekends are closed. Future dates stay unavailable.</p>
+          <p className="mt-2 text-[0.625rem] text-muted">Weekends are closed. Future dates stay unavailable.</p>
         </div>
       ) : null}
     </div>
@@ -155,11 +155,11 @@ export function SessionTimeField({
         <span className="num text-xs">{label}</span>
       </button>
       {open && !disabled ? (
-        <div className="absolute left-0 bottom-[calc(100%+6px)] z-40 w-[260px] rounded-card border border-border bg-elevated p-3 shadow-e3">
-          <p className="text-[10px] uppercase tracking-wide text-muted">Session clock · IST</p>
+        <div className="absolute left-0 bottom-[calc(100%+0.375rem)] z-40 w-[16.25rem] rounded-card border border-border bg-elevated p-3 shadow-e3">
+          <p className="text-[0.625rem] uppercase tracking-wide text-muted">Session clock · IST</p>
           <div className="mt-2 flex flex-wrap gap-1">
             {MARKS.map((mark) => (
-              <button key={mark} type="button" className={`rounded-full px-2 py-1 text-[11px] ${label === mark ? "bg-primary text-on-primary" : "bg-overlay text-text hover:bg-border-strong"}`} onClick={() => {
+              <button key={mark} type="button" className={`rounded-full px-2 py-1 text-[0.6875rem] ${label === mark ? "bg-primary text-on-primary" : "bg-overlay text-text hover:bg-border-strong"}`} onClick={() => {
                 if (sessionOpen == null || sessionClose == null) return;
                 const next = cursorFromClock(date, mark, sessionOpen, sessionClose);
                 if (next != null) onSeek(next);
@@ -169,7 +169,7 @@ export function SessionTimeField({
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <div>
-              <p className="mb-1 text-[10px] text-muted">Hour</p>
+              <p className="mb-1 text-[0.625rem] text-muted">Hour</p>
               <div className="max-h-36 overflow-auto rounded-input border border-border">
                 {hours.map((item) => (
                   <button key={item} type="button" className={`block w-full px-2 py-1.5 text-left text-xs ${item === hour ? "bg-primary text-on-primary" : "text-text hover:bg-overlay"}`} onClick={() => choose(item, item === 9 ? Math.max(15, Number(minuteText)) : item === 15 ? Math.min(30, Number(minuteText)) : Number(minuteText))}>{String(item).padStart(2, "0")}</button>
@@ -177,7 +177,7 @@ export function SessionTimeField({
               </div>
             </div>
             <div>
-              <p className="mb-1 text-[10px] text-muted">Minute</p>
+              <p className="mb-1 text-[0.625rem] text-muted">Minute</p>
               <div className="max-h-36 overflow-auto rounded-input border border-border">
                 {minutes.map((item) => (
                   <button key={item} type="button" className={`block w-full px-2 py-1.5 text-left text-xs ${item === Number(minuteText) ? "bg-primary text-on-primary" : "text-text hover:bg-overlay"}`} onClick={() => { choose(hour, item); setOpen(false); }}>{String(item).padStart(2, "0")}</button>
@@ -219,7 +219,7 @@ export function SessionRuler({
 
   return (
     <div className="flex items-center gap-2">
-      <span className="num w-10 text-[10px] text-muted">09:15</span>
+      <span className="num w-10 text-[0.625rem] text-muted">09:15</span>
       <div
         ref={trackRef}
         role="slider"
@@ -250,8 +250,8 @@ export function SessionRuler({
         <div className="absolute left-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-primary" style={{ width: `${progress * 100}%` }} />
         <div className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full border-2 border-text bg-primary" style={{ left: `calc(${progress * 100}% - 7px)` }} />
       </div>
-      <span className="num w-10 text-right text-[10px] text-muted">15:30</span>
-      <span className="num w-9 text-right text-[10px] text-text">{Math.round(progress * 100)}%</span>
+      <span className="num w-10 text-right text-[0.625rem] text-muted">15:30</span>
+      <span className="num w-9 text-right text-[0.625rem] text-text">{Math.round(progress * 100)}%</span>
     </div>
   );
 }

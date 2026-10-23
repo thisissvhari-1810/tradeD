@@ -23,7 +23,7 @@ const DOT: Record<Tone, string> = {
 
 export function Badge({ tone = "neutral", children, className, title, dot = false }: { tone?: Tone; children: ReactNode; className?: string; title?: string; dot?: boolean }) {
   return (
-    <span title={title} className={cx("inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-pill px-2 text-micro font-medium leading-none [&_svg]:h-3 [&_svg]:w-3", TONE[tone], className)}>
+    <span title={title} className={cx("inline-flex h-[1.375rem] shrink-0 items-center gap-1.5 rounded-pill px-2 text-micro font-medium leading-none [&_svg]:h-3 [&_svg]:w-3", TONE[tone], className)}>
       {dot ? <span className={cx("h-1.5 w-1.5 rounded-full", DOT[tone])} aria-hidden /> : null}
       {children}
     </span>

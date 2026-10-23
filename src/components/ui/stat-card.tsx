@@ -24,7 +24,7 @@ export function StatCard({ label, value, tone = "neutral", delta, deltaTone, hin
       <div className="mt-1.5 flex items-end justify-between gap-3">
         <div className="min-w-0">
           {loading ? (
-            <span aria-hidden className={cx("skel block rounded-sm", size === "sm" ? "h-[22px] w-24" : "h-8 w-32")} />
+            <span aria-hidden className={cx("skel block rounded-sm", size === "sm" ? "h-[1.375rem] w-24" : "h-8 w-32")} />
           ) : (
             <p className={cx("num truncate font-semibold", size === "sm" ? "text-title" : "text-hero", tone === "neutral" ? "text-text" : TONE_TEXT[tone])}>{value}</p>
           )}

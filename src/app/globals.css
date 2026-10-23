@@ -43,12 +43,19 @@
 
 html, body { height: 100%; }
 
+/*
+ * The whole interface is sized in rem, so it scales with the screen: 16px up to about 1600px wide
+ * (laptops), growing on larger monitors (about 19px at 1920 x 1080, at most 22px), and kept in step
+ * with the height so a wide but short window never gets cramped.
+ */
+html { font-size: clamp(100%, min(1vw, 2vh), 137.5%); }
+
 body {
   margin: 0;
   background: var(--background);
   color: var(--text);
   font-family: var(--font-ui), "Segoe UI", system-ui, sans-serif;
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.45;
   letter-spacing: -0.006em;
   font-feature-settings: "cv11" 1, "ss01" 1, "ss03" 1;
@@ -73,7 +80,7 @@ input, select, textarea {
   border-radius: var(--radius-input);
   background: var(--sunken);
   color: var(--text);
-  padding: 8px 12px;
+  padding: 0.5rem 0.75rem;
   transition: border-color var(--dur-fast) ease, background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 
@@ -88,13 +95,13 @@ input.search-field {
 input.top-search {
   display: block;
   width: 100%;
-  height: 40px;
+  height: 2.5rem;
   border-radius: var(--radius-md);
   background: var(--sunken);
   border-color: var(--border-soft);
-  font-size: 13px;
-  line-height: 38px;
-  padding: 0 12px 0 40px;
+  font-size: 0.8125rem;
+  line-height: 2.375rem;
+  padding: 0 0.75rem 0 2.5rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -114,43 +121,43 @@ input.stepper-input:focus { box-shadow: none; background: var(--elevated); }
 
 /* Compact panel controls (Strategy panel): fixed 28px height with the text centred. */
 input.compact-field, select.compact-field {
-  height: 28px;
+  height: 1.75rem;
   border-radius: var(--radius-sm);
   background: var(--sunken);
   color: var(--text);
-  font-size: 12px;
-  line-height: 26px;
-  padding: 0 8px;
+  font-size: 0.75rem;
+  line-height: 1.625rem;
+  padding: 0 0.5rem;
 }
-select.compact-field { padding-right: 24px; }
+select.compact-field { padding-right: 1.5rem; }
 input[type="color"].color-swatch {
-  width: 32px;
-  height: 24px;
-  padding: 2px;
+  width: 2rem;
+  height: 1.5rem;
+  padding: 0.125rem;
   border-radius: var(--radius-sm);
   background: var(--sunken);
   cursor: pointer;
 }
 input[type="color"].color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
-input[type="color"].color-swatch::-webkit-color-swatch { border: 0; border-radius: 3px; }
+input[type="color"].color-swatch::-webkit-color-swatch { border: 0; border-radius: 0.1875rem; }
 
 input.oc-search, select.oc-select {
-  height: 28px;
+  height: 1.75rem;
   border-radius: var(--radius-sm);
   background: var(--sunken);
   color: var(--text);
-  font-size: 12px;
-  line-height: 26px;
-  padding: 0 8px;
+  font-size: 0.75rem;
+  line-height: 1.625rem;
+  padding: 0 0.5rem;
 }
 
 input.oc-search {
-  padding-left: 30px;
-  padding-right: 28px;
+  padding-left: 1.875rem;
+  padding-right: 1.75rem;
 }
 
 input.oc-lots {
-  height: 28px;
+  height: 1.75rem;
   width: 3.5rem;
   border-radius: var(--radius-sm);
   background: var(--sunken);
@@ -159,15 +166,15 @@ input.oc-lots {
   padding: 0;
   font-family: var(--font-num), ui-monospace, monospace;
   text-align: center;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 input.oc-check {
-  width: 14px;
-  height: 14px;
-  margin-top: 2px;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.125rem;
   padding: 0;
-  border-radius: 3px;
+  border-radius: 0.1875rem;
   background: transparent;
 }
 
@@ -256,11 +263,11 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible, summary:focus-v
 .flash-up { animation: flash-up 650ms var(--ease-ui, ease-out); }
 .flash-down { animation: flash-down 650ms var(--ease-ui, ease-out); }
 
-@keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(0.25rem); } to { opacity: 1; transform: none; } }
 @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: none; } }
 @keyframes slide-in-up { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes live-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
+@keyframes live-ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 0.3125rem transparent; } }
 .anim-rise { animation: rise-in var(--dur-slow) var(--ease-ui, ease-out); }
 .anim-fade { animation: fade-in var(--dur-base) ease-out; }
 .anim-drawer { animation: slide-in-right var(--dur-slow) var(--ease-ui, ease-out); }
@@ -302,21 +309,21 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible, summary:focus-v
 .no-scrollbar::-webkit-scrollbar { display: none; }
 
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 8px 10px; white-space: nowrap; }
-td { padding: 8px 10px; border-top: 1px solid var(--border-soft); vertical-align: middle; }
+th { text-align: left; font-size: 0.6875rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; padding: 0.5rem 0.625rem; white-space: nowrap; }
+td { padding: 0.5rem 0.625rem; border-top: 1px solid var(--border-soft); vertical-align: middle; }
 tbody tr { transition: background-color var(--dur-fast) ease; }
 tbody tr:hover td { background: var(--hover); }
 
-.ui-table th, .ui-table td { padding-left: 14px; padding-right: 14px; }
-.ui-table th { padding-top: 10px; padding-bottom: 10px; }
-.ui-table td { border-top: 0; font-size: 13px; padding-top: 10px; padding-bottom: 10px; }
-.ui-table.dense td { padding-top: 6px; padding-bottom: 6px; }
+.ui-table th, .ui-table td { padding-left: 0.875rem; padding-right: 0.875rem; }
+.ui-table th { padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.ui-table td { border-top: 0; font-size: 0.8125rem; padding-top: 0.625rem; padding-bottom: 0.625rem; }
+.ui-table.dense td { padding-top: 0.375rem; padding-bottom: 0.375rem; }
 .ui-table tbody tr:hover td { background: var(--hover); }
 .ui-table tbody tr:last-child td { border-bottom: 0; }
 
 /* Legacy raw tables inside .data-table get the same treatment as ui/table. */
 .data-table { overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--panel); box-shadow: var(--shadow-1); }
-.data-table table { font-size: 13px; }
+.data-table table { font-size: 0.8125rem; }
 .data-table thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); border-bottom: 1px solid var(--border); }
 .data-table tbody tr:first-child td { border-top: 0; }
 .data-table td.num, .data-table th.num { text-align: right; }

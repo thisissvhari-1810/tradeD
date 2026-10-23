@@ -234,14 +234,14 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
       aria-label={`Order ticket ${label}`}
       className={cx(
         "anim-panel fixed inset-x-0 bottom-0 z-50 flex max-h-[90dvh] flex-col rounded-t-sheet border-t border-border bg-overlay text-text shadow-e3",
-        "sm:inset-x-auto sm:right-0 sm:top-[var(--topbar)] sm:max-h-none sm:w-[380px] sm:rounded-none sm:border-l sm:border-t-0",
+        "sm:inset-x-auto sm:right-0 sm:top-[var(--topbar)] sm:max-h-none sm:w-[23.75rem] sm:rounded-none sm:border-l sm:border-t-0",
         "lg:static lg:z-auto lg:h-full lg:shrink-0 lg:bg-panel lg:shadow-none",
       )}
     >
       <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border-strong sm:hidden" aria-hidden />
       <header className="border-b border-border px-4 pb-4 pt-3">
         <div className="flex items-start gap-2">
-          <h2 className="num min-w-0 flex-1 truncate text-[20px] font-semibold leading-tight tracking-tight">
+          <h2 className="num min-w-0 flex-1 truncate text-[1.25rem] font-semibold leading-tight tracking-tight">
             <span className={buy ? "text-profit" : "text-loss"}>{buy ? "BUY" : "SELL"}</span> {draft.underlying} {draft.strike.toLocaleString("en-IN")} {draft.right}
           </h2>
           {replay ? <Badge tone="info" title="Priced from historical data at the replay clock">Historical replay</Badge> : <Badge tone="demo" title="Virtual order on your practice wallet. Nothing is sent to a broker.">{desk.mode === "live" ? "Paper · live prices" : "Demo"}</Badge>}
@@ -256,9 +256,9 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
           {held > 0 ? <Chip>Holding {held} lot{held === 1 ? "" : "s"}</Chip> : null}
         </div>
         <div className="mt-3 flex items-baseline gap-2">
-          <span className="num text-[28px] font-semibold leading-none">{premium == null ? "—" : inr(premium)}</span>
+          <span className="num text-[1.75rem] font-semibold leading-none">{premium == null ? "—" : inr(premium)}</span>
           {change != null && changePct != null ? (
-            <span className={cx("num text-[13px] font-medium", change > 0 ? "text-profit" : change < 0 ? "text-loss" : "text-muted")}>
+            <span className={cx("num text-[0.8125rem] font-medium", change > 0 ? "text-profit" : change < 0 ? "text-loss" : "text-muted")}>
               {change > 0 ? "▲ +" : change < 0 ? "▼ −" : ""}{Math.abs(change).toFixed(2)} ({Math.abs(changePct).toFixed(2)}%)
             </span>
           ) : <span className="text-data text-muted">{replay ? "Change vs session open N/A" : "Day change N/A"}</span>}
@@ -291,14 +291,14 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
 
         <div>
           <div className="flex items-center justify-between">
-            <span className="text-[13px] font-medium text-text-2">Lots</span>
+            <span className="text-[0.8125rem] font-medium text-text-2">Lots</span>
             <span className="num text-data text-muted">{quantity == null ? "—" : `${quantity.toLocaleString("en-IN")} qty (${lotSize} × ${parsed})`}</span>
           </div>
           <div className="mt-2 flex items-center gap-2">
             <Stepper label="Lots" value={lots} min={1} max={Math.max(1, maxLots)} invalid={Boolean(lots) && !validLots} onChange={setLots} />
             <div className="flex flex-1 flex-wrap justify-end gap-1">
               {LOT_CHIPS.map((chip) => (
-                <button key={chip} type="button" disabled={chip > maxLots} aria-pressed={parsed === chip} onClick={() => setLots(String(chip))} className={cx("h-8 min-w-9 rounded-input border px-2 text-[13px] font-medium num", parsed === chip ? "border-primary bg-primary/12 text-primary" : "border-border text-text-2 hover:border-border-strong hover:text-text")}>{chip}</button>
+                <button key={chip} type="button" disabled={chip > maxLots} aria-pressed={parsed === chip} onClick={() => setLots(String(chip))} className={cx("h-8 min-w-9 rounded-input border px-2 text-[0.8125rem] font-medium num", parsed === chip ? "border-primary bg-primary/12 text-primary" : "border-border text-text-2 hover:border-border-strong hover:text-text")}>{chip}</button>
               ))}
             </div>
           </div>
@@ -315,7 +315,7 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
           </Field>
         </div>
 
-        <dl className="space-y-2 rounded-sheet border border-border bg-elevated p-3 text-[13px]">
+        <dl className="space-y-2 rounded-sheet border border-border bg-elevated p-3 text-[0.8125rem]">
           <Line label="Premium" value={premium == null ? "—" : inr(premium)} />
           <Line label="Quantity" value={quantity == null ? "—" : quantity.toLocaleString("en-IN")} />
           <Line label={buy ? "Total cost" : "Estimated exit value"} value={total == null ? "—" : inr(total)} strong />
@@ -323,7 +323,7 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
           <div className="h-px bg-border" />
           <Line label="Buying power" value={buyingPower == null ? "N/A" : inr(buyingPower)} />
           <Line label="Buying power after order" value={after == null ? "N/A" : inr(after)} tone={short ? "text-loss" : undefined} />
-          <p className="text-[11px] text-muted">Before simulated charges, which are added at fill.</p>
+          <p className="text-[0.6875rem] text-muted">Before simulated charges, which are added at fill.</p>
         </dl>
 
         {short ? <Notice tone="loss">Insufficient buying power for {parsed} lots. Reduce the lots to continue.</Notice> : null}
@@ -368,7 +368,7 @@ export function OptionOrderTicket({ draft, replayCursor = null, onClose, onFille
         </div>
       </div>
 
-      <footer className="flex gap-2 border-t border-border px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+      <footer className="flex gap-2 border-t border-border px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <Button variant={buy ? "buy" : "sell"} size="lg" block className="flex-1" loading={busy} disabled={blocked} onClick={() => void submit()}>{cta}</Button>
         <Button variant="ghost" size="lg" onClick={onClose}>Cancel</Button>
       </footer>
@@ -380,10 +380,10 @@ function Chip({ children }: { children: ReactNode }) {
   return <span className="inline-flex h-6 items-center rounded-xs border border-border bg-elevated px-2 text-data font-medium text-text-2">{children}</span>;
 }
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <div><p className="mb-1.5 text-[13px] font-medium text-text-2">{label}</p>{children}</div>;
+  return <div><p className="mb-1.5 text-[0.8125rem] font-medium text-text-2">{label}</p>{children}</div>;
 }
 function Line({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: string }) {
-  return <div className="flex items-baseline justify-between gap-3"><dt className="text-muted">{label}</dt><dd className={cx("num text-right", strong ? "text-[15px] font-semibold text-text" : "text-text", tone)}>{value}</dd></div>;
+  return <div className="flex items-baseline justify-between gap-3"><dt className="text-muted">{label}</dt><dd className={cx("num text-right", strong ? "text-[0.9375rem] font-semibold text-text" : "text-text", tone)}>{value}</dd></div>;
 }
 function Notice({ tone, role, children }: { tone: "loss"; role?: string; children: ReactNode }) {
   return <p role={role} className={cx("rounded-input border px-3 py-2 text-data", tone === "loss" && "border-loss/30 bg-loss/10 text-loss")}>{children}</p>;

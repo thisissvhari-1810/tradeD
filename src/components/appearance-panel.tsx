@@ -78,11 +78,11 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
   }
 
   return (
-    <aside className="fixed right-3 top-14 z-50 flex max-h-[calc(100vh-4.5rem)] w-[min(380px,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-panel text-text shadow-xl" aria-label="Appearance">
+    <aside className="fixed right-3 top-14 z-50 flex max-h-[calc(100vh-4.5rem)] w-[min(23.75rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-border bg-panel text-text shadow-xl" aria-label="Appearance">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div>
           <div className="text-sm font-semibold">Appearance</div>
-          <div className="text-[10px] text-muted">Colour changes stay on this account in this browser.</div>
+          <div className="text-[0.625rem] text-muted">Colour changes stay on this account in this browser.</div>
         </div>
         <button type="button" className="text-xs text-muted" onClick={onClose}>Close</button>
       </div>
@@ -96,15 +96,15 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
         </div>
         <div className="flex flex-wrap gap-1">
           {THEME_PRESETS.map((preset) => (
-            <button key={preset.id} type="button" className={`rounded border px-1.5 py-0.5 text-[10px] ${appearance.presetId === preset.id ? "border-primary text-primary" : "border-border text-muted"}`} onClick={() => onChange(presetAppearance(preset.id, appearance))}>{preset.name}</button>
+            <button key={preset.id} type="button" className={`rounded border px-1.5 py-0.5 text-[0.625rem] ${appearance.presetId === preset.id ? "border-primary text-primary" : "border-border text-muted"}`} onClick={() => onChange(presetAppearance(preset.id, appearance))}>{preset.name}</button>
           ))}
           {appearance.custom.map((preset) => (
-            <button key={preset.id} type="button" className={`rounded border px-1.5 py-0.5 text-[10px] ${appearance.presetId === preset.id ? "border-primary text-primary" : "border-border text-muted"}`} onClick={() => onChange({ ...appearance, presetId: preset.id, mode: preset.mode, tokens: preset.tokens, chart: preset.chart })}>{preset.name}</button>
+            <button key={preset.id} type="button" className={`rounded border px-1.5 py-0.5 text-[0.625rem] ${appearance.presetId === preset.id ? "border-primary text-primary" : "border-border text-muted"}`} onClick={() => onChange({ ...appearance, presetId: preset.id, mode: preset.mode, tokens: preset.tokens, chart: preset.chart })}>{preset.name}</button>
           ))}
         </div>
       </div>
       <div className="flex gap-1 overflow-x-auto border-b border-border px-3 py-1">
-        {GROUPS.map((item) => <button key={item.id} type="button" className={`shrink-0 rounded px-2 py-1 text-[11px] ${group === item.id ? "bg-elevated text-text" : "text-muted"}`} onClick={() => { setGroup(item.id); setOpenKey(""); }}>{item.label}</button>)}
+        {GROUPS.map((item) => <button key={item.id} type="button" className={`shrink-0 rounded px-2 py-1 text-[0.6875rem] ${group === item.id ? "bg-elevated text-text" : "text-muted"}`} onClick={() => { setGroup(item.id); setOpenKey(""); }}>{item.label}</button>)}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {active.fields.map((field) => {
@@ -114,7 +114,7 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
               <button type="button" className="flex w-full items-center gap-2 rounded px-1 py-1 text-left text-xs hover:bg-elevated" onClick={() => { if (openKey === field.key) setOpenKey(""); else { setSnapshot(value); setOpenKey(field.key); } }}>
                 <span className="h-4 w-4 rounded border border-border" style={{ background: value }} />
                 <span className="flex-1">{field.label}</span>
-                <span className="font-mono text-[10px] text-muted">{value}</span>
+                <span className="font-mono text-[0.625rem] text-muted">{value}</span>
               </button>
               {openKey === field.key ? (
                 <div className="relative z-10 mt-1">
@@ -125,7 +125,7 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
           );
         })}
         {group === "indicators" ? (
-          <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+          <div className="mt-2 grid grid-cols-2 gap-2 text-[0.6875rem]">
             <label>Line width
               <input className="mt-1 w-full rounded border border-border bg-elevated px-2 py-1" type="number" min={1} max={4} value={appearance.chart.indicatorWidth} onChange={(event) => patch({ chart: { ...appearance.chart, indicatorWidth: Number(event.target.value) } })} />
             </label>
@@ -142,17 +142,17 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
           </div>
         ) : null}
         <div className="mt-3 border-t border-border pt-2">
-          <label className="text-[11px] text-muted">Custom theme name
+          <label className="text-[0.6875rem] text-muted">Custom theme name
             <input className="mt-1 w-full rounded border border-border bg-elevated px-2 py-1 text-xs" value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <div className="mt-2 flex flex-wrap gap-1">
-            <button type="button" className="rounded bg-primary px-2 py-1 text-[11px] text-on-primary" onClick={saveCustom}>Save theme</button>
-            <button type="button" className="rounded border border-border px-2 py-1 text-[11px]" onClick={() => { const selected = appearance.custom.find((item) => item.id === appearance.presetId); if (!selected) return; onChange({ ...appearance, custom: appearance.custom.map((item) => item.id === selected.id ? { ...item, name: name.trim() || item.name } : item) }); }}>Rename</button>
-            <button type="button" className="rounded border border-border px-2 py-1 text-[11px]" onClick={() => { const selected = [...THEME_PRESETS, ...appearance.custom].find((item) => item.id === appearance.presetId); if (!selected) return; const copy = { ...selected, id: `custom-${Date.now()}`, name: `${selected.name} copy`, tokens: { ...selected.tokens }, chart: { ...selected.chart } }; onChange({ ...appearance, presetId: copy.id, custom: [...appearance.custom, copy] }); }}>Duplicate</button>
-            <button type="button" className="rounded border border-border px-2 py-1 text-[11px]" onClick={() => setConfirm("delete")}>Delete</button>
-            <button type="button" className="rounded border border-border px-2 py-1 text-[11px]" onClick={() => setConfirm("reset")}>Reset</button>
-            <button type="button" className="rounded border border-border px-2 py-1 text-[11px]" onClick={() => download(appearance)}>Export</button>
-            <label className="rounded border border-border px-2 py-1 text-[11px]">Import
+            <button type="button" className="rounded bg-primary px-2 py-1 text-[0.6875rem] text-on-primary" onClick={saveCustom}>Save theme</button>
+            <button type="button" className="rounded border border-border px-2 py-1 text-[0.6875rem]" onClick={() => { const selected = appearance.custom.find((item) => item.id === appearance.presetId); if (!selected) return; onChange({ ...appearance, custom: appearance.custom.map((item) => item.id === selected.id ? { ...item, name: name.trim() || item.name } : item) }); }}>Rename</button>
+            <button type="button" className="rounded border border-border px-2 py-1 text-[0.6875rem]" onClick={() => { const selected = [...THEME_PRESETS, ...appearance.custom].find((item) => item.id === appearance.presetId); if (!selected) return; const copy = { ...selected, id: `custom-${Date.now()}`, name: `${selected.name} copy`, tokens: { ...selected.tokens }, chart: { ...selected.chart } }; onChange({ ...appearance, presetId: copy.id, custom: [...appearance.custom, copy] }); }}>Duplicate</button>
+            <button type="button" className="rounded border border-border px-2 py-1 text-[0.6875rem]" onClick={() => setConfirm("delete")}>Delete</button>
+            <button type="button" className="rounded border border-border px-2 py-1 text-[0.6875rem]" onClick={() => setConfirm("reset")}>Reset</button>
+            <button type="button" className="rounded border border-border px-2 py-1 text-[0.6875rem]" onClick={() => download(appearance)}>Export</button>
+            <label className="rounded border border-border px-2 py-1 text-[0.6875rem]">Import
               <input className="hidden" type="file" accept="application/json" onChange={(event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
@@ -162,7 +162,7 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
           </div>
           {confirm === "delete" ? <Confirm label="Delete the selected custom theme?" onYes={() => { if (!appearance.custom.some((item) => item.id === appearance.presetId)) { setMessage("Built-in themes stay in the list."); setConfirm(""); return; } onChange({ ...appearance, presetId: "classic", custom: appearance.custom.filter((item) => item.id !== appearance.presetId) }); setConfirm(""); }} onNo={() => setConfirm("")} /> : null}
           {confirm === "reset" ? <Confirm label="Reset colours to Light Professional?" onYes={() => { onChange(emptyAppearance("light")); setConfirm(""); }} onNo={() => setConfirm("")} /> : null}
-          {message ? <p className="mt-2 text-[10px] text-muted">{message}</p> : null}
+          {message ? <p className="mt-2 text-[0.625rem] text-muted">{message}</p> : null}
         </div>
       </div>
     </aside>
@@ -171,7 +171,7 @@ export function AppearancePanel({ appearance, onChange, onClose }: { appearance:
 
 function Confirm({ label, onYes, onNo }: { label: string; onYes: () => void; onNo: () => void }) {
   return (
-    <div className="mt-2 rounded border border-border bg-elevated p-2 text-[11px]">
+    <div className="mt-2 rounded border border-border bg-elevated p-2 text-[0.6875rem]">
       <p>{label}</p>
       <div className="mt-1 flex gap-1">
         <button type="button" className="rounded bg-loss px-2 py-1 text-on-signal" onClick={onYes}>Confirm</button>

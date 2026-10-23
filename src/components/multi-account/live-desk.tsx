@@ -38,7 +38,7 @@ export function LiveSummary({ view }: { view: LiveView }) {
     </div>
   );
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+    <div className="grid gap-3 lg:grid-cols-[minmax(18.75rem,23.75rem)_minmax(0,1fr)]">
       <section aria-label="Portfolio P&L" className={cx("surface relative overflow-hidden px-4 py-3.5", tone === "profit" && "border-profit/30", tone === "loss" && "border-loss/30")}>
         <span className={cx("absolute inset-y-0 left-0 w-1", tone === "profit" ? "bg-profit" : tone === "loss" ? "bg-loss" : "bg-border")} aria-hidden />
         <p className="text-micro font-medium uppercase tracking-[0.05em] text-muted">Portfolio P&L · broker-reported</p>
@@ -212,7 +212,7 @@ export function LiveAccountCard({ account, owner, syncing, onManage, canConnect,
 function LiveAccountTable({ accounts, owner, onManage, canConnect, onToggle, onRename }: { accounts: LiveAccount[]; owner: boolean; onManage: Manage; canConnect: boolean; onToggle: Toggle; onRename: Rename }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border-soft">
-      <table className="ui-table dense w-full min-w-[900px] border-separate border-spacing-0 text-data" aria-label="Live accounts">
+      <table className="ui-table dense w-full min-w-[56.25rem] border-separate border-spacing-0 text-data" aria-label="Live accounts">
         <thead>
           <tr className="bg-sunken">
             {["Account", "Connection", "Available", "Used margin", "Open pos.", "Realised", "Unrealised", "Last sync", ""].map((header, index) => <th key={header || index} scope="col" className={cx("border-b border-border-soft", index >= 2 && index <= 6 ? "text-right" : "text-left")}>{header || <span className="sr-only">Actions</span>}</th>)}
@@ -264,8 +264,8 @@ function LiveOrders({ accounts }: { accounts: LiveAccount[] }) {
         <p className="flex-1 text-micro text-muted">Read from the broker. Cancel and modify need order access, which is locked.</p>
       </div>
       {shown.length === 0 ? <EmptyState icon={<Clock />} title={rows.length ? "No orders match these filters" : "No broker orders today"} /> : (
-        <div className="max-h-[520px] overflow-auto rounded-md border border-border-soft">
-          <table className="ui-table dense w-full min-w-[980px] border-separate border-spacing-0 text-data" aria-label="Broker orders">
+        <div className="max-h-[32.5rem] overflow-auto rounded-md border border-border-soft">
+          <table className="ui-table dense w-full min-w-[61.25rem] border-separate border-spacing-0 text-data" aria-label="Broker orders">
             <thead><tr>{["Time", "Account", "Reference", "Contract", "Side", "Type", "Qty", "Filled", "Price", "Avg", "Status", "Reason"].map((header, index) => <th key={header} scope="col" className={cx("sticky top-0 border-b border-border-soft bg-panel", index >= 6 && index <= 9 ? "text-right" : "text-left")}>{header}</th>)}</tr></thead>
             <tbody>
               {shown.map(({ account: owner, order }) => (
@@ -281,7 +281,7 @@ function LiveOrders({ accounts }: { accounts: LiveAccount[] }) {
                   <td className="border-b border-border-soft text-right"><Money value={order.pricePaise} broker /></td>
                   <td className="border-b border-border-soft text-right"><Money value={order.avgPaise} broker /></td>
                   <td className="border-b border-border-soft"><span title={`Broker status: ${order.brokerStatus}`}><Badge tone={ORDER_TONE[order.status]}>{ORDER_LABEL[order.status]}</Badge></span></td>
-                  <td className="max-w-[240px] border-b border-border-soft text-muted">{order.reason || "—"}</td>
+                  <td className="max-w-[15rem] border-b border-border-soft text-muted">{order.reason || "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -315,8 +315,8 @@ function LivePositions({ accounts }: { accounts: LiveAccount[] }) {
       </div>
       {rows.length === 0 ? <EmptyState icon={<CircleCheck />} title="No broker positions today" /> : (
         <>
-          <div className="max-h-[440px] overflow-auto rounded-md border border-border-soft">
-            <table className="ui-table dense w-full min-w-[860px] border-separate border-spacing-0 text-data" aria-label="Broker positions per account">
+          <div className="max-h-[27.5rem] overflow-auto rounded-md border border-border-soft">
+            <table className="ui-table dense w-full min-w-[53.75rem] border-separate border-spacing-0 text-data" aria-label="Broker positions per account">
               <thead><tr>{["", "Account", "Contract", "Product", "Status", "Net qty", "Avg price", "Realised", "Unrealised"].map((header, index) => <th key={header || index} scope="col" className={cx("sticky top-0 border-b border-border-soft bg-panel", index >= 5 ? "text-right" : "text-left")}>{header || <span className="sr-only">Select</span>}</th>)}</tr></thead>
               <tbody>
                 {rows.map(({ account, position }) => (
@@ -338,7 +338,7 @@ function LivePositions({ accounts }: { accounts: LiveAccount[] }) {
           <div>
             <h3 className="mb-2 text-dense font-semibold text-text">Combined <span className="font-normal text-muted">· same instrument and product only</span></h3>
             <div className="overflow-x-auto rounded-md border border-border-soft">
-              <table className="ui-table dense w-full min-w-[620px] border-separate border-spacing-0 text-data" aria-label="Combined broker positions">
+              <table className="ui-table dense w-full min-w-[38.75rem] border-separate border-spacing-0 text-data" aria-label="Combined broker positions">
                 <thead><tr>{["Instrument", "Product", "Accounts", "Net qty", "Realised", "Unrealised"].map((header, index) => <th key={header} scope="col" className={cx("border-b border-border-soft", index >= 2 ? "text-right" : "text-left")}>{header}</th>)}</tr></thead>
                 <tbody>
                   {combined.map((row) => (
@@ -370,8 +370,8 @@ function LiveHoldings({ accounts }: { accounts: LiveAccount[] }) {
       {failed.map((item) => <Notice key={item.id} tone="warning">{item.nickname}: {item.holdingsError}</Notice>)}
       <p className="text-data text-muted">Broker-reported delivery holdings. Average cost is from the broker; there is no current mark in this feed, so unrealised P&L is not calculated here.</p>
       {rows.length === 0 ? <EmptyState icon={<CircleCheck />} title="No equity holdings reported" /> : (
-        <div className="max-h-[520px] overflow-auto rounded-md border border-border-soft">
-          <table className="ui-table dense w-full min-w-[720px] border-separate border-spacing-0 text-data" aria-label="Broker holdings">
+        <div className="max-h-[32.5rem] overflow-auto rounded-md border border-border-soft">
+          <table className="ui-table dense w-full min-w-[45rem] border-separate border-spacing-0 text-data" aria-label="Broker holdings">
             <thead><tr>{["Account", "Symbol", "Quantity", "Available", "Avg cost", "Cost"].map((header, index) => <th key={header} scope="col" className={cx("sticky top-0 border-b border-border-soft bg-panel", index >= 2 ? "text-right" : "text-left")}>{header}</th>)}</tr></thead>
             <tbody>
               {rows.map(({ account, holding }) => (
@@ -433,8 +433,8 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
   if (!view && !error) {
     return (
       <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading live accounts">
-        <div className="grid gap-3 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]"><Skeleton className="h-[132px] rounded-card" /><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[62px]" />)}</div></div>
-        <div className={ACCOUNT_GRID}>{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[200px] rounded-md" />)}</div>
+        <div className="grid gap-3 lg:grid-cols-[minmax(18.75rem,23.75rem)_minmax(0,1fr)]"><Skeleton className="h-[8.25rem] rounded-card" /><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[3.875rem]" />)}</div></div>
+        <div className={ACCOUNT_GRID}>{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[12.5rem] rounded-md" />)}</div>
       </div>
     );
   }
@@ -488,14 +488,14 @@ export function LiveDesk({ view, error, syncing, layout, accountView, onAccountV
           </Section>
         </div>
         {layout === "wide" ? (
-          <aside className="no-scrollbar sticky top-[68px] max-h-[calc(100dvh-var(--topbar)-84px)] overflow-y-auto rounded-card" aria-label="Order entry">
+          <aside className="no-scrollbar sticky top-[4.25rem] max-h-[calc(100dvh-var(--topbar)-84px)] overflow-y-auto rounded-card" aria-label="Order entry">
             <Section title="CE / PE order" description={panelNote}>{panel}</Section>
           </aside>
         ) : null}
       </div>
       <FamilyAccountDrawer key={manage.nonce} open={manage.open} account={manage.account} requirements={view.missing} onClose={() => setManage((current) => ({ ...current, open: false }))} onChanged={onReload} />
       {layout !== "wide" ? (
-        <button type="button" onClick={() => (layout === "narrow" ? setSheetOpen(true) : document.getElementById("ma-live-order")?.scrollIntoView({ behavior: "smooth", block: "start" }))} className="fixed bottom-[calc(var(--tabbar)+env(safe-area-inset-bottom)+16px)] right-4 z-30 inline-flex h-11 items-center gap-2 rounded-pill bg-primary px-5 text-dense font-semibold text-on-primary shadow-e2 transition hover:bg-primary-hover lg:bottom-6">
+        <button type="button" onClick={() => (layout === "narrow" ? setSheetOpen(true) : document.getElementById("ma-live-order")?.scrollIntoView({ behavior: "smooth", block: "start" }))} className="fixed bottom-[calc(var(--tabbar)+env(safe-area-inset-bottom)+1rem)] right-4 z-30 inline-flex h-11 items-center gap-2 rounded-pill bg-primary px-5 text-dense font-semibold text-on-primary shadow-e2 transition hover:bg-primary-hover lg:bottom-6">
           <Plus className="h-4 w-4" aria-hidden />New order
         </button>
       ) : null}

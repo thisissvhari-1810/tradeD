@@ -145,7 +145,7 @@ export function MultiAccountDesk() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1680px] px-3 pb-24 sm:px-4 lg:px-5 xl:pb-8">
+    <div className="mx-auto w-full max-w-[105rem] px-3 pb-24 sm:px-4 lg:px-5 xl:pb-8">
       <ConsoleHeader
         mode={mode}
         onMode={setMode}
@@ -255,7 +255,7 @@ export function MultiAccountDesk() {
               </div>
 
               {layout === "wide" ? (
-                <aside className="no-scrollbar sticky top-[68px] max-h-[calc(100dvh-var(--topbar)-84px)] overflow-y-auto rounded-card" aria-label="Order entry">
+                <aside className="no-scrollbar sticky top-[4.25rem] max-h-[calc(100dvh-var(--topbar)-84px)] overflow-y-auto rounded-card" aria-label="Order entry">
                   <Section title="CE / PE order" description="One instruction, placed separately for each selected account.">{entry}</Section>
                 </aside>
               ) : null}
@@ -265,7 +265,7 @@ export function MultiAccountDesk() {
       </div>
 
       {!live && doc && layout !== "wide" ? (
-        <button type="button" onClick={openOrder} className="fixed bottom-[calc(var(--tabbar)+env(safe-area-inset-bottom)+16px)] right-4 z-30 inline-flex h-11 items-center gap-2 rounded-pill bg-primary px-5 text-dense font-semibold text-on-primary shadow-e2 transition hover:bg-primary-hover lg:bottom-6">
+        <button type="button" onClick={openOrder} className="fixed bottom-[calc(var(--tabbar)+env(safe-area-inset-bottom)+1rem)] right-4 z-30 inline-flex h-11 items-center gap-2 rounded-pill bg-primary px-5 text-dense font-semibold text-on-primary shadow-e2 transition hover:bg-primary-hover lg:bottom-6">
           <Plus className="h-4 w-4" aria-hidden />New order{selected.length ? <span className="num rounded-pill bg-on-primary/20 px-1.5 text-micro">{selected.length}</span> : null}
         </button>
       ) : null}
@@ -303,7 +303,7 @@ function LoadingState({ view }: { view: "grid" | "table" }) {
           <Skeleton className="h-5 w-40" />
           <AccountsSkeleton view={view} />
         </div>
-        <Skeleton className="hidden h-[620px] rounded-card xl:block" />
+        <Skeleton className="hidden h-[38.75rem] rounded-card xl:block" />
       </div>
     </div>
   );

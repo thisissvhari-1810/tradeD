@@ -96,7 +96,7 @@ export function SymbolTitle({ symbol, name, exchange, size = 32 }: { symbol: str
       <StockLogo symbol={symbol} name={name} size={size} />
       <span className="min-w-0 text-left">
         <span className="block truncate font-medium">{name || symbol}</span>
-        <span className="block truncate text-[11px] font-normal text-muted">{symbol}{exchange ? ` · ${exchange}` : ""}</span>
+        <span className="block truncate text-[0.6875rem] font-normal text-muted">{symbol}{exchange ? ` · ${exchange}` : ""}</span>
       </span>
     </span>
   );
@@ -112,7 +112,7 @@ export function WatchStar({ active, label, onToggle }: { active: boolean; label:
       className="group/star grid h-8 w-8 shrink-0 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus-ring"
       onClick={(event) => { event.stopPropagation(); onToggle(); }}
     >
-      <Star className={`h-[15px] w-[15px] transition-colors ${active ? "fill-star/70 text-star/70 group-hover/star:fill-star group-hover/star:text-star" : ""}`} aria-hidden />
+      <Star className={`h-[0.9375rem] w-[0.9375rem] transition-colors ${active ? "fill-star/70 text-star/70 group-hover/star:fill-star group-hover/star:text-star" : ""}`} aria-hidden />
     </button>
   );
 }
@@ -230,7 +230,7 @@ export function StockSearchField({
                   <SymbolTitle symbol={hit.symbol} name={hit.name} exchange={hit.exchange} size={36} />
                   <span className="ml-auto shrink-0 text-right">
                     <span className={`num block whitespace-nowrap text-sm ${tone(move?.abs)}`}>{quote ? money(quote.last) : "…"}</span>
-                    <span className={`num block whitespace-nowrap text-[11px] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
+                    <span className={`num block whitespace-nowrap text-[0.6875rem] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
                   </span>
                 </button>
                 {onToggleWatch ? <WatchStar active={watched(hit.symbol)} label={watched(hit.symbol) ? `Remove ${hit.symbol} from watchlist` : `Add ${hit.symbol} to watchlist`} onToggle={() => onToggleWatch(hit)} /> : null}

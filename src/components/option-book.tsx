@@ -165,7 +165,7 @@ export function OptionBook({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col text-xs">
-      <p className={cx("flex items-center gap-2 border-b border-border px-3 py-1 text-[10px] font-semibold uppercase tracking-wide", replay ? "bg-demo/10 text-demo" : context.mode === "live" ? "bg-profit/10 text-profit" : "bg-demo/10 text-demo")}>
+      <p className={cx("flex items-center gap-2 border-b border-border px-3 py-1 text-[0.625rem] font-semibold uppercase tracking-wide", replay ? "bg-demo/10 text-demo" : context.mode === "live" ? "bg-profit/10 text-profit" : "bg-demo/10 text-demo")}>
         {replay ? "Historical replay" : context.mode === "live" ? "Paper trading · live prices" : "Demo paper trading"}
         {replay ? <span className="num font-normal normal-case tracking-normal">{replay.date}{replay.cursor == null ? "" : ` · ${clockOf(replay.cursor)} IST`}</span> : null}
       </p>
@@ -180,7 +180,7 @@ export function OptionBook({
         <Metric label="Buying power" value={buyingPower} />
         <Metric label="Reserved" value={reserved} />
       </div>
-      <details className="group border-b border-border px-3 py-1 text-[10px] text-muted">
+      <details className="group border-b border-border px-3 py-1 text-[0.625rem] text-muted">
         <summary className="flex cursor-pointer list-none items-center gap-1 rounded-xs py-0.5 hover:text-text focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]">
           <Info className="h-3 w-3" aria-hidden />How these numbers work
         </summary>
@@ -230,7 +230,7 @@ export function OptionBook({
           </div>
         ) : null}
       </div>
-      <p className="border-t border-border px-3 py-1 text-[10px] text-muted">Demo only. No broker order is sent.</p>
+      <p className="border-t border-border px-3 py-1 text-[0.625rem] text-muted">Demo only. No broker order is sent.</p>
     </div>
   );
 }
@@ -239,9 +239,9 @@ function SessionHero({ summary }: { summary: ReplaySessionSummary | null }) {
   if (!summary || (summary.trades.length === 0 && summary.openCount === 0 && summary.waitingCount === 0 && summary.realizedPaise === 0n)) {
     return (
       <section aria-label="Replay session P&L" className="border-b border-border px-3 py-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">Replay session P&L</p>
+        <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Replay session P&L</p>
         <p className="num mt-0.5 text-title font-semibold text-text-2">{formatPnl(0n)}</p>
-        <p className="mt-0.5 text-[11px] text-muted">No trades in this replay session yet. Buy from the Option Chain to start.</p>
+        <p className="mt-0.5 text-[0.6875rem] text-muted">No trades in this replay session yet. Buy from the Option Chain to start.</p>
       </section>
     );
   }
@@ -255,11 +255,11 @@ function SessionHero({ summary }: { summary: ReplaySessionSummary | null }) {
   ].filter((part): part is string => Boolean(part));
   return (
     <section aria-label="Replay session P&L" className={cx("border-b border-border px-3 py-3 transition-colors motion-reduce:transition-none", headline > 0n ? "bg-profit-soft/50" : headline < 0n ? "bg-loss-soft/50" : "")}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">{net == null ? "Replay session realized P&L" : "Replay session P&L"}</p>
+      <p className="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">{net == null ? "Replay session realized P&L" : "Replay session P&L"}</p>
       <p className={cx("num mt-1 text-2xl font-semibold leading-tight", pnlTone(headline))}>{formatPnl(headline)}</p>
-      <p className="mt-0.5 text-[11px] text-text-2">{parts.join(" · ")}</p>
+      <p className="mt-0.5 text-[0.6875rem] text-text-2">{parts.join(" · ")}</p>
       {decisive && summary.winRateBps != null ? <p className="sr-only">Win rate {(summary.winRateBps / 100).toFixed(0)} percent.</p> : null}
-      {net == null ? <p className="mt-1 text-[10px] text-warning">Open price unavailable for {summary.unpricedCount} position{summary.unpricedCount === 1 ? "" : "s"}, so unrealized and net are not shown.</p> : null}
+      {net == null ? <p className="mt-1 text-[0.625rem] text-warning">Open price unavailable for {summary.unpricedCount} position{summary.unpricedCount === 1 ? "" : "s"}, so unrealized and net are not shown.</p> : null}
       <dl className="mt-2 grid grid-cols-4 gap-1.5">
         <Breakdown label="Realized" value={formatPnl(summary.realizedPaise)} tone={pnlTone(summary.realizedPaise)} />
         <Breakdown label="Unrealized" value={summary.unrealizedPaise == null ? "Unavailable" : formatPnl(summary.unrealizedPaise)} tone={pnlTone(summary.unrealizedPaise)} />
@@ -273,8 +273,8 @@ function SessionHero({ summary }: { summary: ReplaySessionSummary | null }) {
 function Breakdown({ label, value, tone, title }: { label: string; value: string; tone: string; title?: string }) {
   return (
     <div className="min-w-0 rounded-md bg-panel/70 px-1.5 py-1" title={title}>
-      <dt className="text-[10px] text-muted">{label}</dt>
-      <dd className={cx("num truncate text-[11px] font-semibold", tone)}>{value}</dd>
+      <dt className="text-[0.625rem] text-muted">{label}</dt>
+      <dd className={cx("num truncate text-[0.6875rem] font-semibold", tone)}>{value}</dd>
     </div>
   );
 }
@@ -307,30 +307,30 @@ function PositionCard({ row, replay, block, onView, onExit }: { row: BookPositio
     <article className={cx("border-b border-border px-3 py-2.5", waiting && "opacity-60")} aria-label={`${contract.underlying} ${contract.strike} ${contract.right}, ${status}`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">{contract.underlying} {contract.strike.toLocaleString("en-IN")} {contract.right} <span className="text-[10px] font-normal text-muted">{contract.right === "CE" ? "Call" : "Put"}</span></h3>
-          <p className="text-[10px] text-muted">Expiry {contract.expiry}{row.replaySession ? ` · Replay ${row.replaySession.slice(0, 10)}` : ""}</p>
+          <h3 className="truncate text-sm font-semibold">{contract.underlying} {contract.strike.toLocaleString("en-IN")} {contract.right} <span className="text-[0.625rem] font-normal text-muted">{contract.right === "CE" ? "Call" : "Put"}</span></h3>
+          <p className="text-[0.625rem] text-muted">Expiry {contract.expiry}{row.replaySession ? ` · Replay ${row.replaySession.slice(0, 10)}` : ""}</p>
         </div>
         <div className="flex shrink-0 gap-1">
-          <span className="rounded-full bg-profit-soft px-2 py-0.5 text-[10px] font-semibold text-profit">LONG</span>
-          <span className={cx("rounded-full px-2 py-0.5 text-[10px] font-semibold", STATUS_CHIP[status])}>{status}</span>
+          <span className="rounded-full bg-profit-soft px-2 py-0.5 text-[0.625rem] font-semibold text-profit">LONG</span>
+          <span className={cx("rounded-full px-2 py-0.5 text-[0.625rem] font-semibold", STATUS_CHIP[status])}>{status}</span>
         </div>
       </div>
       {waiting ? (
-        <p className="mt-2 text-[11px] font-medium text-text-2">{entryNotice(row.openedAt)}</p>
+        <p className="mt-2 text-[0.6875rem] font-medium text-text-2">{entryNotice(row.openedAt)}</p>
       ) : (
         <>
-          <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+          <div className="mt-2 flex items-center gap-1.5 text-[0.6875rem]">
             <span className="text-muted">Entry</span><span className="num font-medium">{avgPaise == null ? "Unavailable" : formatInr(avgPaise)}</span>
             <ArrowRight className="h-3 w-3 text-muted" aria-label="to" />
             <span className="text-muted">{row.replaySession ? "Replay" : "Now"}</span><span className="num font-medium">{markPaise == null ? "—" : formatInr(markPaise)}</span>
             {move ? <span className={cx("num ml-auto", pnlTone(move.paise))}>{formatPnl(move.paise)}{move.bps == null ? "" : ` (${formatSignedBps(move.bps)})`}</span> : null}
           </div>
-          {reason ? <p className="mt-1 text-[11px] text-muted">{reason}</p> : null}
+          {reason ? <p className="mt-1 text-[0.6875rem] text-muted">{reason}</p> : null}
           {unrealizedPaise != null ? (
             <p className={cx("num mt-1.5 text-lg font-semibold leading-tight", pnlTone(unrealizedPaise))}>
               {formatPnl(unrealizedPaise)}
-              {pnlBps == null ? null : <span className="ml-1.5 text-[11px] font-medium">{formatSignedBps(pnlBps)} of cost</span>}
-              <span className="ml-1.5 text-[10px] font-normal text-muted">unrealized</span>
+              {pnlBps == null ? null : <span className="ml-1.5 text-[0.6875rem] font-medium">{formatSignedBps(pnlBps)} of cost</span>}
+              <span className="ml-1.5 text-[0.625rem] font-normal text-muted">unrealized</span>
             </p>
           ) : null}
         </>
@@ -343,12 +343,12 @@ function PositionCard({ row, replay, block, onView, onExit }: { row: BookPositio
         <Field label="Breakeven" value={avgPaise == null ? "Unavailable" : formatInr(avgPaise)} title="Average cost including entry charges. Exit charges are not included." />
         {realizedPaise ? <Field label="Realized earlier" value={formatPnl(realizedPaise)} tone={pnlTone(realizedPaise)} title="Already booked on this contract from earlier exits." /> : null}
       </dl>
-      {row.stale && markPaise != null ? <p className="mt-1 text-[10px] text-warning">Thinly traded: the last trade is a few minutes old.</p> : null}
-      {!waiting && row.asOf && markPaise != null ? <p className="mt-1 text-[10px] text-muted">{row.replaySession ? "Replay mark" : "Mark"} {istStamp(row.asOf)}</p> : null}
+      {row.stale && markPaise != null ? <p className="mt-1 text-[0.625rem] text-warning">Thinly traded: the last trade is a few minutes old.</p> : null}
+      {!waiting && row.asOf && markPaise != null ? <p className="mt-1 text-[0.625rem] text-muted">{row.replaySession ? "Replay mark" : "Mark"} {istStamp(row.asOf)}</p> : null}
       {waiting ? null : (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           {onView ? <button type="button" className="h-8 rounded-full border border-border px-3 hover:bg-hover" onClick={onView}>View chart</button> : null}
-          {exitReason ? <p className="text-[10px] text-muted">{exitReason}</p> : <button type="button" className="h-8 rounded-full bg-loss px-3 font-semibold text-on-signal hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)]" title="Sell to close" onClick={onExit}>Exit position</button>}
+          {exitReason ? <p className="text-[0.625rem] text-muted">{exitReason}</p> : <button type="button" className="h-8 rounded-full bg-loss px-3 font-semibold text-on-signal hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--focus-ring)]" title="Sell to close" onClick={onExit}>Exit position</button>}
         </div>
       )}
     </article>
@@ -366,7 +366,7 @@ function ResultCard({ row, highlighted = false, onDismiss }: { row: ResultRow; h
   return (
     <article className={cx("border-b border-border px-3 py-2.5", highlighted && "bg-primary-soft/40 ring-1 ring-inset ring-primary/40")}>
       <div className="flex items-start gap-2">
-        <span className={cx("mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold", OUTCOME_CHIP[row.outcome])}>{OUTCOME_LABEL[row.outcome]}</span>
+        <span className={cx("mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[0.625rem] font-bold", OUTCOME_CHIP[row.outcome])}>{OUTCOME_LABEL[row.outcome]}</span>
         <p className={cx("num min-w-0 flex-1 text-base font-semibold leading-tight", pnlTone(row.netPaise))}>
           {formatPnl(row.netPaise)}{row.returnBps == null ? "" : <span className="ml-1 text-xs font-medium">({formatSignedBps(row.returnBps)})</span>}
         </p>
@@ -374,17 +374,17 @@ function ResultCard({ row, highlighted = false, onDismiss }: { row: ResultRow; h
           <button type="button" aria-label="Dismiss closed trade" className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted hover:bg-hover hover:text-text" onClick={onDismiss}><X className="h-3.5 w-3.5" aria-hidden /></button>
         ) : null}
       </div>
-      {highlighted ? <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">Trade closed</p> : null}
+      {highlighted ? <p className="mt-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-primary">Trade closed</p> : null}
       <p className="mt-1 font-medium">{contractLabel(row.symbol)} · {row.direction}</p>
-      <p className="num mt-0.5 text-[11px] text-text-2">
+      <p className="num mt-0.5 text-[0.6875rem] text-text-2">
         {row.avgEntryPaise == null ? "Entry" : `Entry ${formatInr(row.avgEntryPaise)}`} at {istShortStamp(row.entryAt)}
         {" → "}
         {row.avgExitPaise == null ? "Exit" : `Exit ${formatInr(row.avgExitPaise)}`} at {istShortStamp(row.exitAt)}
       </p>
-      <p className="num text-[10px] text-muted">
+      <p className="num text-[0.625rem] text-muted">
         Qty {row.quantity}{lots ? ` · ${lots} lot${lots === 1 ? "" : "s"}` : ""}{row.holdingSeconds == null ? "" : ` · held ${holdingLabel(row.holdingSeconds)}`}
       </p>
-      <p className="num text-[10px] text-muted">
+      <p className="num text-[0.625rem] text-muted">
         {row.grossPaise == null ? "" : `Gross ${formatPnl(row.grossPaise)} · `}Charges {row.chargesPaise == null ? "unavailable" : formatInr(row.chargesPaise)} · Net <span className={pnlTone(row.netPaise)}>{formatPnl(row.netPaise)}</span>
       </p>
     </article>
@@ -428,22 +428,22 @@ function OrderRow({ order }: { order: BookOrder }) {
       <p className="text-muted">Fill {order.avgFill ? formatMaybe(order.avgFill, false) : "not filled"} · Filled qty {order.filledQuantity}</p>
       {order.dataMode === "HISTORICAL" && order.executedAt ? (
         <>
-          <p className="text-[10px] text-info">Replay fill at {istStamp(order.executedAt)} (simulated market time)</p>
-          <p className="text-[10px] text-muted">Submitted {istStamp(order.submittedAt)} (real time)</p>
-          {order.priceSource ? <p className="truncate text-[10px] text-muted" title={order.priceSource}>{order.priceSource}</p> : null}
+          <p className="text-[0.625rem] text-info">Replay fill at {istStamp(order.executedAt)} (simulated market time)</p>
+          <p className="text-[0.625rem] text-muted">Submitted {istStamp(order.submittedAt)} (real time)</p>
+          {order.priceSource ? <p className="truncate text-[0.625rem] text-muted" title={order.priceSource}>{order.priceSource}</p> : null}
         </>
-      ) : <p className="text-[10px] text-muted">Submitted {istStamp(order.submittedAt)}{order.filledAt ? ` · Executed ${istStamp(order.filledAt)}` : ""}</p>}
-      <p className="truncate text-[10px] text-muted" title={order.id}>{order.id}</p>
+      ) : <p className="text-[0.625rem] text-muted">Submitted {istStamp(order.submittedAt)}{order.filledAt ? ` · Executed ${istStamp(order.filledAt)}` : ""}</p>}
+      <p className="truncate text-[0.625rem] text-muted" title={order.id}>{order.id}</p>
       {order.reason ? <p className="text-loss">{order.reason}</p> : null}
     </article>
   );
 }
 
 function Metric({ label, value, tone = "text-text" }: { label: string; value: string; tone?: string }) {
-  return <span className="min-w-0 text-[10px] text-muted">{label}<b className={cx("num mt-0.5 block truncate text-xs font-semibold", tone)}>{value || "Unavailable"}</b></span>;
+  return <span className="min-w-0 text-[0.625rem] text-muted">{label}<b className={cx("num mt-0.5 block truncate text-xs font-semibold", tone)}>{value || "Unavailable"}</b></span>;
 }
 function Field({ label, value, tone = "text-text", title }: { label: string; value: string; tone?: string; title?: string }) {
-  return <div className="min-w-0" title={title}><dt className="text-[10px] text-muted">{label}</dt><dd className={cx("num truncate", tone)}>{value}</dd></div>;
+  return <div className="min-w-0" title={title}><dt className="text-[0.625rem] text-muted">{label}</dt><dd className={cx("num truncate", tone)}>{value}</dd></div>;
 }
 function contractLabel(symbol: string) {
   const parsed = parseOptionLedgerSymbol(symbol);

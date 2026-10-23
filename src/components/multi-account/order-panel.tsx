@@ -157,7 +157,7 @@ export function OrderConfirmation({ form }: { form: OrderForm }) {
       label="Review multi-account order"
       title="Review Order"
       subtitle={review ? `${contractLabel(review.intent.contract)} · ${expiryLabel(review.intent.contract.expiry)}` : undefined}
-      width="w-[500px]"
+      width="w-[31.25rem]"
       footer={review ? (
         <div className="flex flex-col gap-2.5">
           <dl className="grid grid-cols-4 gap-2 text-data">
@@ -248,7 +248,7 @@ export function OrderResultPanel({ request, onDismiss }: { request: OrderRequest
         <button type="button" onClick={onDismiss} aria-label="Dismiss result" className="grid h-7 w-7 place-items-center rounded-sm text-muted hover:bg-hover hover:text-text"><X className="h-4 w-4" aria-hidden /></button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[620px] text-data" aria-label="Per-account results">
+        <table className="w-full min-w-[38.75rem] text-data" aria-label="Per-account results">
           <thead><tr className="text-micro text-muted"><th scope="col" className="px-4 py-1.5 text-left font-medium">Account</th><th scope="col" className="text-left font-medium">Status</th><th scope="col" className="text-right font-medium">Filled</th><th scope="col" className="text-right font-medium">Price</th><th scope="col" className="px-3 text-left font-medium">Reason</th><th scope="col" className="pr-4 text-right font-medium">Reference</th></tr></thead>
           <tbody>
             {request.legs.map((leg) => (
@@ -257,7 +257,7 @@ export function OrderResultPanel({ request, onDismiss }: { request: OrderRequest
                 <td className="py-1.5"><LegChip status={leg.status} /></td>
                 <td className="num py-1.5 text-right">{leg.filledQuantity}/{leg.quantity}</td>
                 <td className={cx("num py-1.5 text-right", leg.avgPaise == null && "text-muted")}>{leg.avgPaise == null ? "Unavailable" : inr(leg.avgPaise)}</td>
-                <td className="max-w-[280px] px-3 py-1.5 text-muted">{leg.reason}</td>
+                <td className="max-w-[17.5rem] px-3 py-1.5 text-muted">{leg.reason}</td>
                 <td className="num py-1.5 pr-4 text-right text-muted">{leg.ref}</td>
               </tr>
             ))}

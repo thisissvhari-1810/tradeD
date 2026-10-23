@@ -6,7 +6,7 @@ import { LegChip } from "@/components/multi-account/status";
 import { Badge, Button, cx, Skeleton, TONE_TEXT, Tooltip } from "@/components/ui";
 import type { AccountSummary, DemoAccount, Leg } from "@/lib/multi-account/engine";
 
-export const ACCOUNT_GRID = "grid grid-cols-1 gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(200px,1fr))]";
+export const ACCOUNT_GRID = "grid grid-cols-1 gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(12.5rem,1fr))]";
 
 export const DISABLED_REASON = "Trading is turned off in this account's settings.";
 
@@ -127,7 +127,7 @@ export function AccountCard({ account, stats, latest, onToggle, onLots, onEdit }
 export function AccountTable({ accounts, summaries, latest, onToggle, onLots, onEdit }: { accounts: DemoAccount[]; summaries: AccountSummary[]; latest: Map<string, Leg>; onToggle: (account: DemoAccount) => void; onLots: (account: DemoAccount, lots: number) => void; onEdit: (account: DemoAccount) => void }) {
   return (
     <div className="overflow-x-auto rounded-md border border-border-soft">
-      <table className="ui-table dense w-full min-w-[880px] border-separate border-spacing-0 text-data" aria-label="Accounts">
+      <table className="ui-table dense w-full min-w-[55rem] border-separate border-spacing-0 text-data" aria-label="Accounts">
         <thead>
           <tr className="bg-sunken">
             <th scope="col" className="w-8 border-b border-border-soft"><span className="sr-only">Select</span></th>
@@ -157,7 +157,7 @@ export function AccountTable({ accounts, summaries, latest, onToggle, onLots, on
                 <td className={cx("num border-b border-border-soft text-right", TONE_TEXT[pnlTone(account.realizedPaise)])}>{pnl(account.realizedPaise)}</td>
                 <td className={cx("num border-b border-border-soft text-right", unrealized == null ? "text-muted" : TONE_TEXT[pnlTone(unrealized)])}>{pnl(unrealized)}</td>
                 <td className="border-b border-border-soft text-center"><LotsControl account={account} onLots={(lots) => onLots(account, lots)} /></td>
-                <td className="max-w-[220px] border-b border-border-soft"><LastOrder latest={latest.get(account.id) ?? null} /></td>
+                <td className="max-w-[13.75rem] border-b border-border-soft"><LastOrder latest={latest.get(account.id) ?? null} /></td>
                 <td className="border-b border-border-soft"><SettingsButton account={account} onEdit={() => onEdit(account)} /></td>
               </tr>
             );
@@ -182,5 +182,5 @@ export function BulkBar({ count, lots, canSelectMore, onSelectAll, onClear }: { 
 
 export function AccountsSkeleton({ view }: { view: "grid" | "table" }) {
   if (view === "table") return <div className="flex flex-col gap-1.5" aria-hidden>{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-11" />)}</div>;
-  return <div className={ACCOUNT_GRID} aria-hidden>{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[250px] rounded-md" />)}</div>;
+  return <div className={ACCOUNT_GRID} aria-hidden>{Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="h-[15.625rem] rounded-md" />)}</div>;
 }

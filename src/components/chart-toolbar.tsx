@@ -261,10 +261,10 @@ function RailSplit({
           title={groupLabel ?? label}
           aria-haspopup="menu"
           aria-expanded={Boolean(expanded)}
-          className="absolute bottom-0 right-0 grid h-4 w-4 place-items-end rounded-sm p-[3px] text-muted opacity-70 hover:text-text hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] group-hover/rail:opacity-100"
+          className="absolute bottom-0 right-0 grid h-4 w-4 place-items-end rounded-sm p-[0.1875rem] text-muted opacity-70 hover:text-text hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] group-hover/rail:opacity-100"
           onClick={() => wrapRef.current && onMenu(wrapRef.current)}
         >
-          <span aria-hidden className="h-0 w-0 border-b-[5px] border-l-[5px] border-b-current border-l-transparent" />
+          <span aria-hidden className="h-0 w-0 border-b-[0.3125rem] border-l-[0.3125rem] border-b-current border-l-transparent" />
         </button>
       ) : null}
     </div>
@@ -295,7 +295,7 @@ function Flyout({ menu, menuRef, label, onClose, children }: { menu: MenuState; 
       aria-label={label}
       className={cx(
         "surface-overlay z-50 overflow-y-auto p-1",
-        menu.sheet ? "fixed inset-x-0 bottom-0 max-h-[65vh] rounded-t-xl pb-[calc(env(safe-area-inset-bottom)+8px)]" : "fixed max-h-[70vh] w-64 rounded-lg",
+        menu.sheet ? "fixed inset-x-0 bottom-0 max-h-[65vh] rounded-t-xl pb-[calc(env(safe-area-inset-bottom)+0.5rem)]" : "fixed max-h-[70vh] w-64 rounded-lg",
       )}
       style={menu.sheet ? undefined : { top: menu.top, left: menu.left }}
       onKeyDown={onKeyDown}

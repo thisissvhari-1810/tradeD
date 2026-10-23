@@ -209,9 +209,9 @@ export function PredictionDesk() {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-sm font-semibold">Prediction Chart</h1>
             <span className="text-sm font-semibold">{symbol}</span>
-            <span className="text-[11px] text-muted">{name} · NSE</span>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status === "ready" ? "bg-demo/15 text-demo" : status === "loading" ? "bg-warning/15 text-warning" : "bg-elevated text-muted"}`}>{STATUS_LABEL[status] ?? status}</span>
-            {stale && status === "ready" ? <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning">Stale Data</span> : null}
+            <span className="text-[0.6875rem] text-muted">{name} · NSE</span>
+            <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-semibold ${status === "ready" ? "bg-demo/15 text-demo" : status === "loading" ? "bg-warning/15 text-warning" : "bg-elevated text-muted"}`}>{STATUS_LABEL[status] ?? status}</span>
+            {stale && status === "ready" ? <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[0.625rem] font-semibold text-warning">Stale Data</span> : null}
           </div>
           <p className="whitespace-nowrap text-xs">
             <span className="num">{quote ? money(quote.last) : "—"}</span>
@@ -219,7 +219,7 @@ export function PredictionDesk() {
             <span className="ml-2 text-muted">{quote ? `${freshness(quote, desk.online)} · ${istTime(quote.asOf)}` : ""}</span>
           </p>
         </div>
-          <div className="min-w-[220px] flex-1">
+          <div className="min-w-[13.75rem] flex-1">
             <StockSearchField
               id="td-prediction-search"
               query={query}
@@ -237,17 +237,17 @@ export function PredictionDesk() {
           {USES.map((item) => (
             <button key={item.id} type="button" className={`rounded-full px-3 py-1 text-xs font-semibold ${activeUse === item.id ? "bg-primary/10 text-primary" : "border border-border text-muted"}`} onClick={() => { setTimeframe(item.timeframe); setHorizon(item.horizon); }}>{item.label}</button>
           ))}
-          <label className="text-[11px] text-muted">Candle size
+          <label className="text-[0.6875rem] text-muted">Candle size
             <select className="ml-1 py-1 text-xs" aria-label="Historical timeframe" value={timeframe} onChange={(event) => setTimeframe(event.target.value as ChartSpan)}>
               {TIMEFRAMES.map((span) => <option key={span} value={span}>{HISTORY_LABEL[span]}</option>)}
             </select>
           </label>
-          <label className="text-[11px] text-muted">How far ahead
+          <label className="text-[0.6875rem] text-muted">How far ahead
             <select className="ml-1 py-1 text-xs" aria-label="Forecast horizon" value={horizon} onChange={(event) => setHorizon(event.target.value as HorizonId)}>
               {HORIZONS.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
           </label>
-          <label className="flex items-center gap-1 text-[11px] text-muted">
+          <label className="flex items-center gap-1 text-[0.6875rem] text-muted">
             <input type="checkbox" checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />
             Refresh every 15 minutes
           </label>
@@ -260,13 +260,13 @@ export function PredictionDesk() {
             if (document.fullscreenElement) { void document.exitFullscreen(); setFull(false); }
             else { void node.requestFullscreen(); setFull(true); }
           }}>{full ? "Exit full screen" : "Full screen"}</button>
-          <p className="w-full text-[11px] text-muted">{settingNote(timeframe, horizon)}</p>
+          <p className="w-full text-[0.6875rem] text-muted">{settingNote(timeframe, horizon)}</p>
         </div>
       </header>
       {error ? <p className="border-b border-border bg-panel px-3 py-2 text-xs text-loss">{error} <button className="ml-2 text-primary" onClick={() => setNonce((value) => value + 1)}>Retry</button></p> : null}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 flex-wrap gap-3 border-b border-border px-3 py-1 text-[11px] text-muted">
+          <div className="flex shrink-0 flex-wrap gap-3 border-b border-border px-3 py-1 text-[0.6875rem] text-muted">
             <span className="text-text">Historical candles</span>
             {quote?.marketOpen ? <span className="text-warning">Open candle</span> : null}
             <span className="text-[#FACC15]">Forecast bull</span>
@@ -278,7 +278,7 @@ export function PredictionDesk() {
             {candles.length ? <PredictionChart candles={candles} points={forecast?.status === "ready" ? forecast.points : NO_POINTS} scheme={desk.theme} viewToken={viewToken} marketOpen={Boolean(quote?.marketOpen)} fitKey={`${symbol}|${timeframe}|${horizon}`} /> : null}
             {!candles.length && status !== "loading" ? <p className="p-4 text-sm text-muted">{symbol ? "Select Generate Prediction after a stock is chosen." : "Select a stock before generating a prediction."}</p> : null}
           </div>
-          <p className="shrink-0 border-t border-border px-3 py-1 text-[11px] text-muted">{forecast?.message || "A forecast is an estimate from past closes. It does not place an order."}</p>
+          <p className="shrink-0 border-t border-border px-3 py-1 text-[0.6875rem] text-muted">{forecast?.message || "A forecast is an estimate from past closes. It does not place an order."}</p>
         </div>
         <aside className="flex max-h-80 shrink-0 flex-col gap-3 overflow-auto border-t border-border bg-panel p-3 text-xs lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
           <section>

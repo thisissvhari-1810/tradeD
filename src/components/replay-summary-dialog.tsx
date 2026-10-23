@@ -35,7 +35,7 @@ export function ReplaySummaryDialog({
       label="Replay session summary"
       title="Replay session summary"
       subtitle={`${date} · ${reason === "completed" ? "Replay reached the session close" : "Before you leave replay"}`}
-      width="w-[420px]"
+      width="w-[26.25rem]"
       footer={(
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={onKeepReviewing}>Keep reviewing</Button>

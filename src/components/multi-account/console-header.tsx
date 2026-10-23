@@ -45,8 +45,8 @@ export function ConsoleHeader({ mode, onMode, sourceKind, onSourceKind, replayDa
             </div>
             {sourceKind === "replay" ? (
               <>
-                <input type="date" aria-label="Replay date" className={cx(FIELD, "h-8 w-[138px]")} value={replayDate} max={maxDate} onChange={(event) => onReplayDate(event.target.value)} />
-                <input type="time" aria-label="Replay time, IST" className={cx(FIELD, "h-8 w-[104px]")} min="09:16" max="15:30" value={replayTime} onChange={(event) => onReplayTime(event.target.value)} />
+                <input type="date" aria-label="Replay date" className={cx(FIELD, "h-8 w-[8.625rem]")} value={replayDate} max={maxDate} onChange={(event) => onReplayDate(event.target.value)} />
+                <input type="time" aria-label="Replay time, IST" className={cx(FIELD, "h-8 w-[6.5rem]")} min="09:16" max="15:30" value={replayTime} onChange={(event) => onReplayTime(event.target.value)} />
                 <span className="text-micro text-muted">IST</span>
               </>
             ) : null}

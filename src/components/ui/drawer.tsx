@@ -16,7 +16,7 @@ export function Drawer({
   headerExtra,
   footer,
   children,
-  width = "w-[380px]",
+  width = "w-[23.75rem]",
   modal = false,
   label,
   className,
@@ -66,7 +66,7 @@ export function Drawer({
         className={cx(
           "surface-modal fixed z-50 flex flex-col text-text",
           "anim-panel inset-x-0 bottom-0 max-h-[88dvh] rounded-t-sheet border-t",
-          "sm:inset-x-auto sm:bottom-2 sm:right-2 sm:top-[calc(var(--topbar)+8px)] sm:max-h-none sm:max-w-[calc(100vw-1rem)] sm:rounded-xl sm:border",
+          "sm:inset-x-auto sm:bottom-2 sm:right-2 sm:top-[calc(var(--topbar)+0.5rem)] sm:max-h-none sm:max-w-[calc(100vw-1rem)] sm:rounded-xl sm:border",
           width,
           "max-sm:w-full",
           className,
@@ -84,7 +84,7 @@ export function Drawer({
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
-        {footer ? <footer className="border-t border-border-soft bg-sunken/50 px-5 py-3 pb-[max(12px,env(safe-area-inset-bottom))] sm:rounded-b-xl">{footer}</footer> : null}
+        {footer ? <footer className="border-t border-border-soft bg-sunken/50 px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:rounded-b-xl">{footer}</footer> : null}
       </aside>
     </>
   );

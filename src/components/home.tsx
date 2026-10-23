@@ -175,11 +175,11 @@ export function Home() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto grid max-w-[1640px] gap-4 p-3 sm:p-4 lg:p-5 xl:grid-cols-[minmax(0,1fr)_minmax(280px,316px)]">
+      <div className="mx-auto grid max-w-[102.5rem] gap-4 p-3 sm:p-4 lg:p-5 xl:grid-cols-[minmax(0,1fr)_minmax(17.5rem,19.75rem)]">
         <div className="flex min-w-0 flex-col gap-4">
           <WelcomeHero name={user?.name?.split(" ")[0]} live={live} />
 
-          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(270px,1fr)]">
+          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(16.875rem,1fr)]">
             <AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} />
             <MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} />
           </div>
@@ -190,7 +190,7 @@ export function Home() {
         </div>
 
         <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-5 xl:max-h-[calc(100dvh-var(--topbar)-40px)] xl:self-start">
-          <section className="surface flex min-h-[340px] min-w-0 flex-col overflow-hidden xl:min-h-[260px] xl:flex-1" aria-label="Watchlist">
+          <section className="surface flex min-h-[21.25rem] min-w-0 flex-col overflow-hidden xl:min-h-[16.25rem] xl:flex-1" aria-label="Watchlist">
             <div className="px-3 pb-2 pt-3">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -261,7 +261,7 @@ function WelcomeHero({ name, live }: { name?: string; live: boolean }) {
         <p className="eyebrow" suppressHydrationWarning>
           {greeting()}{name ? `, ${name}` : ""} · {live ? "Live prices · paper wallet" : "Practice account"}
         </p>
-        <h1 className="mt-1 text-[clamp(22px,2.1vw,28px)] font-semibold leading-tight tracking-[-0.03em] text-text">
+        <h1 className="mt-1 text-[clamp(1.375rem,2.1vw,1.75rem)] font-semibold leading-tight tracking-[-0.03em] text-text">
           Your market. <span className="bg-gradient-to-r from-primary to-demo bg-clip-text text-transparent">Your edge.</span>
         </h1>
         <p className="mt-0.5 text-data text-muted">A smarter view of your trading day.</p>
@@ -338,15 +338,15 @@ function AccountCard({ state, portfolio, live, onRetry }: { state: PortfolioStat
         <div className="min-w-0">
           <p className="text-data text-muted">Account value</p>
           <p className="num mt-1 flex items-baseline gap-0.5 font-semibold leading-none tracking-[-0.03em] text-text">
-            <span className="text-[20px] text-text-2">{prefix}</span>
-            <span className="text-[clamp(28px,2.8vw,36px)]">{body}</span>
+            <span className="text-[1.25rem] text-text-2">{prefix}</span>
+            <span className="text-[clamp(1.75rem,2.8vw,2.25rem)]">{body}</span>
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             <DeltaPill tone={signOf(portfolio.netPnl)} label="Net P&L" value={portfolio.netPnl} extra={portfolio.performanceReturn} />
             {portfolio.dailyReturn ? <DeltaPill tone={signOf(portfolio.dailyReturn)} label="Today" value={portfolio.dailyReturn} /> : null}
           </div>
         </div>
-        <div className="h-16 min-w-0 sm:h-[76px]">
+        <div className="h-16 min-w-0 sm:h-[4.75rem]">
           {shown.length >= 2 ? (
             <Sparkline values={shown.map((point) => point.value)} tone={curveTone} width={520} height={76} className="h-full w-full" label={`Account value from ${inr(first)} to ${inr(last)}`} />
           ) : (
@@ -400,7 +400,7 @@ function AccountSkeleton() {
       <Skeleton className="h-3 w-36" />
       <div className="mt-4 grid gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
         <div><Skeleton className="h-3 w-24" /><Skeleton className="mt-2 h-9 w-52" /><Skeleton className="mt-3 h-7 w-44 rounded-pill" /></div>
-        <Skeleton className="h-[76px] w-full rounded-md" />
+        <Skeleton className="h-[4.75rem] w-full rounded-md" />
       </div>
       <div className="mt-4 grid grid-cols-2 gap-4 border-t border-border-soft pt-3 md:grid-cols-4">
         {[0, 1, 2, 3].map((item) => <div key={item}><Skeleton className="h-2.5 w-16" /><Skeleton className="mt-1.5 h-4 w-24" /></div>)}
@@ -461,12 +461,12 @@ function PulseRow({ card, quote, points, note, onOpen }: { card: (typeof INDEX_C
         <span className="block truncate text-data font-semibold tracking-[0.01em] text-text">{card.label}</span>
         <span className="block truncate text-micro text-muted">{card.context}</span>
       </span>
-      <span className="h-7 w-[72px]">
+      <span className="h-7 w-[4.5rem]">
         {Array.isArray(points) && points.length >= 2 ? (
           <Sparkline values={points} tone={tone} width={72} height={28} baseline={quote?.previous ?? null} className="h-full w-full" label={`${card.label} intraday trend`} />
         ) : points === undefined ? <Skeleton className="h-full w-full rounded-sm" /> : <span className="flex h-full items-center justify-center text-micro text-muted">—</span>}
       </span>
-      <span className="min-w-[88px] text-right">
+      <span className="min-w-[5.5rem] text-right">
         {quote ? (
           <>
             <PriceCell value={quote.last} className="block text-dense font-semibold leading-tight text-text" />
@@ -541,7 +541,7 @@ function MarketMovers({ board, error, mover, onMover, onPick }: { board: Board |
                     <StockLogo symbol={row.symbol} name={row.name} size={24} />
                     <span className="min-w-0">
                       <span className="block truncate text-data font-semibold leading-tight text-text">{row.symbol}</span>
-                      <span className="block truncate text-[11px] leading-tight text-muted">{row.name}</span>
+                      <span className="block truncate text-[0.6875rem] leading-tight text-muted">{row.name}</span>
                     </span>
                     <span className="num text-right text-data text-text-2">{inr(row.last).replace("₹", "")}</span>
                     <span className={cx("num rounded-sm px-1.5 py-0.5 text-right text-micro font-semibold", mover === "volume" ? "bg-sunken text-text-2" : up ? "bg-profit-soft text-profit" : down ? "bg-loss-soft text-loss" : "bg-sunken text-muted")}>
@@ -622,16 +622,16 @@ function ActivityRow({ order, closed }: { order: ActivityOrder; closed: ClosedRo
   const statusTone = order.status === "FILLED" ? "text-text-2" : order.status === "REJECTED" ? "text-loss" : "text-warning";
   return (
     <li className="flex items-center gap-2.5 px-3 py-2" title={`${order.side} ${order.quantity} ${order.symbol} · ${status}`}>
-      <span className={cx("w-9 shrink-0 rounded-sm py-0.5 text-center text-[10px] font-bold tracking-wide", sell ? "bg-loss-soft text-loss" : "bg-profit-soft text-profit")}>{sell ? "SELL" : "BUY"}</span>
+      <span className={cx("w-9 shrink-0 rounded-sm py-0.5 text-center text-[0.625rem] font-bold tracking-wide", sell ? "bg-loss-soft text-loss" : "bg-profit-soft text-profit")}>{sell ? "SELL" : "BUY"}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-data font-semibold leading-tight text-text">{label}</span>
-        <span className="block truncate text-[11px] leading-tight text-muted">
+        <span className="block truncate text-[0.6875rem] leading-tight text-muted">
           <span className="num">{order.filledQuantity || order.quantity}</span>{price ? <> @ <span className="num">{inr(price).replace("₹", "")}</span></> : null} · <span className={statusTone}>{status}</span>
         </span>
       </span>
       <span className="shrink-0 text-right">
-        <span className="num block text-[11px] leading-tight text-muted">{timeLabel(at)}</span>
-        {trade ? <span className={cx("num block text-[11px] font-semibold leading-tight", trade.profitable ? "text-profit" : trade.loss ? "text-loss" : "text-muted")}>{trade.net}</span> : null}
+        <span className="num block text-[0.6875rem] leading-tight text-muted">{timeLabel(at)}</span>
+        {trade ? <span className={cx("num block text-[0.6875rem] font-semibold leading-tight", trade.profitable ? "text-profit" : trade.loss ? "text-loss" : "text-muted")}>{trade.net}</span> : null}
       </span>
     </li>
   );
@@ -657,11 +657,11 @@ function WatchRow({ item, quote, onOpen, onRemove }: { item: List["items"][numbe
         <StockLogo symbol={item.symbol} name={item.name} size={26} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-data font-semibold leading-tight text-text">{item.symbol}</span>
-          <span className="block truncate text-[11px] leading-tight text-muted">{item.name}</span>
+          <span className="block truncate text-[0.6875rem] leading-tight text-muted">{item.name}</span>
         </span>
         <span className="shrink-0 text-right">
           {quote ? <PriceCell value={last} className="block text-data font-semibold leading-tight text-text" /> : <Skeleton className="ml-auto h-3.5 w-14" />}
-          <span className={cx("num block whitespace-nowrap text-[11px] font-medium leading-tight", tone)}>
+          <span className={cx("num block whitespace-nowrap text-[0.6875rem] font-medium leading-tight", tone)}>
             {move ? `${move.abs > 0 ? "▲" : move.abs < 0 ? "▼" : ""} ${signedPercent(move.pct)}` : quote ? "—" : ""}
           </span>
         </span>
@@ -678,7 +678,7 @@ function WatchlistSkeleton() {
     <div className="space-y-1 p-1.5" aria-busy="true" aria-label="Loading watchlist">
       {[0, 1, 2, 3, 4, 5].map((item) => (
         <div key={item} className="flex items-center gap-2.5 py-1.5">
-          <Skeleton className="h-[26px] w-[26px] rounded-[28%]" />
+          <Skeleton className="h-[1.625rem] w-[1.625rem] rounded-[28%]" />
           <div className="flex-1"><Skeleton className="h-3 w-16" /><Skeleton className="mt-1.5 h-2.5 w-28" /></div>
           <div><Skeleton className="h-3 w-14" /><Skeleton className="ml-auto mt-1.5 h-2.5 w-10" /></div>
         </div>

@@ -57,7 +57,7 @@ export function ReplayBar({
       </div>
       <SessionDateField value={date} today={today} onChange={onDate} />
       <SessionTimeField date={date} cursor={cursor} sessionOpen={sessionOpen} sessionClose={sessionClose} disabled={blocked} onSeek={onSeek} />
-      <div className="min-w-[96px] flex-1">
+      <div className="min-w-[6rem] flex-1">
         <SessionRuler sessionOpen={sessionOpen} sessionClose={sessionClose} cursor={cursor} disabled={blocked} onSeek={onSeek} />
       </div>
       <select aria-label="Replay speed" className="h-7 w-16 shrink-0 rounded-input px-1.5 py-0 text-data xl:hidden" value={speed} disabled={busy} onChange={(event) => onSpeed(Number(event.target.value) as ReplaySpeed)}>
@@ -65,7 +65,7 @@ export function ReplayBar({
       </select>
       <div className="hidden shrink-0 items-center rounded-input bg-sunken p-0.5 xl:flex" role="group" aria-label="Replay speed">
         {REPLAY_SPEEDS.map((item) => (
-          <button key={item} type="button" aria-pressed={speed === item} disabled={busy} className={`h-6 rounded-xs px-2 text-[11px] ${speed === item ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text"}`} onClick={() => onSpeed(item)}>{item}x</button>
+          <button key={item} type="button" aria-pressed={speed === item} disabled={busy} className={`h-6 rounded-xs px-2 text-[0.6875rem] ${speed === item ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text"}`} onClick={() => onSpeed(item)}>{item}x</button>
         ))}
       </div>
       <span className={`hidden shrink-0 whitespace-nowrap text-micro font-medium lg:inline ${tone}`} title={message || undefined}>{REPLAY_STATUS_LABEL[status]} · {SPAN_LABEL[timeframe]}</span>

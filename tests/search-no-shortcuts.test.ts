@@ -45,14 +45,14 @@ describe("top-bar search", () => {
   it("uses a fixed 40px field with a left icon and ellipsised placeholder", () => {
     expect(search).toContain('"Search stocks, options, pages"');
     const rule = css.slice(css.indexOf("input.top-search {"), css.indexOf("}", css.indexOf("input.top-search {")));
-    expect(rule).toContain("height: 40px");
-    expect(rule).toContain("padding: 0 12px 0 40px");
+    expect(rule).toContain("height: 2.5rem");
+    expect(rule).toContain("padding: 0 0.75rem 0 2.5rem");
     expect(rule).toContain("text-overflow: ellipsis");
     expect(rule).toContain("white-space: nowrap");
   });
 
   it("is at least 200px on desktop (so the index chips fit) and an icon button on small screens", () => {
-    expect(search).toContain("w-[clamp(200px,20vw,380px)]");
+    expect(search).toContain("w-[clamp(12.5rem,20vw,23.75rem)]");
     expect(search).toMatch(/hidden w-\[clamp[^"]*md:block/);
     expect(search).toMatch(/md:hidden" aria-label="Search stocks, options and pages"/);
   });

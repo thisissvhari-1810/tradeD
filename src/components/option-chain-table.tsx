@@ -78,7 +78,7 @@ export function OptionChainTable({ strikes, atmStrike, spot, bidAsk, scrollKey, 
 
   return (
     <div ref={box} className={cx("relative min-h-0 flex-1 overflow-auto overscroll-contain", className)} onScroll={(event) => setView({ top: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight })} onWheel={(event) => event.stopPropagation()} role="table" aria-label="Option chain" aria-rowcount={strikes.length + 1}>
-      <div className="sticky top-0 z-20 grid h-9 items-center border-b border-border bg-panel text-[11px] font-semibold uppercase tracking-wide text-muted" style={style} role="row">
+      <div className="sticky top-0 z-20 grid h-9 items-center border-b border-border bg-panel text-[0.6875rem] font-semibold uppercase tracking-wide text-muted" style={style} role="row">
         <span className="px-3 text-left" role="columnheader" title="Shaded bar: open interest relative to the largest strike on this expiry">Call OI</span>
         <span className="px-2 text-right" role="columnheader">OI chg</span>
         <span className="px-2 text-right" role="columnheader">Volume</span>
@@ -94,7 +94,7 @@ export function OptionChainTable({ strikes, atmStrike, spot, bidAsk, scrollKey, 
       {strikes.length === 0 ? (
         loading ? (
           <div aria-hidden>{Array.from({ length: 10 }, (_, index) => <div key={index} className="h-9 border-b border-border px-3 py-2" style={{ minWidth }}><span className="skel block h-full rounded-xs" /></div>)}</div>
-        ) : <div className="sticky left-0 px-4 py-10 text-center text-[13px] text-muted">{empty}</div>
+        ) : <div className="sticky left-0 px-4 py-10 text-center text-[0.8125rem] text-muted">{empty}</div>
       ) : (
         <div className="relative" style={{ height: strikes.length * ROW, minWidth }}>
           {strikes.slice(first, last).map((row, offset) => (
@@ -130,7 +130,7 @@ const ChainRow = memo(function ChainRow({ row, index, style, bidAsk, maxOi, atm,
       <Half right="CE" row={row} side={row.ce} itm={callItm} bidAsk={bidAsk} maxOi={maxOi} actions={actions} selected={selected === `${row.strike}|CE`} />
       <span role="cell" className={cx("flex h-full flex-col items-center justify-center border-x border-border bg-elevated num font-semibold", atm ? "text-warning" : "text-text")}>
         {row.strike.toLocaleString("en-IN")}
-        {atm ? <span className="text-[9px] font-semibold uppercase leading-none tracking-wide">ATM</span> : null}
+        {atm ? <span className="text-[0.5625rem] font-semibold uppercase leading-none tracking-wide">ATM</span> : null}
       </span>
       <Half right="PE" row={row} side={row.pe} itm={putItm} bidAsk={bidAsk} maxOi={maxOi} actions={actions} selected={selected === `${row.strike}|PE`} />
     </div>
@@ -149,7 +149,7 @@ function Half({ right, row, side, itm, bidAsk, maxOi, actions, selected }: { rig
   const ltp = (
     <>
       {price(side?.ltp ?? null)}
-      {change != null ? <span className={cx("block text-[10px] font-normal leading-none", change > 0 ? "text-profit" : change < 0 ? "text-loss" : "text-muted")}>{change > 0 ? "+" : change < 0 ? "−" : ""}{Math.abs(change).toFixed(2)}</span> : null}
+      {change != null ? <span className={cx("block text-[0.625rem] font-normal leading-none", change > 0 ? "text-profit" : change < 0 ? "text-loss" : "text-muted")}>{change > 0 ? "+" : change < 0 ? "−" : ""}{Math.abs(change).toFixed(2)}</span> : null}
     </>
   );
   const cells = [
@@ -171,9 +171,9 @@ function Half({ right, row, side, itm, bidAsk, maxOi, actions, selected }: { rig
       <span aria-hidden className={cx("pointer-events-none absolute inset-y-1 w-0.5 rounded-full bg-primary transition-opacity duration-100", call ? "left-0" : "right-0", selected ? "opacity-100" : "opacity-0 group-hover/half:opacity-100 group-focus-within/half:opacity-100")} />
       {ordered}
       {priced ? (
-        <span className={cx("pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-sm bg-overlay/95 p-0.5 opacity-0 shadow-e2 transition-opacity duration-100 group-hover/half:pointer-events-auto group-hover/half:opacity-100 group-focus-within/half:pointer-events-auto group-focus-within/half:opacity-100", call ? (bidAsk ? "right-[214px]" : "right-[90px]") : bidAsk ? "left-[214px]" : "left-[90px]")}>
-          <button type="button" className="h-6 rounded-xs border border-profit/40 bg-profit-soft px-2 text-[11px] font-bold text-profit transition-colors hover:bg-profit hover:text-on-signal" aria-label={`Buy ${row.strike} ${right}`} onClick={() => side && actions.onBuy(right, row.strike, side)}>Buy</button>
-          <button type="button" className="h-6 rounded-xs border border-loss/40 bg-loss-soft px-2 text-[11px] font-bold text-loss transition-colors hover:bg-loss hover:text-on-signal disabled:border-border disabled:bg-elevated disabled:text-muted disabled:opacity-100" aria-label={`Sell ${row.strike} ${right} to close`} title={sellable ? "Sell to close" : "Sell closes lots you hold. Short options are not available."} disabled={!sellable} onClick={() => side && actions.onSell(right, row.strike, side)}>Sell</button>
+        <span className={cx("pointer-events-none absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-sm bg-overlay/95 p-0.5 opacity-0 shadow-e2 transition-opacity duration-100 group-hover/half:pointer-events-auto group-hover/half:opacity-100 group-focus-within/half:pointer-events-auto group-focus-within/half:opacity-100", call ? (bidAsk ? "right-[13.375rem]" : "right-[5.625rem]") : bidAsk ? "left-[13.375rem]" : "left-[5.625rem]")}>
+          <button type="button" className="h-6 rounded-xs border border-profit/40 bg-profit-soft px-2 text-[0.6875rem] font-bold text-profit transition-colors hover:bg-profit hover:text-on-signal" aria-label={`Buy ${row.strike} ${right}`} onClick={() => side && actions.onBuy(right, row.strike, side)}>Buy</button>
+          <button type="button" className="h-6 rounded-xs border border-loss/40 bg-loss-soft px-2 text-[0.6875rem] font-bold text-loss transition-colors hover:bg-loss hover:text-on-signal disabled:border-border disabled:bg-elevated disabled:text-muted disabled:opacity-100" aria-label={`Sell ${row.strike} ${right} to close`} title={sellable ? "Sell to close" : "Sell closes lots you hold. Short options are not available."} disabled={!sellable} onClick={() => side && actions.onSell(right, row.strike, side)}>Sell</button>
           {actions.onWatch ? (
             <button type="button" className={cx("grid h-6 w-6 place-items-center rounded-xs bg-overlay shadow-e1", watched ? "text-warning" : "text-muted hover:text-text")} aria-label={watched ? `Remove ${row.strike} ${right} from watchlist` : `Add ${row.strike} ${right} to watchlist`} onClick={() => actions.onWatch?.(right, row.strike)}>
               <Star className={cx("h-3.5 w-3.5", watched && "fill-current")} aria-hidden />

@@ -319,7 +319,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       ref={panelRef}
       className={cx(
         "anim-fade absolute z-30 flex flex-col overflow-hidden rounded-sheet border bg-panel text-text",
-        maximized ? "inset-2" : cx("w-[min(780px,calc(100%-1rem))]", !placement.pos && "bottom-2 left-2 top-2"),
+        maximized ? "inset-2" : cx("w-[min(48.75rem,calc(100%-1rem))]", !placement.pos && "bottom-2 left-2 top-2"),
         dragging ? "border-primary/50 shadow-e4" : "border-border shadow-e3",
       )}
       style={!maximized && placement.pos ? { left: placement.pos.x, top: placement.pos.y, bottom: EDGE } : undefined}
@@ -339,7 +339,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
         onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, select, textarea, a, [data-no-drag]")) place({ pos: null, max: false }); }}
       >
         <GripVertical className={cx("h-4 w-4 shrink-0", maximized ? "text-disabled" : "text-muted")} aria-hidden />
-        <h2 className="shrink-0 text-[15px] font-semibold">Option chain</h2>
+        <h2 className="shrink-0 text-[0.9375rem] font-semibold">Option chain</h2>
         <div className="flex shrink-0 gap-0.5 rounded-input bg-sunken p-0.5">
           {FEATURED_INDICES.filter((item) => CHIPS.includes(item.symbol)).map((item) => (
             <button key={item.symbol} type="button" aria-pressed={underlying === item.symbol} className={cx("h-7 rounded-sm px-2.5 text-data font-semibold transition-colors", underlying === item.symbol ? "bg-panel text-primary shadow-e1" : "text-muted hover:text-text")} onClick={() => choose(item.symbol)}>{item.symbol}</button>
@@ -350,8 +350,8 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
           <input className="oc-search w-full min-w-0" value={query} placeholder="Search underlying" aria-label="Search underlying" onChange={(event) => setQuery(event.target.value)} />
           {query ? <button type="button" className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center text-muted hover:text-text" aria-label="Clear search" onClick={() => { setQuery(""); setHits([]); }}><X className="h-3 w-3" aria-hidden /></button> : null}
           {hits.length > 0 ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-40 max-h-56 overflow-auto rounded-card border border-border bg-overlay p-1 shadow-e3">
-              {hits.map((hit) => <button key={hit.symbol} type="button" className="flex w-full items-baseline gap-2 rounded-xs px-2 py-1.5 text-left hover:bg-elevated" onClick={() => choose(hit.symbol)}><span className="text-[13px] font-medium">{hit.symbol}</span><span className="truncate text-data text-muted">{hit.name}</span></button>)}
+            <div className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-40 max-h-56 overflow-auto rounded-card border border-border bg-overlay p-1 shadow-e3">
+              {hits.map((hit) => <button key={hit.symbol} type="button" className="flex w-full items-baseline gap-2 rounded-xs px-2 py-1.5 text-left hover:bg-elevated" onClick={() => choose(hit.symbol)}><span className="text-[0.8125rem] font-medium">{hit.symbol}</span><span className="truncate text-data text-muted">{hit.name}</span></button>)}
             </div>
           ) : null}
         </div>
@@ -383,10 +383,10 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
         <Stat label="Lot" value={chain?.lotSize == null ? "N/A" : String(chain.lotSize)} />
         <Stat label="Days to expiry" value={daysToExpiry == null ? "N/A" : String(daysToExpiry)} />
         {replaying ? <FeedPill state={{ label: "Replay", tone: "warning" }} /> : feed ? <FeedPill state={feed} /> : null}
-        <span className="ml-auto text-[11px] text-muted" title={chain?.message}>{replaying ? `Replay ${replay?.date ?? ""} ${replay?.cursor == null ? "" : `${clock(replay.cursor)} IST`}` : chain?.asOf ? `Snapshot ${istTime(chain.asOf)}` : loading ? "Loading…" : ""}</span>
+        <span className="ml-auto text-[0.6875rem] text-muted" title={chain?.message}>{replaying ? `Replay ${replay?.date ?? ""} ${replay?.cursor == null ? "" : `${clock(replay.cursor)} IST`}` : chain?.asOf ? `Snapshot ${istTime(chain.asOf)}` : loading ? "Loading…" : ""}</span>
       </div>
       {replaying ? (
-        <p className="border-b border-border bg-info/10 px-3 py-1.5 text-[11px] text-info">
+        <p className="border-b border-border bg-info/10 px-3 py-1.5 text-[0.6875rem] text-info">
           Historical replay. Live premiums, OI and volume are hidden. Choose a strike and the ticket prices it from 1-minute history at the replay time. Only currently listed expiries can be replayed.
           {replaySpot == null ? ` ATM is not marked because the chart is replaying ${replay?.spotSymbol ?? "another symbol"}, not ${underlying}.` : ""}
         </p>
@@ -405,7 +405,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
       />
 
       {note ? <p className={cx("border-t border-border px-3 py-1.5 text-data", note.tone === "error" ? "text-loss" : "text-info")} role={note.tone === "error" ? "alert" : "status"}>{note.text}</p> : null}
-      <p className="border-t border-border px-3 py-1.5 text-[11px] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{livePaper ? "Paper trading at live prices: hover or tab to a call or put for Buy / Sell (virtual, nothing is sent to Dhan). Real orders: Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover or tab to a call or put for Buy / Sell. Click a premium to chart that contract. Drag the header to move this panel."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
+      <p className="border-t border-border px-3 py-1.5 text-[0.6875rem] text-muted">{error && chain ? `${error} Showing the last snapshot. ` : ""}{livePaper ? "Paper trading at live prices: hover or tab to a call or put for Buy / Sell (virtual, nothing is sent to Dhan). Real orders: Accounts → Live." : replaying ? "Hover a row for Buy / Sell." : "Hover or tab to a call or put for Buy / Sell. Click a premium to chart that contract. Drag the header to move this panel."}{heldCount ? ` Holding ${heldCount} contract${heldCount === 1 ? "" : "s"} on ${underlying}${replaying ? " in this replay session" : ""}.` : ""}</p>
     </section>
   );
 }
@@ -447,7 +447,7 @@ function IconAction({ label, active, onClick, children }: { label: string; activ
 }
 
 function Stat({ label, value, extra }: { label: string; value: string; extra?: ReactNode }) {
-  return <span className="flex flex-col"><span className="text-[11px] text-muted">{label}</span><span className="num text-[13px] font-semibold text-text">{value}{extra}</span></span>;
+  return <span className="flex flex-col"><span className="text-[0.6875rem] text-muted">{label}</span><span className="num text-[0.8125rem] font-semibold text-text">{value}{extra}</span></span>;
 }
 
 function spotMove(spot: number | null, quote: { last: string; previousClose: string } | null) {

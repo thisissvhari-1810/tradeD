@@ -138,7 +138,7 @@ export function MarketsScreen() {
 function Page({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
   return (
     <div className="h-full overflow-auto">
-      <div className={`mx-auto flex flex-col gap-5 p-3 sm:p-4 lg:p-6 ${wide ? "max-w-[1600px]" : "max-w-6xl"}`}>{children}</div>
+      <div className={`mx-auto flex flex-col gap-5 p-3 sm:p-4 lg:p-6 ${wide ? "max-w-[100rem]" : "max-w-6xl"}`}>{children}</div>
     </div>
   );
 }
@@ -193,7 +193,7 @@ export function OrdersScreen() {
     return (
       <button type="button" className="inline-flex items-center gap-2 text-left font-medium text-text hover:text-primary" onClick={() => desk.chooseSymbol(symbol)}>
         <StockLogo symbol={name.logo} size={20} />
-        <span>{name.title}{name.sub ? <span className="ml-1.5 text-[11px] font-normal text-muted">{name.sub}</span> : null}</span>
+        <span>{name.title}{name.sub ? <span className="ml-1.5 text-[0.6875rem] font-normal text-muted">{name.sub}</span> : null}</span>
       </button>
     );
   };
@@ -218,7 +218,7 @@ export function OrdersScreen() {
     { key: "price", header: "Price", numeric: true, render: (row) => row.price },
     { key: "charges", header: "Charges", numeric: true, render: (row) => <span className="text-text-2">{row.charges}</span> },
     { key: "realized", header: "Realized P&L", numeric: true, render: (row) => <span className={`font-semibold ${pnlTone(row.realized)}`}>{row.realized}</span> },
-    { key: "mode", header: "Price source", align: "right", render: (row) => <span className="text-[11px] text-muted">{row.mode === "DELAYED" ? "Snapshot" : row.mode === "REALTIME" ? "Live" : row.mode}</span> },
+    { key: "mode", header: "Price source", align: "right", render: (row) => <span className="text-[0.6875rem] text-muted">{row.mode === "DELAYED" ? "Snapshot" : row.mode === "REALTIME" ? "Live" : row.mode}</span> },
   ];
 
   return (
@@ -299,7 +299,7 @@ export function PositionsScreen() {
             {portfolio && portfolio.positions.length === 0 ? <tr><td colSpan={14} className="text-muted">No open practice positions.</td></tr> : null}
             {portfolio?.positions.map((row) => (
               <tr key={row.symbol}>
-                <td><button className="inline-flex items-center gap-2 text-left text-primary" onClick={() => desk.chooseSymbol(row.symbol)}><StockLogo symbol={row.symbol} name={row.name} size={24} /><span>{row.contract ? `${row.contract.underlying} ${row.contract.strike.toLocaleString("en-IN")} ${row.contract.right}` : row.symbol}<span className="block text-[10px] font-normal text-muted">{row.name}</span></span></button></td>
+                <td><button className="inline-flex items-center gap-2 text-left text-primary" onClick={() => desk.chooseSymbol(row.symbol)}><StockLogo symbol={row.symbol} name={row.name} size={24} /><span>{row.contract ? `${row.contract.underlying} ${row.contract.strike.toLocaleString("en-IN")} ${row.contract.right}` : row.symbol}<span className="block text-[0.625rem] font-normal text-muted">{row.name}</span></span></button></td>
                 <td>{row.contract?.right ?? "—"}</td>
                 <td className="num">{row.contract ? row.contract.strike.toLocaleString("en-IN") : "—"}</td>
                 <td>{row.contract?.expiry ?? "—"}</td>
@@ -611,9 +611,9 @@ export function AlertsScreen() {
       {error ? <Notice tone="loss">{error}</Notice> : null}
       <Section title="New price alert">
         <form className="flex flex-wrap items-end gap-3" onSubmit={(event) => { event.preventDefault(); void api("/api/alerts", { symbol, condition, targetRupees: target }).then(() => { setTarget(""); load(); }).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not save.")); }}>
-          <label className="flex min-w-[140px] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Symbol<input className="h-[34px] font-semibold uppercase text-text" value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} /></label>
-          <label className="flex min-w-[140px] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Condition<select className="h-[34px] py-0 text-text" value={condition} onChange={(event) => setCondition(event.target.value as typeof condition)}><option value="PRICE_ABOVE">Price above</option><option value="PRICE_BELOW">Price below</option></select></label>
-          <label className="flex min-w-[140px] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Target (₹)<input className="num h-[34px] text-text" inputMode="decimal" value={target} onChange={(event) => setTarget(event.target.value)} /></label>
+          <label className="flex min-w-[8.75rem] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Symbol<input className="h-[2.125rem] font-semibold uppercase text-text" value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} /></label>
+          <label className="flex min-w-[8.75rem] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Condition<select className="h-[2.125rem] py-0 text-text" value={condition} onChange={(event) => setCondition(event.target.value as typeof condition)}><option value="PRICE_ABOVE">Price above</option><option value="PRICE_BELOW">Price below</option></select></label>
+          <label className="flex min-w-[8.75rem] flex-1 flex-col gap-1.5 text-data font-medium text-text-2">Target (₹)<input className="num h-[2.125rem] text-text" inputMode="decimal" value={target} onChange={(event) => setTarget(event.target.value)} /></label>
           <Button type="submit" variant="primary">Save alert</Button>
         </form>
       </Section>

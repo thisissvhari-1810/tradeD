@@ -294,7 +294,7 @@ function ColorField({ label, value, onChange, opacity, onOpacity }: { label: str
       <button type="button" className="flex items-center gap-2" onClick={() => { setDraft(value); setOpen((current) => !current); }}>
         <span className="h-4 w-4 rounded border border-border" style={{ background: value }} />
         {label}
-        <span className="font-mono text-[10px] text-muted">{value}</span>
+        <span className="font-mono text-[0.625rem] text-muted">{value}</span>
       </button>
       {open ? (
         <div className="relative z-10 mt-1">

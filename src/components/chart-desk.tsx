@@ -129,7 +129,7 @@ type ReplayPayload = {
 };
 function PreviousSessionStrip({ session }: { session: PreviousSession | null }) {
   if (!session) {
-    return <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-warning">Previous session open and close were not returned.</p>;
+    return <p className="border-b border-border bg-panel px-3 py-1 text-[0.6875rem] text-warning">Previous session open and close were not returned.</p>;
   }
   return (
     <div className="no-scrollbar flex h-6 shrink-0 items-center gap-x-3 overflow-x-auto whitespace-nowrap border-b border-border bg-panel px-3 text-micro text-muted">
@@ -274,7 +274,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       const button = strategyButtonRef.current;
       if (!button) return;
       const box = area.getBoundingClientRect();
-      const width = Math.min(340, box.width - 16);
+      // The panel is 21.25rem wide (340px at the base size; larger on big monitors).
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const width = Math.min(21.25 * rem, box.width - 16);
       const left = button.getBoundingClientRect().left - box.left;
       setStrategyLeft(Math.max(8, Math.min(left, box.width - width - 8)));
     };
@@ -1178,13 +1180,13 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         />
         {objectsOpen ? (
           <aside className="max-h-48 shrink-0 overflow-auto border-b border-border bg-panel lg:max-h-none lg:w-52 lg:border-b-0 lg:border-r">
-            <p className="px-3 pt-2 text-[11px] font-semibold text-muted">Drawings</p>
+            <p className="px-3 pt-2 text-[0.6875rem] font-semibold text-muted">Drawings</p>
             <DrawingList drawings={drawings} selectedId={selectedDrawing} onSelect={setSelectedDrawing} onChange={rememberDrawings} lockAll={lockAll} onClearAll={() => removeObjects("drawings")} />
           </aside>
         ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={prior?.date === replay.date ? prior.session : null} /> : null}
-      {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
+      {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[0.6875rem] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <div ref={chartAreaRef} className="relative flex min-h-0 flex-1 flex-col">
             {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
@@ -1310,7 +1312,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <section className="border-t border-border bg-panel">
               <div className="flex h-10 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Positions and orders">
                 {(["open", "closed", "orders", "history", "replay"] as const).map((tab) => (
-                  <button key={tab} type="button" role="tab" aria-selected={dock === tab} className={cx("relative h-10 px-3 text-[13px] font-medium", dock === tab ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
+                  <button key={tab} type="button" role="tab" aria-selected={dock === tab} className={cx("relative h-10 px-3 text-[0.8125rem] font-medium", dock === tab ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
                 ))}
                 <button type="button" className="ml-auto h-7 rounded-input px-2 text-data text-muted hover:bg-elevated hover:text-text" onClick={() => setDockOpen((value) => !value)}>{dockOpen ? "Collapse" : "Expand"}</button>
               </div>
@@ -1400,7 +1402,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                     <SymbolTitle symbol={item.symbol} name={item.name} size={24} />
                     <span className="ml-auto shrink-0 text-right">
                       <span className={`num block whitespace-nowrap text-xs ${tone(move?.abs)}`}>{rowQuote ? money(rowQuote.last) : "—"}</span>
-                      <span className={`num block whitespace-nowrap text-[10px] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
+                      <span className={`num block whitespace-nowrap text-[0.625rem] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : ""}</span>
                     </span>
                   </button>
                   <WatchStar active label={`Remove ${item.symbol} from watchlist`} onToggle={() => toggleSymbol(item.symbol, item.name, item.exchange)} />
@@ -1411,7 +1413,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           {variant === "positions" ? (
             <div className="max-h-64 overflow-auto border-t border-border p-3">
               <h2 className="text-sm font-semibold">Position</h2>
-              <p className="mt-1 text-[11px] text-muted">{desk.mode === "live" ? "Live paper wallet. Not a broker position." : "Practice ledger. Long only. This is not a broker position."}</p>
+              <p className="mt-1 text-[0.6875rem] text-muted">{desk.mode === "live" ? "Live paper wallet. Not a broker position." : "Practice ledger. Long only. This is not a broker position."}</p>
               {practiceRow ? <PracticeDetail row={practiceRow} onExit={() => setExitSymbol(practiceRow)} /> : (
                 <div className="mt-3 text-sm">
                   <p>No open practice position for {symbol}.</p>
@@ -1543,7 +1545,7 @@ function SymbolCell({ symbol, name, onPick }: { symbol: string; name?: string; o
   return (
     <button type="button" className="inline-flex max-w-[16rem] items-center gap-2 text-left font-medium text-text hover:text-primary" onClick={() => onPick(symbol)}>
       <StockLogo symbol={option?.underlying ?? symbol} name={name} size={20} />
-      <span className="min-w-0 truncate">{displaySymbol(symbol)}{option ? <span className="ml-1.5 text-[11px] font-normal text-muted">{option.expiry}</span> : null}</span>
+      <span className="min-w-0 truncate">{displaySymbol(symbol)}{option ? <span className="ml-1.5 text-[0.6875rem] font-normal text-muted">{option.expiry}</span> : null}</span>
     </button>
   );
 }
@@ -1629,7 +1631,7 @@ function ReplayTable({ book, mark, symbol, onPick, onCancel }: { book: DemoBook;
   ];
   return (
     <div className="flex min-h-0 flex-col">
-      <p className="border-b border-border px-3 py-1.5 text-[11px] text-muted">Cash <span className="num text-text">₹{formatDemoRupees(book.cashPaise)}</span> · Realized <span className={cx("num", book.realizedPaise > 0 ? "text-profit" : book.realizedPaise < 0 ? "text-loss" : "text-text")}>₹{formatDemoRupees(book.realizedPaise)}</span> · Stored in this browser, separate from your demo account.</p>
+      <p className="border-b border-border px-3 py-1.5 text-[0.6875rem] text-muted">Cash <span className="num text-text">₹{formatDemoRupees(book.cashPaise)}</span> · Realized <span className={cx("num", book.realizedPaise > 0 ? "text-profit" : book.realizedPaise < 0 ? "text-loss" : "text-text")}>₹{formatDemoRupees(book.realizedPaise)}</span> · Stored in this browser, separate from your demo account.</p>
       <Table label="Replay positions" dense columns={columns} rows={book.positions} rowKey={(row) => row.symbol} empty={<DockEmpty title="No replay positions" />} />
       {open.map((order) => (
         <div key={order.id} className="flex items-center gap-2 border-t border-border px-3 py-1.5 text-data">

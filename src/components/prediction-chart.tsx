@@ -17,6 +17,7 @@ import {
 } from "lightweight-charts";
 import type { Candle } from "@/components/chart-panel";
 import type { ForecastPoint } from "@/lib/market/forecast";
+import { axisFontSize } from "@/lib/theme";
 
 /* Keep in sync with the --chart-* variables in src/app/tokens.css. */
 const UP = "#089981";
@@ -57,7 +58,7 @@ export function PredictionChart({
     const grid = scheme === "light" ? "#EEF1F6" : "#161E29";
     const chart = createChart(host, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: background }, textColor: text, fontSize: 10, attributionLogo: false },
+      layout: { background: { type: ColorType.Solid, color: background }, textColor: text, fontSize: axisFontSize(), attributionLogo: false },
       grid: { vertLines: { color: grid }, horzLines: { color: grid } },
       rightPriceScale: { borderColor: grid, minimumWidth: 84, entireTextOnly: true },
       timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false },
@@ -139,7 +140,7 @@ export function PredictionChart({
   return (
     <div className="relative h-full min-h-0 overflow-hidden">
       <div ref={hostRef} className="absolute inset-0" />
-      <p ref={tipRef} hidden className="pointer-events-none absolute left-3 top-3 z-10 rounded-lg border border-border bg-panel/95 px-2 py-1 text-[11px]" />
+      <p ref={tipRef} hidden className="pointer-events-none absolute left-3 top-3 z-10 rounded-lg border border-border bg-panel/95 px-2 py-1 text-[0.6875rem]" />
     </div>
   );
 }

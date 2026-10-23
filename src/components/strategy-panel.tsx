@@ -79,7 +79,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
     <section
       ref={panelRef}
       style={position}
-      className={cx("surface-overlay absolute top-2 z-40 flex max-h-[calc(100%-1rem)] w-[min(340px,calc(100%-1rem))] flex-col overflow-hidden rounded-lg text-data", !moved && left == null && "right-2", dragging && "shadow-e4")}
+      className={cx("surface-overlay absolute top-2 z-40 flex max-h-[calc(100%-1rem)] w-[min(21.25rem,calc(100%-1rem))] flex-col overflow-hidden rounded-lg text-data", !moved && left == null && "right-2", dragging && "shadow-e4")}
       aria-label="Strategy"
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
@@ -343,7 +343,7 @@ function Switch({ label, checked, disabled, onChange }: { label: string; checked
       className={cx("relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-40", checked ? "bg-primary" : "bg-border-strong")}
       onClick={() => onChange(!checked)}
     >
-      <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-e1 transition-[left]", checked ? "left-[18px]" : "left-0.5")} aria-hidden />
+      <span className={cx("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-e1 transition-[left]", checked ? "left-[1.125rem]" : "left-0.5")} aria-hidden />
     </button>
   );
 }

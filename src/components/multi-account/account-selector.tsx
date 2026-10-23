@@ -40,7 +40,7 @@ export function AccountSelector({ accounts, selected, onChange, label = "Account
                 on ? "border-primary/50 bg-primary-soft text-text" : "border-border-soft bg-sunken text-text-2 hover:bg-hover",
               )}
             >
-              <span className={cx("grid h-3.5 w-3.5 shrink-0 place-items-center rounded-[3px] border", on ? "border-primary bg-primary text-on-signal" : "border-border")} aria-hidden>
+              <span className={cx("grid h-3.5 w-3.5 shrink-0 place-items-center rounded-[0.1875rem] border", on ? "border-primary bg-primary text-on-signal" : "border-border")} aria-hidden>
                 {on ? <Check className="h-3 w-3" strokeWidth={3} /> : null}
               </span>
               <span className="num shrink-0 text-muted">{account.slot}</span>

@@ -242,7 +242,7 @@ export function LiveOrderPanel({ accounts, reloadToken, gate }: { accounts: Live
       <Button size="lg" block variant={side === "BUY" ? "buy" : "sell"} disabled={!ready || (live && legs.length === 0)} onClick={openReview}>{side === "BUY" ? "Review Buy Order" : "Review Sell Order"}</Button>
       <LiveOrdersList reloadToken={reloadToken + ordersReload} enabled={live} />
 
-      <Drawer open={reviewing} onClose={() => setReviewing(false)} modal label="Review live order" title="Review Order" subtitle={`${label}${expiry ? ` · ${expiryLabel(expiry)}` : ""}`} width="w-[500px]" footer={
+      <Drawer open={reviewing} onClose={() => setReviewing(false)} modal label="Review live order" title="Review Order" subtitle={`${label}${expiry ? ` · ${expiryLabel(expiry)}` : ""}`} width="w-[31.25rem]" footer={
         <div className="flex flex-col gap-2">
           {results ? (
             <Button block variant="secondary" onClick={() => setReviewing(false)}>Done</Button>

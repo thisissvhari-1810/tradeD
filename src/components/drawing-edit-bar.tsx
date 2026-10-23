@@ -271,8 +271,8 @@ function Control({ label, expanded, active, danger, disabled, onClick, children 
 function ColorGlyph({ color, kind }: { color: string | null; kind: "line" | "fill" | "text" }) {
   return (
     <span className="relative grid h-5 w-5 place-items-center" aria-hidden>
-      {kind === "text" ? <span className="text-[13px] font-semibold leading-none">T</span> : kind === "fill" ? <span className="h-3.5 w-3.5 rounded-[3px] border border-border-strong" style={{ background: color ?? "transparent" }} /> : <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 13 13 3" stroke="currentColor" strokeWidth={1.5} /></svg>}
-      {kind !== "fill" ? <span className="absolute inset-x-0.5 -bottom-0.5 h-[3px] rounded-full" style={{ background: color ?? "transparent" }} /> : null}
+      {kind === "text" ? <span className="text-[0.8125rem] font-semibold leading-none">T</span> : kind === "fill" ? <span className="h-3.5 w-3.5 rounded-[0.1875rem] border border-border-strong" style={{ background: color ?? "transparent" }} /> : <svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 13 13 3" stroke="currentColor" strokeWidth={1.5} /></svg>}
+      {kind !== "fill" ? <span className="absolute inset-x-0.5 -bottom-0.5 h-[0.1875rem] rounded-full" style={{ background: color ?? "transparent" }} /> : null}
     </span>
   );
 }
@@ -309,13 +309,13 @@ function TextPanel({ drawing, onPatch, onDone }: { drawing: Drawing; onPatch: (p
 function Pop({ flip, menu, align = "left", beside, children }: { flip: boolean; menu?: boolean; align?: "left" | "right"; beside?: { left: number; top: number } | null; children: ReactNode }) {
   if (beside) {
     return (
-      <div role="dialog" aria-label="Choose color" className="surface-overlay absolute z-40 w-[232px] rounded-lg p-1.5" style={{ left: beside.left, top: beside.top }}>
+      <div role="dialog" aria-label="Choose color" className="surface-overlay absolute z-40 w-[14.5rem] rounded-lg p-1.5" style={{ left: beside.left, top: beside.top }}>
         {children}
       </div>
     );
   }
   return (
-    <div role={menu ? "menu" : "dialog"} aria-label={menu ? "Options" : "Choose color"} className={cx("surface-overlay absolute z-40 rounded-lg p-1.5", flip ? "bottom-full mb-1.5" : "top-full mt-1.5", align === "right" ? "right-0" : "left-0", menu ? "min-w-44" : "w-[232px]")}>
+    <div role={menu ? "menu" : "dialog"} aria-label={menu ? "Options" : "Choose color"} className={cx("surface-overlay absolute z-40 rounded-lg p-1.5", flip ? "bottom-full mb-1.5" : "top-full mt-1.5", align === "right" ? "right-0" : "left-0", menu ? "min-w-44" : "w-[14.5rem]")}>
       {children}
     </div>
   );
@@ -353,7 +353,7 @@ function ColorPanel({ value, opacity, none, onNone, onColor, onOpacity }: { valu
             title={color}
             aria-label={`Color ${color}`}
             aria-pressed={!none && current === color}
-            className={cx("h-7 w-full rounded-[5px] border border-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]", !none && current === color && "ring-2 ring-primary ring-offset-1 ring-offset-[var(--overlay)]")}
+            className={cx("h-7 w-full rounded-[0.3125rem] border border-border-strong focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-ring)]", !none && current === color && "ring-2 ring-primary ring-offset-1 ring-offset-[var(--overlay)]")}
             style={{ background: color }}
             onClick={() => { setDraft(color); onColor(color); }}
           />

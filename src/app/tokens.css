@@ -6,35 +6,35 @@
 
 /* Scales. Spacing uses Tailwind's 4px step (p-1 = 4px, p-2 = 8px). */
 @theme static {
-  --radius-xs: 4px;
-  --radius-sm: 6px;
-  --radius-input: 10px;
-  --radius-md: 12px;
-  --radius-card: 16px;
-  --radius-lg: 18px;
-  --radius-xl: 18px;
-  --radius-sheet: 22px;
-  --radius-2xl: 24px;
-  --radius-pill: 999px;
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-input: 0.625rem;
+  --radius-md: 0.75rem;
+  --radius-card: 1rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.125rem;
+  --radius-sheet: 1.375rem;
+  --radius-2xl: 1.5rem;
+  --radius-pill: 62.4375rem;
 
-  --text-micro: 11px;
-  --text-micro--line-height: 14px;
-  --text-data: 12.5px;
-  --text-data--line-height: 17px;
-  --text-dense: 13.5px;
-  --text-dense--line-height: 19px;
-  --text-body: 14px;
-  --text-body--line-height: 20px;
-  --text-title: 16px;
-  --text-title--line-height: 22px;
-  --text-section: 20px;
-  --text-section--line-height: 26px;
-  --text-hero: 30px;
-  --text-hero--line-height: 36px;
-  --text-page: 28px;
-  --text-page--line-height: 34px;
-  --text-display: 44px;
-  --text-display--line-height: 50px;
+  --text-micro: 0.6875rem;
+  --text-micro--line-height: 0.875rem;
+  --text-data: 0.7812rem;
+  --text-data--line-height: 1.0625rem;
+  --text-dense: 0.8438rem;
+  --text-dense--line-height: 1.1875rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.25rem;
+  --text-title: 1rem;
+  --text-title--line-height: 1.375rem;
+  --text-section: 1.25rem;
+  --text-section--line-height: 1.625rem;
+  --text-hero: 1.875rem;
+  --text-hero--line-height: 2.25rem;
+  --text-page: 1.75rem;
+  --text-page--line-height: 2.125rem;
+  --text-display: 2.75rem;
+  --text-display--line-height: 3.125rem;
 
   --shadow-e1: var(--shadow-1);
   --shadow-e2: var(--shadow-2);
@@ -46,16 +46,16 @@
 }
 
 :root {
-  --control-sm: 28px;
-  --control-md: 34px;
-  --control-lg: 40px;
+  --control-sm: 1.75rem;
+  --control-md: 2.125rem;
+  --control-lg: 2.5rem;
   --dur-press: 90ms;
   --dur-fast: 120ms;
   --dur-base: 180ms;
   --dur-slow: 240ms;
-  --topbar: 52px;
-  --tabbar: 60px;
-  --rail: 76px;
+  --topbar: 3.25rem;
+  --tabbar: 3.75rem;
+  --rail: 4.75rem;
 }
 
 :root,

@@ -30,7 +30,7 @@ export function Tooltip({ content, side = "bottom", children, className }: { con
     <span className={cx("relative inline-flex", className)} onPointerEnter={() => show(350)} onPointerLeave={hide} onFocus={() => show(0)} onBlur={hide} onKeyDown={(event) => { if (event.key === "Escape") hide(); }}>
       {child}
       {open ? (
-        <span id={id} role="tooltip" className={cx("surface-overlay anim-fade pointer-events-none absolute z-[60] flex w-max max-w-[280px] items-center gap-2 whitespace-normal rounded-input px-2.5 py-1.5 text-data text-text", PLACE[side])}>
+        <span id={id} role="tooltip" className={cx("surface-overlay anim-fade pointer-events-none absolute z-[60] flex w-max max-w-[17.5rem] items-center gap-2 whitespace-normal rounded-input px-2.5 py-1.5 text-data text-text", PLACE[side])}>
           {content}
         </span>
       ) : null}

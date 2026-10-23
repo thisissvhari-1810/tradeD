@@ -66,10 +66,10 @@ export default function AdminPage() {
           </dl>
           <div className="mt-5 grid gap-3 border-t border-border-soft pt-5 md:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Client id
-              <input className="h-[34px] text-dense text-text" inputMode="numeric" autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder={status?.clientTail ? `Leave blank to keep the id ending ${status.clientTail}` : "Numeric client id"} />
+              <input className="h-[2.125rem] text-dense text-text" inputMode="numeric" autoComplete="off" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder={status?.clientTail ? `Leave blank to keep the id ending ${status.clientTail}` : "Numeric client id"} />
             </label>
             <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Access token
-              <input className="h-[34px] text-dense text-text" type="password" autoComplete="off" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} placeholder="Paste a new token to replace the saved one" />
+              <input className="h-[2.125rem] text-dense text-text" type="password" autoComplete="off" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} placeholder="Paste a new token to replace the saved one" />
             </label>
           </div>
           {error ? <Notice tone="loss" className="mt-3">{error}</Notice> : null}
@@ -172,16 +172,16 @@ function DemoCapital() {
         <p className="eyebrow mb-3">{student ? `Adjust ${student.name}` : "Select a student above"}</p>
         <div className="grid gap-3 md:grid-cols-[160px_200px_minmax(0,1fr)]">
           <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Amount (₹)
-            <input className="num h-[34px] text-text" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" />
+            <input className="num h-[2.125rem] text-text" value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" />
           </label>
           <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Direction
-            <select className="h-[34px] py-0 text-text" value={direction} onChange={(event) => setDirection(event.target.value as "credit" | "debit")}>
+            <select className="h-[2.125rem] py-0 text-text" value={direction} onChange={(event) => setDirection(event.target.value as "credit" | "debit")}>
               <option value="credit">Add capital</option>
               <option value="debit">Reduce available cash</option>
             </select>
           </label>
           <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Reason
-            <input className="h-[34px] text-text" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this allocation is being made" />
+            <input className="h-[2.125rem] text-text" value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why this allocation is being made" />
           </label>
         </div>
         {student ? <p className="mt-3 text-data text-muted">{student.name} has <span className="num text-text-2">{student.cashAvailable}</span> available and <span className="num text-text-2">{student.cashReserved}</span> reserved. A reduction cannot exceed available cash, and it does not close positions.</p> : null}

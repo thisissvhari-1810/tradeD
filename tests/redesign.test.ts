@@ -60,7 +60,7 @@ describe("order ticket layout", () => {
 
   it("is docked on large screens instead of floating over the chain", () => {
     expect(ticket).toContain("lg:static");
-    expect(ticket).toContain("sm:w-[380px]");
+    expect(ticket).toContain("sm:w-[23.75rem]");
   });
 });
 

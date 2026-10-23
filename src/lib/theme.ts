@@ -32,3 +32,10 @@ export function withAlpha(hex: string, alpha: number) {
   const blue = value & 255;
   return `rgba(${red},${green},${blue},${alpha})`;
 }
+
+/** Chart axis text: 10px at the base size, growing with the interface on large monitors. */
+export function axisFontSize() {
+  if (typeof document === "undefined") return 10;
+  const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  return Math.round((10 * rem) / 16);
+}

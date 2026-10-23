@@ -107,23 +107,23 @@ export function DemoTicket({
               <h2 className="text-sm font-semibold">{symbol}</h2>
               <DemoModeBadge>PAPER TRADING</DemoModeBadge>
             </div>
-            <p className="mt-1 text-[11px] text-muted">{date || "No date"} · {cursor != null ? formatIst(cursor) : "Replay time unavailable"} · {timeframe} · {REPLAY_STATUS_LABEL[status]}</p>
+            <p className="mt-1 text-[0.6875rem] text-muted">{date || "No date"} · {cursor != null ? formatIst(cursor) : "Replay time unavailable"} · {timeframe} · {REPLAY_STATUS_LABEL[status]}</p>
           </div>
           <button type="button" className="rounded-lg px-2 py-1 text-xs text-muted" aria-label="Close paper trade" onClick={onClose}>Close</button>
         </div>
-        <p className="mt-2 text-[11px] text-info">Simulated price {price != null ? `₹${price.toFixed(2)}` : "—"}. A market order uses the open while the minute is forming, and the close after that minute ends. Stops and limits use only the revealed range.</p>
+        <p className="mt-2 text-[0.6875rem] text-info">Simulated price {price != null ? `₹${price.toFixed(2)}` : "—"}. A market order uses the open while the minute is forming, and the close after that minute ends. Stops and limits use only the revealed range.</p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
           <button type="button" className={`rounded-full py-1.5 font-semibold ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("BUY")}>Buy</button>
           <button type="button" className={`rounded-full py-1.5 font-semibold ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("SELL")}>Sell</button>
-          <label className="text-[11px] text-muted">Quantity<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm text-text" value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" /></label>
-          <label className="text-[11px] text-muted">Order<select className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={type} onChange={(event) => setType(event.target.value as DemoOrderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option><option value="STOP_LIMIT">Stop-limit</option></select></label>
-          {type === "LIMIT" || type === "STOP_LIMIT" ? <label className="text-[11px] text-muted">Limit<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal" /></label> : null}
-          {type === "STOP" || type === "STOP_LIMIT" ? <label className="text-[11px] text-muted">Stop trigger<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} inputMode="decimal" /></label> : null}
-          <label className="text-[11px] text-muted">Stop-loss<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
-          <label className="text-[11px] text-muted">Target<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
+          <label className="text-[0.6875rem] text-muted">Quantity<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm text-text" value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" /></label>
+          <label className="text-[0.6875rem] text-muted">Order<select className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={type} onChange={(event) => setType(event.target.value as DemoOrderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option><option value="STOP_LIMIT">Stop-limit</option></select></label>
+          {type === "LIMIT" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Limit<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal" /></label> : null}
+          {type === "STOP" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Stop trigger<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} inputMode="decimal" /></label> : null}
+          <label className="text-[0.6875rem] text-muted">Stop-loss<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
+          <label className="text-[0.6875rem] text-muted">Target<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
         </div>
-        <label className="mt-2 flex items-center gap-2 text-[11px] text-muted"><input type="checkbox" checked={book.allowShort} onChange={(event) => onAllowShort(event.target.checked)} />Allow short selling. A sell above the long quantity opens a short.</label>
-        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-muted">
+        <label className="mt-2 flex items-center gap-2 text-[0.6875rem] text-muted"><input type="checkbox" checked={book.allowShort} onChange={(event) => onAllowShort(event.target.checked)} />Allow short selling. A sell above the long quantity opens a short.</label>
+        <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.6875rem] text-muted">
           <span>Available <b className="num text-text">₹{formatDemoRupees(account.cashPaise)}</b></span>
           <span>Buying power <b className="num text-text">₹{formatDemoRupees(account.buyingPowerPaise)}</b></span>
           <span>Reserved <b className="num text-text">₹{formatDemoRupees(account.reservedPaise)}</b></span>
@@ -131,9 +131,9 @@ export function DemoTicket({
           <span>Realized <b className={`num ${tone(account.realizedPaise)}`}>₹{formatDemoRupees(account.realizedPaise)}</b></span>
           <span>Charges <b className="num text-text">₹{formatDemoRupees(account.chargesPaise)}</b></span>
         </div>
-        <p className="mt-2 text-[11px] text-muted">{estimate ? `Estimated value ₹${formatDemoRupees(estimate.notional)}. Fees ₹${formatDemoRupees(estimate.charges)}. Maximum trade value ₹${formatDemoRupees(Math.max(0, buyingPower(book, marks)))}.` : "Enter a quantity to estimate the order."} {side === "SELL" && position && position.quantity > 0 ? `You hold ${position.quantity}.` : ""} {side === "SELL" && (!position || position.quantity <= 0) && !book.allowShort ? "Sell closes a long. Short selling is off." : ""}</p>
+        <p className="mt-2 text-[0.6875rem] text-muted">{estimate ? `Estimated value ₹${formatDemoRupees(estimate.notional)}. Fees ₹${formatDemoRupees(estimate.charges)}. Maximum trade value ₹${formatDemoRupees(Math.max(0, buyingPower(book, marks)))}.` : "Enter a quantity to estimate the order."} {side === "SELL" && position && position.quantity > 0 ? `You hold ${position.quantity}.` : ""} {side === "SELL" && (!position || position.quantity <= 0) && !book.allowShort ? "Sell closes a long. Short selling is off." : ""}</p>
         {position ? (
-          <div className="mt-3 rounded-xl border border-border bg-elevated p-2 text-[11px]">
+          <div className="mt-3 rounded-xl border border-border bg-elevated p-2 text-[0.6875rem]">
             <p className="text-muted">{position.quantity > 0 ? "Long" : "Short"} {Math.abs(position.quantity)} · Avg ₹{formatDemoRupees(position.avgPaise)} · Now {price != null ? `₹${price.toFixed(2)}` : "—"}</p>
             <p className={`num mt-1 font-semibold ${tone(unrealized)}`}>Unrealized {unrealized == null ? "—" : `₹${formatDemoRupees(unrealized)}`} {price != null && position.avgPaise ? `(${(((price * 100 - position.avgPaise) / position.avgPaise) * (position.quantity > 0 ? 1 : -1) * 100).toFixed(2)}%)` : ""}</p>
             <p className="mt-1 text-muted">Risk {risk == null ? "—" : `₹${formatDemoRupees(risk)}`} · Reward {reward == null ? "—" : `₹${formatDemoRupees(reward)}`}</p>
@@ -146,28 +146,28 @@ export function DemoTicket({
               <button type="button" className="rounded-full border border-border px-2 py-1" onClick={() => { const result = onProtection(null, null); setError(result.ok ? "" : result.error); }}>Remove levels</button>
             </div>
           </div>
-        ) : <p className="mt-3 text-[11px] text-muted">No open paper position in {symbol}.</p>}
+        ) : <p className="mt-3 text-[0.6875rem] text-muted">No open paper position in {symbol}.</p>}
         {book.orders.filter((order) => order.status === "OPEN").map((order) => (
-          <p key={order.id} className="mt-2 flex items-center justify-between gap-2 text-[11px] text-muted">
+          <p key={order.id} className="mt-2 flex items-center justify-between gap-2 text-[0.6875rem] text-muted">
             <span>{order.status} · {order.side} {order.quantity} {order.symbol} {order.type} {order.sessionDate ?? ""} {order.reason}</span>
             <button type="button" className="text-loss" onClick={() => onCancel(order.id)}>Cancel</button>
           </p>
         ))}
-        {error ? <p className="mt-2 text-[11px] text-warning">{error}</p> : null}
-        {notice ? <p className="mt-2 text-[11px] text-info">{notice}</p> : null}
+        {error ? <p className="mt-2 text-[0.6875rem] text-warning">{error}</p> : null}
+        {notice ? <p className="mt-2 text-[0.6875rem] text-info">{notice}</p> : null}
         <button type="button" className={`mt-3 w-full rounded-full py-2 text-sm font-semibold ${side === "BUY" ? "bg-profit text-on-signal" : "bg-loss text-on-signal"}`} onClick={submit}>{side === "BUY" ? "Confirm buy" : "Confirm sell"}</button>
         <div className="mt-4 border-t border-border pt-3">
-          <div className="flex items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-2 text-[0.6875rem]">
             <span className="font-semibold">Trades</span>
             <button type="button" className={scope === "session" ? "text-primary" : "text-muted"} onClick={() => setScope("session")}>This date</button>
             <button type="button" className={scope === "all" ? "text-primary" : "text-muted"} onClick={() => setScope("all")}>All sessions</button>
           </div>
-          <p className="mt-1 text-[11px] text-muted">{stats.trades} trades · Wins {stats.wins} · Losses {stats.losses} · Win rate {stats.winRate == null ? "—" : `${(stats.winRate * 100).toFixed(0)}%`} · Net <span className={tone(stats.net)}>₹{formatDemoRupees(stats.net)}</span> · Drawdown ₹{formatDemoRupees(stats.maxDrawdown)}</p>
+          <p className="mt-1 text-[0.6875rem] text-muted">{stats.trades} trades · Wins {stats.wins} · Losses {stats.losses} · Win rate {stats.winRate == null ? "—" : `${(stats.winRate * 100).toFixed(0)}%`} · Net <span className={tone(stats.net)}>₹{formatDemoRupees(stats.net)}</span> · Drawdown ₹{formatDemoRupees(stats.maxDrawdown)}</p>
           <div className="mt-2 space-y-1">
-            {trades.length === 0 ? <p className="text-[11px] text-muted">No closed paper trades in this view.</p> : trades.slice().reverse().slice(0, 8).map((trade) => <TradeRow key={trade.id} trade={trade} />)}
+            {trades.length === 0 ? <p className="text-[0.6875rem] text-muted">No closed paper trades in this view.</p> : trades.slice().reverse().slice(0, 8).map((trade) => <TradeRow key={trade.id} trade={trade} />)}
           </div>
         </div>
-        <p className="mt-3 text-[10px] text-muted">This book stays in this browser. It is not sent to a broker or the practice ledger. Changing timeframe does not reset it.</p>
+        <p className="mt-3 text-[0.625rem] text-muted">This book stays in this browser. It is not sent to a broker or the practice ledger. Changing timeframe does not reset it.</p>
       </div>
     </div>
   );
@@ -176,7 +176,7 @@ export function DemoTicket({
 function TradeRow({ trade }: { trade: DemoTrade }) {
   const minutes = Math.max(0, Math.round((trade.exitTime - trade.entryTime) / 60));
   return (
-    <p className="text-[11px] text-muted">
+    <p className="text-[0.6875rem] text-muted">
       {trade.symbol} {trade.side} {trade.quantity} · {formatIst(trade.entryTime)} ₹{formatDemoRupees(trade.entryPaise)} → {formatIst(trade.exitTime)} ₹{formatDemoRupees(trade.exitPaise)} · {minutes}m · {trade.exitReason} · <span className={tone(trade.netPaise)}>₹{formatDemoRupees(trade.netPaise)}</span>
     </p>
   );

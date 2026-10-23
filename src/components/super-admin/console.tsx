@@ -71,7 +71,7 @@ export function SuperAdminConsole() {
   }, [reload]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4 p-4 lg:p-6">
+    <div className="mx-auto flex w-full max-w-[87.5rem] flex-col gap-4 p-4 lg:p-6">
       <PageHeader
         eyebrow={<><Badge tone="primary"><ShieldCheck className="h-3 w-3" aria-hidden />Super Admin</Badge> Restricted</>}
         title="Administration"
@@ -127,7 +127,7 @@ function UserTable({ reload, onOpen }: { reload: number; onOpen: (id: string) =>
   return (
     <Section flush>
       <div className="flex flex-wrap items-end gap-2 border-b border-border-soft p-3">
-        <label className={cx(LABEL, "min-w-[220px] flex-1")}>Search
+        <label className={cx(LABEL, "min-w-[13.75rem] flex-1")}>Search
           <span className="relative"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" aria-hidden /><input className={cx(FIELD, "pl-8")} placeholder="Name, email or user ID" value={q} onChange={(event) => { setQ(event.target.value); setPage(1); }} /></span>
         </label>
         <label className={cx(LABEL, "w-36")}>Status<select className={FIELD} value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All</option><option value="ACTIVE">Active</option><option value="SUSPENDED">Suspended</option><option value="DISABLED">Archived</option></select></label>
@@ -139,12 +139,12 @@ function UserTable({ reload, onOpen }: { reload: number; onOpen: (id: string) =>
       {data && data.users.length === 0 ? <EmptyState icon={<Users />} title="No users match these filters" /> : null}
       {data && data.users.length > 0 ? (
         <div className="overflow-x-auto">
-          <table className="ui-table w-full min-w-[980px] border-separate border-spacing-0 text-data" aria-label="Users">
+          <table className="ui-table w-full min-w-[61.25rem] border-separate border-spacing-0 text-data" aria-label="Users">
             <thead><tr className="text-left text-micro text-muted">{["User", "Role", "Status", "Demo wallet", "Live wallet", "Multi-account", "Created", "Last login", ""].map((header) => <th key={header} scope="col" className="border-b border-border-soft px-3 py-2 font-medium">{header || <span className="sr-only">Open</span>}</th>)}</tr></thead>
             <tbody>
               {data.users.map((user) => (
                 <tr key={user.id} className="cursor-pointer hover:bg-hover" onClick={() => onOpen(user.id)}>
-                  <td className="border-b border-border-soft px-3 py-2"><span className="block font-semibold text-text">{user.name}</span><span className="block text-micro text-muted">{user.email}</span><span className="num block text-[10px] text-muted">{user.id}</span></td>
+                  <td className="border-b border-border-soft px-3 py-2"><span className="block font-semibold text-text">{user.name}</span><span className="block text-micro text-muted">{user.email}</span><span className="num block text-[0.625rem] text-muted">{user.id}</span></td>
                   <td className="border-b border-border-soft px-3 py-2"><Badge tone={user.role === "SUPER_ADMIN" ? "primary" : "neutral"}>{user.roleLabel}</Badge></td>
                   <td className="border-b border-border-soft px-3 py-2"><Badge tone={STATUS_TONE[user.status]} dot>{STATUS_LABEL[user.status]}</Badge></td>
                   <td className="num border-b border-border-soft px-3 py-2">{user.wallets.DEMO?.available ?? <span className="text-muted">—</span>}</td>
@@ -196,7 +196,7 @@ function CreateUserDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   };
 
   return (
-    <Drawer open onClose={onClose} modal label="Create user" title="Create user" subtitle="The user sets their own password through a one-time link." width="w-[560px]" footer={
+    <Drawer open onClose={onClose} modal label="Create user" title="Create user" subtitle="The user sets their own password through a one-time link." width="w-[35rem]" footer={
       result ? <Button block variant="primary" onClick={() => { onCreated(result.userId); onClose(); }}>Open user</Button> : (
         <div className="flex flex-col gap-2">
           {error ? <Notice tone="loss">{error}</Notice> : null}
@@ -241,7 +241,7 @@ function UserDrawer({ id, onClose, onChanged }: { id: string; onClose: () => voi
   const changed = () => { setTick((value) => value + 1); onChanged(); };
   const user = detail?.user;
   return (
-    <Drawer open onClose={onClose} modal label="Manage user" title={user?.name ?? "User"} subtitle={user ? `${user.email} · ${user.roleLabel}` : undefined} width="w-[760px]" footer={<Button block variant="secondary" onClick={onClose}>Close</Button>}>
+    <Drawer open onClose={onClose} modal label="Manage user" title={user?.name ?? "User"} subtitle={user ? `${user.email} · ${user.roleLabel}` : undefined} width="w-[47.5rem]" footer={<Button block variant="secondary" onClick={onClose}>Close</Button>}>
       {error ? <Notice tone="loss">{error}</Notice> : null}
       {!detail && !error ? <div className="flex flex-col gap-2">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} className="h-10" />)}</div> : null}
       {detail && user ? (
@@ -391,8 +391,8 @@ function WalletPanel({ detail, onChanged }: { detail: Detail; onChanged: () => v
         <label className={cx(LABEL, "w-36")}>To<input className={FIELD} type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label>
       </div>
       {rows.length === 0 ? <EmptyState icon={<Wallet />} title="No transactions" /> : (
-        <div className="max-h-[360px] overflow-auto rounded-md border border-border-soft">
-          <table className="ui-table w-full min-w-[720px] border-separate border-spacing-0 text-data" aria-label="Wallet transactions">
+        <div className="max-h-[22.5rem] overflow-auto rounded-md border border-border-soft">
+          <table className="ui-table w-full min-w-[45rem] border-separate border-spacing-0 text-data" aria-label="Wallet transactions">
             <thead><tr className="text-left text-micro text-muted">{["When", "Wallet", "Type", "Amount", "Before", "After", "Reason", "Admin"].map((header) => <th key={header} scope="col" className="sticky top-0 border-b border-border-soft bg-panel px-2.5 py-2 font-medium">{header}</th>)}</tr></thead>
             <tbody>
               {rows.map((row) => (
@@ -403,7 +403,7 @@ function WalletPanel({ detail, onChanged }: { detail: Detail; onChanged: () => v
                   <td className={cx("num border-b border-border-soft px-2.5 py-1.5 font-semibold", BigInt(row.amountPaise) < 0n ? "text-loss" : "text-profit")}>{row.amount}</td>
                   <td className="num border-b border-border-soft px-2.5 py-1.5 text-muted">{row.balanceBefore}</td>
                   <td className="num border-b border-border-soft px-2.5 py-1.5">{row.balanceAfter}</td>
-                  <td className="max-w-[220px] truncate border-b border-border-soft px-2.5 py-1.5 text-text-2" title={row.reason}>{row.reason || "—"}</td>
+                  <td className="max-w-[13.75rem] truncate border-b border-border-soft px-2.5 py-1.5 text-text-2" title={row.reason}>{row.reason || "—"}</td>
                   <td className="border-b border-border-soft px-2.5 py-1.5 text-muted">{row.admin ?? "—"}</td>
                 </tr>
               ))}
@@ -418,8 +418,8 @@ function WalletPanel({ detail, onChanged }: { detail: Detail; onChanged: () => v
 function ActivityPanel({ orders }: { orders: Detail["orders"] }) {
   if (orders.length === 0) return <EmptyState icon={<RefreshCw />} title="No orders yet" />;
   return (
-    <div className="max-h-[440px] overflow-auto rounded-md border border-border-soft">
-      <table className="ui-table w-full min-w-[640px] border-separate border-spacing-0 text-data" aria-label="Orders">
+    <div className="max-h-[27.5rem] overflow-auto rounded-md border border-border-soft">
+      <table className="ui-table w-full min-w-[40rem] border-separate border-spacing-0 text-data" aria-label="Orders">
         <thead><tr className="text-left text-micro text-muted">{["When", "Wallet", "Instrument", "Side", "Qty", "Status", "Avg fill"].map((header) => <th key={header} scope="col" className="sticky top-0 border-b border-border-soft bg-panel px-2.5 py-2 font-medium">{header}</th>)}</tr></thead>
         <tbody>
           {orders.map((order) => (

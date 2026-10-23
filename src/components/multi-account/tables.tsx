@@ -37,7 +37,7 @@ export function OrdersTable({ doc, busy, onReconcile, onCancel }: { doc: DemoDoc
     { key: "filled", header: "Filled", numeric: true, render: ({ leg }) => leg.filledQuantity },
     { key: "avg", header: "Avg price", numeric: true, render: ({ leg }) => inr(leg.avgPaise) },
     { key: "status", header: "Status", render: ({ request, leg }) => <span className="flex flex-col items-start gap-1"><LegChip status={leg.status} /><span className="text-micro text-muted">Request: <span className={TONE_TEXT[OVERALL_TONE[request.status]]}>{OVERALL_SHORT[request.status]}</span></span></span> },
-    { key: "reason", header: "Reason", render: ({ leg }) => <span className="block max-w-[260px] text-data text-muted">{leg.reason}</span> },
+    { key: "reason", header: "Reason", render: ({ leg }) => <span className="block max-w-[16.25rem] text-data text-muted">{leg.reason}</span> },
     { key: "ref", header: "Reference", render: ({ leg }) => <span className="num whitespace-nowrap text-muted">{leg.ref}</span> },
     { key: "pnl", header: "Realised P&L", numeric: true, render: ({ leg }) => <span className={TONE_TEXT[pnlTone(leg.realizedPaise)]}>{leg.realizedPaise == null ? "—" : pnl(leg.realizedPaise)}</span> },
     { key: "actions", header: <span className="sr-only">Actions</span>, align: "right", render: (row) => open(row) ? (
@@ -89,7 +89,7 @@ export function OrdersTable({ doc, busy, onReconcile, onCancel }: { doc: DemoDoc
       <Table
         label="Multi-account orders"
         dense
-        className="max-h-[560px] rounded-md border border-border-soft"
+        className="max-h-[35rem] rounded-md border border-border-soft"
         columns={columns}
         rows={shown}
         rowKey={({ leg }) => leg.id}
@@ -147,7 +147,7 @@ export function PositionsView({ doc, marks, busy, onClose }: { doc: DemoDoc; mar
         <Button size="sm" variant="danger" disabled={chosen.length === 0} onClick={() => setConfirming(true)}>Close selected ({chosen.length})</Button>
       </div>
       <h3 className="text-dense font-semibold text-text">Per account</h3>
-      <Table label="Positions per account" dense className="max-h-[440px] rounded-md border border-border-soft" columns={perAccount} rows={rows} rowKey={rowId} />
+      <Table label="Positions per account" dense className="max-h-[27.5rem] rounded-md border border-border-soft" columns={perAccount} rows={rows} rowKey={rowId} />
       <div>
         <h3 className="mb-2 text-dense font-semibold text-text">Combined across accounts <span className="font-normal text-muted">· same contract only, read-only</span></h3>
         <Table

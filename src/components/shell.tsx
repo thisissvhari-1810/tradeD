@@ -299,7 +299,7 @@ export function Shell({ children }: { children: ReactNode }) {
                       current ? "text-text" : "text-muted hover:text-text",
                     )}
                   >
-                    {current ? <span className="absolute -left-2 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden /> : null}
+                    {current ? <span className="absolute -left-2 top-1/2 h-6 w-[0.1875rem] -translate-y-1/2 rounded-r-full bg-primary" aria-hidden /> : null}
                     <span className={cx(
                       "relative grid h-8 w-11 place-items-center rounded-input transition-colors duration-150 [@media(max-height:820px)]:h-7",
                       current ? "bg-primary-soft text-primary" : "group-hover:bg-hover",
@@ -315,7 +315,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="flex shrink-0 flex-col items-center gap-1 border-t border-border-soft py-3 [@media(max-height:820px)]:py-1.5">
             <Tooltip side="right" content={theme === "light" ? "Dark theme" : "Light theme"}>
               <button type="button" className="grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
-                {theme === "light" ? <Moon className="h-[18px] w-[18px]" aria-hidden /> : <Sun className="h-[18px] w-[18px]" aria-hidden />}
+                {theme === "light" ? <Moon className="h-[1.125rem] w-[1.125rem]" aria-hidden /> : <Sun className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
               </button>
             </Tooltip>
           </div>
@@ -356,13 +356,13 @@ export function Shell({ children }: { children: ReactNode }) {
             <div className="flex shrink-0 items-center gap-0.5">
               <Tooltip content="Notifications">
                 <button type="button" className="relative grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={unread ? "Notifications, unread" : "Notifications"} aria-expanded={openNotes} onClick={() => { setOpenNotes((value) => !value); setOpenUser(false); }}>
-                  <Bell className="h-[18px] w-[18px]" aria-hidden />
+                  <Bell className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   {unread ? <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-background bg-loss" /> : null}
                 </button>
               </Tooltip>
               <Tooltip content={theme === "light" ? "Dark theme" : "Light theme"}>
                 <button type="button" className="hidden h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text sm:grid lg:hidden" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
-                  {theme === "light" ? <Moon className="h-[18px] w-[18px]" aria-hidden /> : <Sun className="h-[18px] w-[18px]" aria-hidden />}
+                  {theme === "light" ? <Moon className="h-[1.125rem] w-[1.125rem]" aria-hidden /> : <Sun className="h-[1.125rem] w-[1.125rem]" aria-hidden />}
                 </button>
               </Tooltip>
             </div>
@@ -374,7 +374,7 @@ export function Shell({ children }: { children: ReactNode }) {
               {openUser ? (
                 <div className="surface-overlay anim-rise absolute right-0 top-11 z-40 w-64 rounded-card p-1.5" role="menu">
                   <div className="px-2.5 py-2">
-                    <p className="truncate text-[13px] font-semibold">{user?.name ?? "Signed in"}</p>
+                    <p className="truncate text-[0.8125rem] font-semibold">{user?.name ?? "Signed in"}</p>
                     <p className="truncate text-data text-muted">{user?.email}</p>
                     {user?.role ? <Badge className="mt-1.5">{user.role.replace("_", " ")}</Badge> : null}
                   </div>
@@ -399,7 +399,7 @@ export function Shell({ children }: { children: ReactNode }) {
             const current = active(href);
             return (
               <Link key={href} href={href} aria-current={current ? "page" : undefined} className={cx("relative flex flex-1 flex-col items-center justify-center gap-1 text-micro font-medium transition-colors", current ? "text-primary" : "text-muted")}>
-                {current ? <span className="absolute top-0 h-[3px] w-8 rounded-b-full bg-primary" aria-hidden /> : null}
+                {current ? <span className="absolute top-0 h-[0.1875rem] w-8 rounded-b-full bg-primary" aria-hidden /> : null}
                 <Icon className="h-5 w-5" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
                 {item.label}
               </Link>
@@ -414,7 +414,7 @@ export function Shell({ children }: { children: ReactNode }) {
         {menu ? (
           <div className="fixed inset-0 z-50 lg:hidden">
             <button type="button" className="anim-fade absolute inset-0 bg-[var(--scrim)]" aria-label="Close menu" onClick={() => setMenu(false)} />
-            <div className="surface-modal anim-sheet absolute inset-x-0 bottom-0 rounded-t-sheet p-4 pb-[max(16px,env(safe-area-inset-bottom))]" role="dialog" aria-label="All pages">
+            <div className="surface-modal anim-sheet absolute inset-x-0 bottom-0 rounded-t-sheet p-4 pb-[max(1rem,env(safe-area-inset-bottom))]" role="dialog" aria-label="All pages">
               <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border-strong" aria-hidden />
               <p className="eyebrow mb-2 px-1">All pages</p>
               <div className="grid grid-cols-4 gap-1.5">
@@ -436,9 +436,9 @@ export function Shell({ children }: { children: ReactNode }) {
         <ToastStack items={toasts} onDismiss={dismiss} />
 
         {openNotes ? (
-          <div className="surface-overlay anim-rise fixed right-3 top-[calc(var(--topbar)+4px)] z-40 w-[min(360px,calc(100vw-1.5rem))] overflow-hidden rounded-card" role="dialog" aria-label="Notifications">
+          <div className="surface-overlay anim-rise fixed right-3 top-[calc(var(--topbar)+0.25rem)] z-40 w-[min(22.5rem,calc(100vw-1.5rem))] overflow-hidden rounded-card" role="dialog" aria-label="Notifications">
             <div className="flex items-center justify-between border-b border-border-soft px-3.5 py-2.5">
-              <span className="text-[13px] font-semibold">Notifications</span>
+              <span className="text-[0.8125rem] font-semibold">Notifications</span>
               <span className="flex items-center gap-1">
                 <Button size="sm" variant="ghost" disabled={!unread} onClick={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}>Mark all read</Button>
                 <button type="button" className="grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-elevated" aria-label="Close notifications" onClick={() => setOpenNotes(false)}><X className="h-4 w-4" aria-hidden /></button>
@@ -448,14 +448,14 @@ export function Shell({ children }: { children: ReactNode }) {
               {notes.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <Bell className="mx-auto h-5 w-5 text-muted" aria-hidden />
-                  <p className="mt-2 text-[13px] font-medium">You’re all caught up</p>
+                  <p className="mt-2 text-[0.8125rem] font-medium">You’re all caught up</p>
                   <p className="mt-0.5 text-data text-muted">Price alerts and order updates appear here.</p>
                 </div>
               ) : notes.slice(0, 8).map((note) => (
                 <div key={note.id} className="flex gap-2 border-b border-border px-3 py-2.5 last:border-b-0">
                   <span className={cx("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", note.read ? "bg-transparent" : "bg-primary")} aria-hidden />
                   <div className="min-w-0">
-                    <p className="text-[13px] font-medium">{note.title}</p>
+                    <p className="text-[0.8125rem] font-medium">{note.title}</p>
                     <p className="text-data text-muted">{note.body}</p>
                   </div>
                 </div>
@@ -474,7 +474,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 {pendingMode === "live" ? <Eye className="h-5 w-5" /> : <FlaskConical className="h-5 w-5" />}
               </span>
               <h2 className="text-section font-semibold">Switch to {pendingMode === "live" ? "live view" : "demo"}?</h2>
-              <p className="mt-2 text-[13px] text-text-2">Demo and Live view each have their own ₹1,00,000 practice wallet, with separate positions and history. Live view paper-trades at live prices; nothing is sent to Dhan. Real orders are placed only from Accounts.</p>
+              <p className="mt-2 text-[0.8125rem] text-text-2">Demo and Live view each have their own ₹1,00,000 practice wallet, with separate positions and history. Live view paper-trades at live prices; nothing is sent to Dhan. Real orders are placed only from Accounts.</p>
               <div className="mt-5 flex justify-end gap-2">
                 <Button autoFocus onClick={() => setPendingMode(null)}>Stay</Button>
                 <Button variant="primary" onClick={() => { localStorage.setItem("td-mode", pendingMode); setMode(pendingMode); setPendingMode(null); window.location.reload(); }}>Switch</Button>
@@ -490,9 +490,9 @@ export function Shell({ children }: { children: ReactNode }) {
 function BrandMark() {
   return (
     <Link href="/" className="group flex items-center gap-2 rounded-input" aria-label="TradeD home">
-      <span className="relative grid h-9 w-9 place-items-center overflow-hidden rounded-[11px] bg-primary text-on-primary shadow-e2 ring-1 ring-primary/40">
+      <span className="relative grid h-9 w-9 place-items-center overflow-hidden rounded-[0.6875rem] bg-primary text-on-primary shadow-e2 ring-1 ring-primary/40">
         <span className="absolute inset-0 bg-[linear-gradient(135deg,transparent_40%,var(--demo)_160%)] opacity-60" aria-hidden />
-        <Activity className="relative h-[18px] w-[18px]" strokeWidth={2.4} aria-hidden />
+        <Activity className="relative h-[1.125rem] w-[1.125rem]" strokeWidth={2.4} aria-hidden />
       </span>
     </Link>
   );

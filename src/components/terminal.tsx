@@ -374,7 +374,7 @@ export function Terminal() {
             </select>
             <button className="border border-border px-2 py-1 text-xs" title="New watchlist" onClick={() => { const name = window.prompt("Watchlist name"); if (name) void watchAction("create", { name }).catch((error: unknown) => desk.toast(error instanceof Error ? error.message : "Could not create.")); }}>+</button>
           </div>
-          <div className="flex gap-1 border-b border-border px-2 py-1 text-[10px] text-muted">
+          <div className="flex gap-1 border-b border-border px-2 py-1 text-[0.625rem] text-muted">
             {(["custom", "name", "price", "change"] as const).map((item) => (
               <button key={item} className={sort === item ? "text-text" : ""} onClick={() => setSort(item)}>{item}</button>
             ))}
@@ -404,14 +404,14 @@ export function Terminal() {
                   <div className="flex min-w-0 items-center gap-2">
                     <StockLogo symbol={item.symbol} name={item.name} size={28} />
                     <div className="min-w-0">
-                      <div className="flex items-baseline gap-2"><span className="font-medium">{item.symbol}</span><span className="truncate text-[10px] text-muted">{item.exchange}</span></div>
-                      <div className="truncate text-[10px] text-muted">{item.name}</div>
+                      <div className="flex items-baseline gap-2"><span className="font-medium">{item.symbol}</span><span className="truncate text-[0.625rem] text-muted">{item.exchange}</span></div>
+                      <div className="truncate text-[0.625rem] text-muted">{item.name}</div>
                     </div>
                   </div>
                   <div className="text-right">
                     <div className={`num text-xs ${tone(move?.abs)}`}>{rowQuote ? money(rowQuote.last) : "…"}</div>
-                    <div className={`num whitespace-nowrap text-[10px] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : rowQuote ? "—" : ""}</div>
-                    <div className="mt-0.5 flex justify-end gap-1 text-[10px] text-muted">
+                    <div className={`num whitespace-nowrap text-[0.625rem] ${tone(move?.abs)}`}>{move ? `${move.abs >= 0 ? "+" : ""}${move.abs.toFixed(2)} (${move.pct.toFixed(2)}%)` : rowQuote ? "—" : ""}</div>
+                    <div className="mt-0.5 flex justify-end gap-1 text-[0.625rem] text-muted">
                       <button title="Move up" onClick={(event) => { event.stopPropagation(); moveItem(item.symbol, -1); }}>↑</button>
                       <button title="Move down" onClick={(event) => { event.stopPropagation(); moveItem(item.symbol, 1); }}>↓</button>
                     </div>
@@ -428,22 +428,22 @@ export function Terminal() {
               <div className="text-sm font-semibold">{symbol}</div>
               <div className="whitespace-nowrap text-xs"><span className="num">{quote ? money(quote.last) : "—"}</span> {selectedMove ? <span className={`num ${tone(selectedMove.abs)}`}>{`${selectedMove.abs >= 0 ? "+" : ""}${selectedMove.abs.toFixed(2)} (${selectedMove.pct.toFixed(2)}%)`}</span> : null}</div>
             </div>
-            <span className={`rounded px-1.5 py-0.5 text-[10px] ${feedBadge === "Live" ? "bg-profit/15 text-profit" : "bg-elevated text-muted"}`} title={stream.detail || undefined}>{feedBadge}</span>
+            <span className={`rounded px-1.5 py-0.5 text-[0.625rem] ${feedBadge === "Live" ? "bg-profit/15 text-profit" : "bg-elevated text-muted"}`} title={stream.detail || undefined}>{feedBadge}</span>
             <div className="ml-auto flex flex-wrap gap-1">
               {CHART_SPANS.map((span) => (
-                <button key={span} className={`px-1.5 py-0.5 text-[11px] ${timeframe === span ? "bg-elevated text-text" : "text-muted"}`} onClick={() => setTimeframe(span)}>{span}</button>
+                <button key={span} className={`px-1.5 py-0.5 text-[0.6875rem] ${timeframe === span ? "bg-elevated text-text" : "text-muted"}`} onClick={() => setTimeframe(span)}>{span}</button>
               ))}
             </div>
-            <select className="py-0.5 text-[11px]" value={chartType} aria-label="Chart type" onChange={(event) => setChartType(event.target.value as ChartType)}>
+            <select className="py-0.5 text-[0.6875rem]" value={chartType} aria-label="Chart type" onChange={(event) => setChartType(event.target.value as ChartType)}>
               <option value="candle">Candles</option>
               <option value="bar">OHLC</option>
               <option value="line">Line</option>
               <option value="area">Area</option>
             </select>
-            <button className="border border-border px-2 py-0.5 text-[11px]" onClick={() => setPanel(panel === "indicators" ? null : "indicators")}>Indicators</button>
-            <button className="border border-border px-2 py-0.5 text-[11px]" onClick={() => setPanel(panel === "layouts" ? null : "layouts")}>Layouts</button>
-            <button className="border border-border px-2 py-0.5 text-[11px]" title="Reset chart" onClick={() => handleRef.current?.reset()}>Reset</button>
-            <button className="border border-border px-2 py-0.5 text-[11px]" title="Export chart" onClick={() => handleRef.current?.png(symbol)}>Export</button>
+            <button className="border border-border px-2 py-0.5 text-[0.6875rem]" onClick={() => setPanel(panel === "indicators" ? null : "indicators")}>Indicators</button>
+            <button className="border border-border px-2 py-0.5 text-[0.6875rem]" onClick={() => setPanel(panel === "layouts" ? null : "layouts")}>Layouts</button>
+            <button className="border border-border px-2 py-0.5 text-[0.6875rem]" title="Reset chart" onClick={() => handleRef.current?.reset()}>Reset</button>
+            <button className="border border-border px-2 py-0.5 text-[0.6875rem]" title="Export chart" onClick={() => handleRef.current?.png(symbol)}>Export</button>
           </div>
           {panel === "indicators" ? (
             <div className="grid gap-2 border-b border-border bg-elevated p-2 text-xs sm:grid-cols-2">
@@ -490,9 +490,9 @@ export function Terminal() {
           <div className="flex min-h-0 flex-1">
             <div className="flex w-10 shrink-0 flex-col gap-1 border-r border-border bg-panel p-1">
               {TOOLS.map(([id, label]) => (
-                <button key={id} title={label} aria-label={label} className={`h-7 text-[10px] ${tool === id ? "bg-primary text-on-primary" : "text-muted"}`} onClick={() => { setTool(id); if (id === "text") setAnnotation("Note"); }}>{id.slice(0, 2).toUpperCase()}</button>
+                <button key={id} title={label} aria-label={label} className={`h-7 text-[0.625rem] ${tool === id ? "bg-primary text-on-primary" : "text-muted"}`} onClick={() => { setTool(id); if (id === "text") setAnnotation("Note"); }}>{id.slice(0, 2).toUpperCase()}</button>
               ))}
-              {tool === "text" ? <input value={annotation} onChange={(event) => setAnnotation(event.target.value)} className="w-full px-0.5 py-1 text-[10px]" aria-label="Annotation text" /> : null}
+              {tool === "text" ? <input value={annotation} onChange={(event) => setAnnotation(event.target.value)} className="w-full px-0.5 py-1 text-[0.625rem]" aria-label="Annotation text" /> : null}
             </div>
             <div className="relative min-h-0 min-w-0 flex-1">
               {chartLoading ? <div className="absolute inset-0 z-10 grid place-items-center bg-panel/70 text-xs text-muted">Loading {symbol} {timeframe}…</div> : null}
@@ -522,12 +522,12 @@ export function Terminal() {
               )}
             </div>
           </div>
-          <p className="truncate border-t border-border px-2 py-1 text-[10px] text-muted">{candleNote || "Waiting for candle data."}</p>
+          <p className="truncate border-t border-border px-2 py-1 text-[0.625rem] text-muted">{candleNote || "Waiting for candle data."}</p>
           <div className="h-36 shrink-0 overflow-auto border-t border-border bg-panel">
             <div className="flex gap-2 border-b border-border px-2 py-1 text-xs">
               <button className={dock === "positions" ? "text-text" : "text-muted"} onClick={() => setDock("positions")}>Positions</button>
               <button className={dock === "orders" ? "text-text" : "text-muted"} onClick={() => setDock("orders")}>Orders</button>
-              <span className="ml-auto text-[10px] text-muted">Practice ledger</span>
+              <span className="ml-auto text-[0.625rem] text-muted">Practice ledger</span>
             </div>
             {dock === "positions" ? (
               <table className="text-xs">
@@ -565,7 +565,7 @@ export function Terminal() {
               <Stat label="Ask" value={quote ? money(quote.ask) : "—"} />
               <Stat label="As of" value={istTime(quote?.asOf)} />
             </dl>
-            <p className="mt-2 text-[10px] text-muted">{quote?.marketOpen ? "Cash session open" : "Cash session closed or unknown"} · {quote?.message || "No quote yet."}</p>
+            <p className="mt-2 text-[0.625rem] text-muted">{quote?.marketOpen ? "Cash session open" : "Cash session closed or unknown"} · {quote?.message || "No quote yet."}</p>
           </div>
           <form className="flex flex-1 flex-col gap-2 overflow-auto p-3 text-xs" onSubmit={(event) => { event.preventDefault(); if (canTrade) setReview(true); }}>
             <div className="grid grid-cols-2 gap-1">
@@ -590,7 +590,7 @@ export function Terminal() {
             {orderType !== "MARKET" && orderType !== "STOP" ? <label>Limit price<input className="mt-1 w-full" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} /></label> : null}
             {orderType === "STOP" || orderType === "STOP_LIMIT" ? <label>Trigger price<input className="mt-1 w-full" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} /></label> : null}
             <Field label="Validity" value="Practice session" readOnly />
-            <div className="border border-border p-2 text-[11px] text-muted">
+            <div className="border border-border p-2 text-[0.6875rem] text-muted">
               <div className="flex justify-between"><span>Estimated value</span><span className="num text-text">{estimate ? money(estimate.notional) : "—"}</span></div>
               <div className="mt-1 flex justify-between"><span>Illustrative charges</span><span className="num text-text">{estimate ? money(estimate.charges) : "—"}</span></div>
               <p className="mt-1">Charges follow the practice model, not a broker margin statement.</p>
@@ -635,7 +635,7 @@ export function Terminal() {
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
-  return <div><dt className="text-[10px] text-muted">{label}</dt><dd className="num">{value}</dd></div>;
+  return <div><dt className="text-[0.625rem] text-muted">{label}</dt><dd className="num">{value}</dd></div>;
 }
 
 function Field({ label, value }: { label: string; value: string; readOnly?: boolean }) {

@@ -40,7 +40,7 @@ export default function LoginPage() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_0%,var(--hero-glow),transparent_70%)]" aria-hidden />
       <form onSubmit={submit} className="surface-modal anim-rise relative w-full max-w-sm rounded-xl p-7">
         <div className="flex items-center gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-[12px] bg-primary text-title font-bold text-on-primary shadow-e2">T</span>
+          <span className="grid h-10 w-10 place-items-center rounded-[0.75rem] bg-primary text-title font-bold text-on-primary shadow-e2">T</span>
           <div>
             <h1 className="text-section font-semibold">TradeD</h1>
             <p className="text-data text-muted">Indian markets practice terminal</p>

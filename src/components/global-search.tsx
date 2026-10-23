@@ -25,11 +25,11 @@ export function GlobalSearch({ pages, onSymbol, onPage }: { pages: SearchPage[];
   const [mobileOpen, setMobileOpen] = useState(false);
   return (
     <>
-      <div className="relative hidden w-[clamp(200px,20vw,380px)] shrink-0 md:block">
+      <div className="relative hidden w-[clamp(12.5rem,20vw,23.75rem)] shrink-0 md:block">
         <SearchField pages={pages} onSymbol={onSymbol} onPage={onPage} />
     </div>
       <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-input text-muted hover:bg-elevated hover:text-text md:hidden" aria-label="Search stocks, options and pages" onClick={() => setMobileOpen(true)}>
-        <Search className="h-[18px] w-[18px]" aria-hidden />
+        <Search className="h-[1.125rem] w-[1.125rem]" aria-hidden />
       </button>
       {mobileOpen ? (
         <div className="fixed inset-0 z-[80] md:hidden">
@@ -140,7 +140,7 @@ function SearchField({ pages, onSymbol, onPage, autoFocus, onDone }: { pages: Se
         className="top-search"
       />
       {open ? (
-        <div id={listId} role="listbox" aria-label="Search results" className="surface-overlay anim-rise absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-[min(440px,70vh)] overflow-y-auto rounded-card p-1.5 md:min-w-[340px]">
+        <div id={listId} role="listbox" aria-label="Search results" className="surface-overlay anim-rise absolute left-0 right-0 top-[calc(100%+0.375rem)] z-50 max-h-[min(27.5rem,70vh)] overflow-y-auto rounded-card p-1.5 md:min-w-[21.25rem]">
           {groups.map(({ group, rows }) => {
             if (group === "Symbols" && q && rows.length === 0) {
               return loading ? <p key={group} className="px-3 py-2.5 text-data text-muted">Searching symbols…</p> : null;
@@ -148,7 +148,7 @@ function SearchField({ pages, onSymbol, onPage, autoFocus, onDone }: { pages: Se
             if (rows.length === 0) return null;
             return (
               <div key={group} role="group" aria-label={group}>
-                <p className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{group === "Symbols" && !q ? "Recent symbols" : group}</p>
+                <p className="px-2.5 pb-1 pt-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted">{group === "Symbols" && !q ? "Recent symbols" : group}</p>
                 {rows.map(({ entry, index }) => {
                   const Icon = entry.icon;
                   return (
@@ -164,7 +164,7 @@ function SearchField({ pages, onSymbol, onPage, autoFocus, onDone }: { pages: Se
                     >
                       <Icon className="h-4 w-4 shrink-0 text-muted" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium">{entry.label}</span>
+                        <span className="block truncate text-[0.8125rem] font-medium">{entry.label}</span>
                         {entry.hint ? <span className="block truncate text-data text-muted">{entry.hint}</span> : null}
                       </span>
                     </button>
@@ -175,7 +175,7 @@ function SearchField({ pages, onSymbol, onPage, autoFocus, onDone }: { pages: Se
           })}
           {q && !loading && entries.length === 0 ? (
             <div className="px-3 py-6 text-center">
-              <p className="text-[13px] font-medium text-text">No results</p>
+              <p className="text-[0.8125rem] font-medium text-text">No results</p>
               <p className="mt-0.5 text-data text-muted">{result.failed ? "Symbol search is unavailable right now. Try again shortly." : `Nothing matches “${q}”. Try a symbol like NIFTY or RELIANCE.`}</p>
             </div>
           ) : null}
