@@ -53,24 +53,25 @@ export function ChartHeaderTools({
   const current = CHART_TYPES.find((item) => item.id === chartType) ?? CHART_TYPES[0];
   return (
     <>
-      <HeaderDivider />
-      <ChartTypeMenu current={current} onChange={onChartType} />
+      {/* Phones keep only the essentials here: chart type, indicators, undo / redo and volume are desktop-only. */}
+      <HeaderDivider className="max-lg:hidden" />
+      <span className="contents max-lg:hidden"><ChartTypeMenu current={current} onChange={onChartType} /></span>
       <button
         type="button"
         aria-pressed={indicatorsOpen}
         title="Indicators"
-        className={cx("flex h-8 shrink-0 items-center gap-1 rounded-md pl-1 pr-2 text-data font-medium focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", indicatorsOpen ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover hover:text-text")}
+        className={cx("flex h-8 shrink-0 items-center gap-1 rounded-md pl-1 pr-2 text-data font-medium max-lg:hidden focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", indicatorsOpen ? "bg-primary-soft text-primary" : "text-text-2 hover:bg-hover hover:text-text")}
         onClick={onIndicators}
       >
         <ChartIcon name="indicators" />
         <span className="hidden 2xl:inline">Indicators</span>
       </button>
-      <HeaderDivider />
-      <HeaderButton label="Undo" icon="undo" disabled={!canUndo} onClick={onUndo} />
-      <HeaderButton label="Redo" icon="redo" disabled={!canRedo} onClick={onRedo} />
-      {children ? <><HeaderDivider />{children}</> : null}
+      <HeaderDivider className="max-lg:hidden" />
+      <HeaderButton label="Undo" icon="undo" className="max-lg:hidden" disabled={!canUndo} onClick={onUndo} />
+      <HeaderButton label="Redo" icon="redo" className="max-lg:hidden" disabled={!canRedo} onClick={onRedo} />
+      {children ? <><HeaderDivider className="max-lg:hidden" />{children}</> : null}
       <span aria-hidden className="min-w-2 flex-1" />
-      <HeaderButton label={volumeVisible ? "Hide volume" : "Show volume"} icon={volumeVisible ? "volume" : "volumeOff"} active={volumeVisible} onClick={onToggleVolume} />
+      <HeaderButton label={volumeVisible ? "Hide volume" : "Show volume"} icon={volumeVisible ? "volume" : "volumeOff"} active={volumeVisible} className="max-lg:hidden" onClick={onToggleVolume} />
       {/* Wheel, pinch and double-click already zoom and reset; the buttons return on wide screens. */}
       <HeaderButton label="Zoom out" icon="zoomOut" className="hidden 2xl:grid" onClick={() => onZoom(-1)} />
       <HeaderButton label="Zoom in" icon="zoomIn" className="hidden 2xl:grid" onClick={() => onZoom(1)} />
@@ -81,8 +82,8 @@ export function ChartHeaderTools({
   );
 }
 
-function HeaderDivider() {
-  return <span aria-hidden className="mx-0.5 h-5 w-px shrink-0 bg-border" />;
+function HeaderDivider({ className }: { className?: string }) {
+  return <span aria-hidden className={cx("mx-0.5 h-5 w-px shrink-0 bg-border", className)} />;
 }
 
 function HeaderButton({ label, icon, active, disabled, className, onClick }: { label: string; icon: ChartIconName; active?: boolean; disabled?: boolean; className?: string; onClick: () => void }) {

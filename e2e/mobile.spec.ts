@@ -137,9 +137,12 @@ test.describe("signed in", () => {
     await page.mouse.down();
     await page.mouse.move(x + chartBox.width * 0.3, y + 30, { steps: 8 });
     await page.mouse.up();
-    // A placed drawing can be undone.
-    await expect(page.getByRole("button", { name: "Undo" }).first()).toBeEnabled();
-    await page.getByRole("button", { name: "Undo" }).first().click();
+    // A placed drawing can be undone (More → Actions on phones).
+    await quick.getByRole("button", { name: "More" }).click();
+    await sheet.getByRole("tab", { name: "Actions" }).click();
+    await expect(sheet.getByRole("button", { name: "Undo" })).toBeEnabled();
+    await sheet.getByRole("button", { name: "Undo" }).click();
+    await page.getByRole("button", { name: "Close drawing tools" }).first().click();
 
     // The page itself never scrolls while the chart is touched.
     expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);
