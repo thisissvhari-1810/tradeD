@@ -141,7 +141,7 @@ describe("wiring", () => {
   });
 
   it("requests the minutes from before the session so 09:15 is not the range edge", () => {
-    expect(dhan).toContain('return intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);');
+    expect(dhan).toContain('return await intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);');
   });
 
   it("strategy drawings stay separate from manual drawings", () => {

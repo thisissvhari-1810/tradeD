@@ -120,8 +120,10 @@ export async function sessionPreviousClose(id: string, now: Date): Promise<numbe
 }
 
 async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", from: Date, to: Date, segment = "NSE_EQ", instrument = "EQUITY") {
+  // Never ask for minutes that have not happened yet (before the open the session's range lies in the future).
+  const now = new Date();
   const start = istStamp(from);
-  const end = istStamp(to);
+  const end = istStamp(to.getTime() > now.getTime() ? now : to);
   const series = (await dhanPost("/charts/intraday", {
     securityId: id,
     exchangeSegment: segment,
@@ -160,8 +162,13 @@ export async function dhanSessionTape(symbol: string, storedSecurityId: string, 
   const to = new Date((close + 17 * 60 * 60) * 1000);
   // The start is sent as "<day> 09:15:00". Starting the request on the session day itself can leave the
   // 09:15 bar on the edge of the range (the first bar returned was 09:16), so it starts three days earlier
-  // and the caller keeps only the selected date.
-  return intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);
+  // and the caller keeps only the selected date. If the provider refuses the wider range, the original
+  // same-day request is used.
+  try {
+    return await intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);
+  } catch {
+    return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);
+  }
 }
 
 /** One-minute bars that end before the selected open. The selected session is not part of this request. */
