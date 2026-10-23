@@ -45,3 +45,12 @@ describe("Dhan intraday requests stay valid", () => {
     expect(dhan).toContain('return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);');
   });
 });
+
+describe("daily history request", () => {
+  const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
+  it("retries with today, then yesterday, as the end date when the provider refuses tomorrow", () => {
+    expect(dhan).toContain("for (const candidate of [now, new Date(now.getTime() - 86_400_000)]) {");
+    expect(dhan).toContain("for (const end of dailyEndDates(to, new Date())) {");
+    expect(dhan).toContain("if (!(error instanceof AppError)) throw error;");
+  });
+});

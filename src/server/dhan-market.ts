@@ -88,17 +88,38 @@ function candlesFromSeries(series: Series): Candle[] {
   return candles;
 }
 
+/** End dates to try for a daily request: as asked, then today, then yesterday (each only if earlier). */
+export function dailyEndDates(to: Date, now: Date): Date[] {
+  const ends = [to];
+  for (const candidate of [now, new Date(now.getTime() - 86_400_000)]) {
+    if (istStamp(candidate).day < istStamp(ends[ends.length - 1]).day) ends.push(candidate);
+  }
+  return ends;
+}
+
 async function dailyHistory(id: string, from: Date, to: Date, segment = "NSE_EQ", instrument = "EQUITY") {
-  const series = (await dhanPost("/charts/historical", {
-    securityId: id,
-    exchangeSegment: segment,
-    instrument,
-    expiryCode: 0,
-    oi: false,
-    fromDate: istStamp(from).day,
-    toDate: istStamp(to).day,
-  })) as Series;
-  return candlesFromSeries(series).sort((a, b) => a.time - b.time);
+  // The end date is exclusive, so callers pass tomorrow to include today. The provider has refused that
+  // before the open ("Missing required fields, bad values for parameters"), so an earlier end is tried
+  // next; sessions it leaves out are folded from intraday bars by withRecentSessions.
+  let failure: unknown = null;
+  for (const end of dailyEndDates(to, new Date())) {
+    try {
+      const series = (await dhanPost("/charts/historical", {
+        securityId: id,
+        exchangeSegment: segment,
+        instrument,
+        expiryCode: 0,
+        oi: false,
+        fromDate: istStamp(from).day,
+        toDate: istStamp(end).day,
+      })) as Series;
+      return candlesFromSeries(series).sort((a, b) => a.time - b.time);
+    } catch (error) {
+      failure = error;
+      if (!(error instanceof AppError)) throw error;
+    }
+  }
+  throw failure;
 }
 
 const sessionCloseCache = new Map<string, { close: number; at: number }>();
