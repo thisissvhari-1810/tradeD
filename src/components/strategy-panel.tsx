@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { cx } from "@/components/ui";
 import type { LineDash } from "@/components/drawing-model";
@@ -9,13 +9,15 @@ import { price, type StrategyView } from "@/components/strategy-overlay";
 import type { S1Data } from "@/lib/trading/s1";
 
 const WIDTHS = [1, 2, 3, 4] as const;
+/** Gap kept between the panel and the chart edges while dragging. */
+const EDGE = 8;
 const DASHES: Array<{ id: LineDash; label: string }> = [{ id: "solid", label: "Solid" }, { id: "dashed", label: "Dashed" }, { id: "dotted", label: "Dotted" }];
 
 /**
  * The Strategy panel: on / off, which drawings show, the prices used and every drawing's style.
  * Changes apply to the chart at once and are saved; they never change a calculated price.
  */
-export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent, manualRectangles = 0 }: {
+export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent, manualRectangles = 0, left = null }: {
   settings: StrategySettings;
   onChange: (next: StrategySettings) => void;
   data: S1Data | null;
@@ -24,6 +26,8 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   error: string;
   disabledReason: string;
   onClose: () => void;
+  /** Left edge within the chart area, to sit below the Strategy button (null = top right). */
+  left?: number | null;
   /** Chosen current / previous day ("" = automatic). */
   dates: { current: string; previous: string };
   onDates: (next: { current: string; previous: string }) => void;
@@ -35,18 +39,60 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   manualRectangles?: number;
 }) {
   const set = (patch: Partial<StrategySettings>) => onChange({ ...settings, ...patch });
+  // Dragged by its header, like the option chain. Each opening starts below the Strategy button again.
+  const panelRef = useRef<HTMLElement | null>(null);
+  const drag = useRef<{ id: number; dx: number; dy: number } | null>(null);
+  const [moved, setMoved] = useState<{ x: number; y: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  function startDrag(event: ReactPointerEvent<HTMLElement>) {
+    const node = panelRef.current;
+    if (!node || event.button !== 0) return;
+    if ((event.target as HTMLElement).closest("button, input, select, textarea, a, label")) return;
+    drag.current = { id: event.pointerId, dx: event.clientX - node.offsetLeft, dy: event.clientY - node.offsetTop };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+    event.preventDefault();
+  }
+  function moveDrag(event: ReactPointerEvent<HTMLElement>) {
+    const state = drag.current;
+    const node = panelRef.current;
+    if (!state || state.id !== event.pointerId || !node) return;
+    const parent = node.offsetParent as HTMLElement | null;
+    const width = parent?.clientWidth ?? window.innerWidth;
+    const height = parent?.clientHeight ?? window.innerHeight;
+    setMoved({
+      x: Math.round(Math.min(Math.max(EDGE, event.clientX - state.dx), Math.max(EDGE, width - node.offsetWidth - EDGE))),
+      y: Math.round(Math.min(Math.max(EDGE, event.clientY - state.dy), Math.max(EDGE, height - 120))),
+    });
+  }
+  function endDrag(event: ReactPointerEvent<HTMLElement>) {
+    if (drag.current?.id !== event.pointerId) return;
+    drag.current = null;
+    setDragging(false);
+  }
+  const position = moved ? { left: moved.x, top: moved.y, maxHeight: `calc(100% - ${moved.y + EDGE}px)` } : left == null ? undefined : { left };
   const status = disabledReason
     || (!settings.enabled ? "Turn the strategy on to calculate and draw it." : loading ? "Loading market data…" : error || (view?.failures.length ? `Not drawn: ${view.failures.join(" ")}` : data?.message ?? ""));
   const tone = disabledReason || error || view?.failures.length || data?.status === "unavailable" ? "text-loss" : data?.status === "ready" ? "text-profit" : "text-warning";
 
   return (
     <section
-      className="surface-overlay absolute right-2 top-2 z-40 flex max-h-[calc(100%-1rem)] w-[min(340px,calc(100%-1rem))] flex-col overflow-hidden rounded-lg text-data"
+      ref={panelRef}
+      style={position}
+      className={cx("surface-overlay absolute top-2 z-40 flex max-h-[calc(100%-1rem)] w-[min(340px,calc(100%-1rem))] flex-col overflow-hidden rounded-lg text-data", !moved && left == null && "right-2", dragging && "shadow-e4")}
       aria-label="Strategy"
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
     >
-      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+      <header
+        className={cx("flex cursor-grab touch-none select-none items-center gap-2 border-b border-border px-3 py-2 active:cursor-grabbing", dragging && "bg-elevated/60")}
+        title="Drag to move. Double-click to put it back below the Strategy button."
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label")) setMoved(null); }}
+      >
         <h2 className="flex-1 text-dense font-semibold">Strategy</h2>
         <Switch label="Enable strategy" checked={settings.enabled} disabled={Boolean(disabledReason)} onChange={(enabled) => set({ enabled })} />
         <button type="button" aria-label="Close strategy panel" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-hover hover:text-text" onClick={onClose}><X className="h-4 w-4" aria-hidden /></button>

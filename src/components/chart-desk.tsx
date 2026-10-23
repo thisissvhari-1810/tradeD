@@ -263,6 +263,30 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   // Strategy: settings (on / off, styles) are remembered; levels are fetched per symbol and session (live or the replay date).
   const [strategy, setStrategy] = useState<StrategySettings>(STRATEGY_DEFAULTS);
   const [strategyOpen, setStrategyOpen] = useState(false);
+  // The Strategy panel opens below its button: the button's left edge within the chart area (px).
+  const [strategyLeft, setStrategyLeft] = useState<number | null>(null);
+  const strategyButtonRef = useRef<HTMLButtonElement | null>(null);
+  const chartAreaRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const area = chartAreaRef.current;
+    if (!strategyOpen || !area) return;
+    const place = () => {
+      const button = strategyButtonRef.current;
+      if (!button) return;
+      const box = area.getBoundingClientRect();
+      const width = Math.min(340, box.width - 16);
+      const left = button.getBoundingClientRect().left - box.left;
+      setStrategyLeft(Math.max(8, Math.min(left, box.width - width - 8)));
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(area);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [strategyOpen]);
   /** Chosen sessions for the strategy; empty = automatic (live day or replay date, and the session before it). */
   const [strategyDates, setStrategyDates] = useState({ current: "", previous: "" });
   const [s1, setS1] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
@@ -1109,6 +1133,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           <button
             type="button"
             aria-pressed={strategy.enabled}
+            ref={strategyButtonRef}
             aria-expanded={strategyOpen}
             aria-label="Strategy"
             title="Automatic Trading Strategy"
@@ -1161,7 +1186,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={prior?.date === replay.date ? prior.session : null} /> : null}
       {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={chartAreaRef} className="relative flex min-h-0 flex-1 flex-col">
             {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
             {replay.active && replay.status === "loading" ? <p className="p-4 text-sm text-info">Loading the selected session…</p> : null}
             {(!replay.active || optionView) && chartError ? (
@@ -1222,6 +1247,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 autoCurrent={replay.active && replay.date ? replay.date : s1Current?.data?.date ?? kolkataParts(new Date()).dateKey}
                 manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}
                 onClose={() => setStrategyOpen(false)}
+                left={strategyLeft}
               />
             ) : null}
             {chainOpen ? (
