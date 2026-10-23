@@ -41,7 +41,9 @@ describe("daily candles for sessions the daily history has not published", () =>
 describe("Dhan intraday requests stay valid", () => {
   const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
   it("never asks for minutes after now, and falls back to the same-day range if the wider one is refused", () => {
-    expect(dhan).toContain("const end = istStamp(to.getTime() > now.getTime() ? now : to);");
+    expect(dhan).toContain("const until = to.getTime() > now.getTime() ? now : to;");
+    expect(dhan).toContain("const short = new Date(until.getTime() - 5 * 86_400_000);");
+    expect(dhan).toContain("console.error(\"[dhan] request refused\"");
     expect(dhan).toContain('return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);');
   });
 });

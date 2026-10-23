@@ -67,9 +67,25 @@ async function dhanPost(path: string, body: unknown) {
     signal: AbortSignal.timeout(12000),
     cache: "no-store",
   });
-  const payload = (await response.json().catch(() => null)) as { errorMessage?: string; remarks?: string } | null;
-  if (!response.ok) throw new AppError(payload?.errorMessage || payload?.remarks || `Market data returned ${response.status}.`, 502);
+  const payload = (await response.json().catch(() => null)) as { errorMessage?: string; remarks?: string; errorCode?: string; errorType?: string } | null;
+  if (!response.ok) {
+    // Name the request (never the token) so a rejected parameter can be traced from the message on screen.
+    const reason = payload?.errorMessage || payload?.remarks || `Market data returned ${response.status}.`;
+    const detail = `${payload?.errorCode ?? `HTTP ${response.status}`} on ${path}: ${describeRequest(body)}`;
+    console.error("[dhan] request refused", { path, status: response.status, errorCode: payload?.errorCode, errorType: payload?.errorType, reason, request: describeRequest(body) });
+    throw new AppError(`${reason} (${detail})`, 502);
+  }
   return payload;
+}
+
+/** The request's identifying fields for error messages: security, segment, interval and dates only. */
+function describeRequest(body: unknown) {
+  if (!body || typeof body !== "object") return "";
+  const row = body as Record<string, unknown>;
+  return ["securityId", "exchangeSegment", "instrument", "interval", "fromDate", "toDate"]
+    .filter((key) => row[key] != null)
+    .map((key) => `${key}=${String(row[key])}`)
+    .join(" ");
 }
 
 function candlesFromSeries(series: Series): Candle[] {
@@ -143,17 +159,26 @@ export async function sessionPreviousClose(id: string, now: Date): Promise<numbe
 async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", from: Date, to: Date, segment = "NSE_EQ", instrument = "EQUITY") {
   // Never ask for minutes that have not happened yet (before the open the session's range lies in the future).
   const now = new Date();
-  const start = istStamp(from);
-  const end = istStamp(to.getTime() > now.getTime() ? now : to);
-  const series = (await dhanPost("/charts/intraday", {
+  const until = to.getTime() > now.getTime() ? now : to;
+  const end = istStamp(until);
+  const request = (since: Date) => dhanPost("/charts/intraday", {
     securityId: id,
     exchangeSegment: segment,
     instrument,
     interval,
     oi: false,
-    fromDate: `${start.day} 09:15:00`,
+    fromDate: `${istStamp(since).day} 09:15:00`,
     toDate: end.stamp,
-  })) as Series;
+  }) as Promise<Series>;
+  let series: Series;
+  try {
+    series = await request(from);
+  } catch (error) {
+    // If a long range is refused, a short one (the last 5 days) still gives a usable chart.
+    const short = new Date(until.getTime() - 5 * 86_400_000);
+    if (!(error instanceof AppError) || from.getTime() >= short.getTime()) throw error;
+    series = await request(short);
+  }
   return candlesFromSeries(series).sort((a, b) => a.time - b.time);
 }
 
