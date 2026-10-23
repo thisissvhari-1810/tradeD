@@ -6,10 +6,11 @@ import type { Premium } from "@/lib/premium/entitlements";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
+import { SymbolSearch } from "@/components/symbol-search";
 import { AccountPanel } from "@/components/account-panel";
 import { MobileSettingsPanel } from "@/components/mobile-settings";
 import { PremiumUpgradeButton, rememberPremiumOrigin } from "@/components/premium/premium-upgrade-button";
@@ -114,6 +115,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const [appearance, setAppearanceState] = useState<Appearance>(() => emptyAppearance("classic"));
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  // The phone Home page's stock search (the same picker the chart opens from its symbol).
+  const [homeSearch, setHomeSearch] = useState(false);
+  const closeHomeSearch = useCallback(() => setHomeSearch(false), []);
   const mobilePrefs = useMobilePrefs();
   useEffect(() => {
     document.documentElement.dataset.density = mobilePrefs.density;
@@ -351,7 +355,21 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
             <div className="lg:hidden"><BrandMark /></div>
-            <div className="no-scrollbar relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto" aria-label="Index prices">
+            {/* Home on phones: a stock search box takes the ticker's place (the greeting's index strip shows the market). */}
+            {path === "/" ? (
+              <button
+                type="button"
+                className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-input border border-border bg-sunken px-3 text-left transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] md:hidden"
+                aria-label="Search stocks, indices"
+                aria-haspopup="dialog"
+                aria-expanded={homeSearch}
+                onClick={() => setHomeSearch(true)}
+              >
+                <Search className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+                <span className="truncate text-data text-muted"><span className="min-[340px]:hidden">Search</span><span className="max-[339px]:hidden min-[420px]:hidden">Search stocks</span><span className="max-[419px]:hidden">Search stocks, indices…</span></span>
+              </button>
+            ) : null}
+            <div className={cx("no-scrollbar relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto", path === "/" && "max-md:hidden")} aria-label="Index prices">
               {indices.length === 0 ? (
                 <span className="truncate text-data text-muted">{indexNote || "Loading index prices…"}</span>
               ) : (indices.some((item) => TICKER_LABEL[item.name]) ? indices.filter((item) => TICKER_LABEL[item.name]) : indices).map((item) => (
@@ -363,7 +381,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </span>
             </div>
 
-            <GlobalSearch pages={links} onSymbol={openChart} onPage={goTo} />
+            <div className={cx("contents", path === "/" && "max-md:hidden")}><GlobalSearch pages={links} onSymbol={openChart} onPage={goTo} /></div>
 
             <PremiumUpgradeButton />
 
@@ -469,6 +487,8 @@ export function Shell({ children }: { children: ReactNode }) {
             onClose={closeUser}
           />
         ) : null}
+
+        <SymbolSearch open={homeSearch} current={{ symbol, exchange: "NSE" }} onSelect={openChart} onClose={closeHomeSearch} />
 
         <ToastStack items={toasts} onDismiss={dismiss} />
 
