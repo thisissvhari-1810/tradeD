@@ -17,6 +17,8 @@ const ALIGN = { left: "text-left", right: "text-right", center: "text-center" } 
 /**
  * Sticky-header table. Numeric columns are right-aligned with tabular digits.
  * rowActions render on hover or keyboard focus at the end of the row.
+ * On phones each row is a compact card instead: the instrument (or first column) as its title and the
+ * other columns as labelled values, so no desktop table is squeezed into a narrow screen.
  */
 export function Table<Row>({ columns, rows, rowKey, empty, rowActions, onRowClick, label, dense = false, className }: {
   columns: Column<Row>[];
@@ -30,9 +32,29 @@ export function Table<Row>({ columns, rows, rowKey, empty, rowActions, onRowClic
   className?: string;
 }) {
   if (rows.length === 0 && empty) return <>{empty}</>;
+  const title = columns.find((column) => column.key === "symbol") ?? columns[0];
+  const details = columns.filter((column) => column !== title);
   return (
     <div className={cx("min-h-0 overflow-auto", className)}>
-      <table aria-label={label} className={cx("ui-table w-full border-separate border-spacing-0 text-data", dense && "dense")}>
+      <ul aria-label={label} className="divide-y divide-border-soft sm:hidden">
+        {rows.map((row) => (
+          <li key={rowKey(row)} className={cx("px-3 py-2.5", onRowClick && "cursor-pointer active:bg-hover")} onClick={onRowClick ? () => onRowClick(row) : undefined}>
+            <div className="flex min-h-8 items-center justify-between gap-2 text-dense font-medium">{title ? title.render(row) : null}</div>
+            {details.length ? (
+              <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-data min-[400px]:grid-cols-3">
+                {details.map((column) => (
+                  <div key={column.key} className="min-w-0">
+                    <dt className="truncate text-micro text-muted">{column.header}</dt>
+                    <dd className={cx("truncate text-text", column.numeric && "num")}>{column.render(row)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+            {rowActions ? <div className="mt-2 flex flex-wrap justify-end gap-1.5" onClick={(event) => event.stopPropagation()}>{rowActions(row)}</div> : null}
+          </li>
+        ))}
+      </ul>
+      <table aria-label={label} className={cx("ui-table hidden w-full sm:table border-separate border-spacing-0 text-data", dense && "dense")}>
         <thead>
           <tr>
             {columns.map((column) => (

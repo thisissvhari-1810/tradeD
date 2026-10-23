@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { GripVertical, Star } from "lucide-react";
+import { GripVertical, Star, X } from "lucide-react";
 import { ChartIcon, type ChartIconName } from "@/components/chart-icons";
 import type { CursorStyle, DrawTool, MagnetMode } from "@/components/drawing-model";
 import { moveFavourite, toggleFavourite, updatePrefs, useDrawingPrefs } from "@/components/drawing-prefs";
@@ -100,7 +100,7 @@ export function ChartToolbar({
   const menuGroup = TOOL_GROUPS.find((group) => group.id === menu?.id) ?? null;
 
   return (
-    <nav ref={rootRef} className="no-scrollbar flex h-12 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-panel px-1 lg:h-auto lg:w-12 lg:flex-col lg:overflow-y-auto lg:overflow-x-visible lg:border-b-0 lg:border-r lg:px-0 lg:py-1.5" aria-label="Drawing tools">
+    <nav ref={rootRef} className="no-scrollbar hidden h-12 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border bg-panel px-1 lg:flex lg:h-auto lg:w-12 lg:flex-col lg:overflow-y-auto lg:overflow-x-visible lg:border-b-0 lg:border-r lg:px-0 lg:py-1.5" aria-label="Drawing tools">
       {TOOL_GROUPS.map((group) => {
         const current = groupEntry(group);
         const active = group.entries.some((item) => isActiveEntry(item, tool, prefs.cursor));
@@ -452,6 +452,122 @@ export function FavouritesBar({ tool, onTool }: { tool: DrawTool; onTool: (tool:
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Phones and tablets: the drawing tools as a bottom sheet instead of the narrow toolbar row. Tools are
+ * grouped by category with large touch targets; the actions tab holds undo / redo, magnet, lock, hide,
+ * remove and the object tree. Picking a tool closes the sheet so the next touch on the chart draws.
+ */
+export function MobileDrawingSheet({
+  open,
+  onClose,
+  tool,
+  onTool,
+  lockAll,
+  onLockAll,
+  drawingsHidden,
+  indicatorsHidden,
+  onVisibility,
+  onRemove,
+  objectsOpen,
+  onObjects,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+}: {
+  open: boolean;
+  onClose: () => void;
+  tool: DrawTool;
+  onTool: (tool: DrawTool) => void;
+  lockAll: boolean;
+  onLockAll: () => void;
+  drawingsHidden: boolean;
+  indicatorsHidden: boolean;
+  onVisibility: (action: VisibilityAction) => void;
+  onRemove: (scope: RemoveScope) => void;
+  objectsOpen: boolean;
+  onObjects: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+}) {
+  const prefs = useDrawingPrefs();
+  const groups = TOOL_GROUPS.filter((group) => group.id !== "cursors");
+  const activeGroup = groups.find((group) => group.entries.some((item) => isActiveEntry(item, tool, prefs.cursor)));
+  const [tab, setTab] = useState<string>(activeGroup?.id ?? groups[0]?.id ?? "actions");
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  const group = groups.find((item) => item.id === tab);
+  const pick = (item: ToolEntry) => {
+    updatePrefs((current) => ({ ...(item.cursor ? { cursor: item.cursor } : {}), last: { ...current.last, [group?.id ?? ""]: item.key } }));
+    onTool(item.tool);
+    onClose();
+  };
+  const action = (label: string, icon: ChartIconName, onClick: () => void, options: { active?: boolean; disabled?: boolean; danger?: boolean; keep?: boolean } = {}) => (
+    <button
+      key={label}
+      type="button"
+      disabled={options.disabled}
+      aria-pressed={options.active}
+      className={cx("flex min-h-[4.25rem] flex-col items-center justify-center gap-1 rounded-md border px-1 py-2 text-center text-micro font-medium disabled:opacity-40", options.active ? "border-primary/40 bg-primary-soft text-primary" : options.danger ? "border-border-soft text-loss" : "border-border-soft text-text-2 active:bg-hover")}
+      onClick={() => { onClick(); if (!options.keep) onClose(); }}
+    >
+      <ChartIcon name={icon} />
+      <span className="leading-tight">{label}</span>
+    </button>
+  );
+  return (
+    <div className="fixed inset-0 z-[75] lg:hidden">
+      <button type="button" className="anim-fade absolute inset-0 bg-[var(--scrim)]" aria-label="Close drawing tools" onClick={onClose} />
+      <div role="dialog" aria-modal="true" aria-label="Drawing tools" className="surface-modal anim-sheet absolute inset-x-0 bottom-0 flex max-h-[min(78dvh,36rem)] flex-col rounded-t-sheet pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border-strong" aria-hidden />
+        <div className="flex items-center justify-between px-4 pb-1 pt-2">
+          <h2 className="text-title font-semibold">Drawing tools</h2>
+          <button type="button" className="grid h-10 w-10 place-items-center rounded-input text-muted active:bg-hover" aria-label="Close" onClick={onClose}><X className="h-5 w-5" aria-hidden /></button>
+        </div>
+        <div className="no-scrollbar flex shrink-0 gap-1.5 overflow-x-auto px-4 pb-2" role="tablist" aria-label="Tool categories">
+          {[...groups.map((item) => ({ id: item.id, label: item.label })), { id: "actions", label: "Actions" }].map((item) => (
+            <button key={item.id} type="button" role="tab" aria-selected={tab === item.id} className={cx("h-9 shrink-0 rounded-pill px-3.5 text-data font-medium", tab === item.id ? "bg-primary text-on-primary" : "bg-sunken text-text-2")} onClick={() => setTab(item.id)}>{item.label}</button>
+          ))}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-2">
+          {group ? (
+            <div className="grid grid-cols-3 gap-2 min-[400px]:grid-cols-4">
+              {group.entries.map((item) => {
+                const current = isActiveEntry(item, tool, prefs.cursor);
+                return (
+                  <button key={item.key} type="button" aria-pressed={current} title={item.hint} className={cx("flex min-h-[4.25rem] flex-col items-center justify-center gap-1 rounded-md border px-1 py-2 text-center text-micro font-medium", current ? "border-primary/40 bg-primary-soft text-primary" : "border-border-soft text-text-2 active:bg-hover")} onClick={() => pick(item)}>
+                    <ChartIcon name={item.icon} />
+                    <span className="leading-tight">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2 min-[400px]:grid-cols-4">
+              {action("Undo", "undo", onUndo, { disabled: !canUndo, keep: true })}
+              {action("Redo", "redo", onRedo, { disabled: !canRedo, keep: true })}
+              {action(prefs.magnet === "off" ? "Magnet off" : MAGNET_LABEL[prefs.magnet], MAGNET_ICON[prefs.magnet], () => updatePrefs({ magnet: prefs.magnet === "off" ? "strong" : "off" }), { active: prefs.magnet !== "off", keep: true })}
+              {action("Stay in drawing", "stay", () => updatePrefs({ stay: !prefs.stay }), { active: prefs.stay, keep: true })}
+              {action(lockAll ? "Unlock all" : "Lock all", lockAll ? "lock" : "unlock", onLockAll, { active: lockAll, keep: true })}
+              {action(drawingsHidden ? "Show drawings" : "Hide drawings", drawingsHidden ? "eyeOff" : "eye", () => onVisibility(drawingsHidden ? "show" : "drawings"), { active: drawingsHidden, keep: true })}
+              {action(indicatorsHidden ? "Show indicators" : "Hide indicators", "indicators", () => onVisibility(indicatorsHidden ? "show" : "indicators"), { active: indicatorsHidden, keep: true })}
+              {action(objectsOpen ? "Hide object tree" : "Object tree", "objects", onObjects, { active: objectsOpen })}
+              {action("Remove drawings", "trash", () => onRemove("drawings"), { danger: true })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

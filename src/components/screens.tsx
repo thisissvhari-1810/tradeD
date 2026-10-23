@@ -393,26 +393,26 @@ export function HoldingsScreen() {
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
         <Section title="Holdings" description={portfolio?.valuationMessage} flush>
           <div className="overflow-auto">
-            <table className="text-dense">
+            <table className="stack-sm text-dense">
               <thead><tr><th>Instrument</th><th>Type</th><th className="num">Strike</th><th>Expiry</th><th className="num">Lots</th><th className="num">Qty</th><th className="num">Avg</th><th className="num">Mark</th><th className="num">Value</th><th className="num">Unrealized</th><th className="num">Realized</th><th>Status</th><th>Opened</th><th>Updated</th></tr></thead>
               <tbody>
                 {loading ? [0, 1, 2].map((row) => <tr key={row}><td colSpan={14}><Skeleton className="h-6 w-full" /></td></tr>) : null}
                 {!loading && (portfolio?.positions.length ?? 0) === 0 ? <tr><td colSpan={14}><EmptyState icon={<PieChart className="h-5 w-5" />} title="No practice holdings" body="Buy from the terminal or the option chain and the position appears here." /></td></tr> : portfolio?.positions.map((row) => (
                   <tr key={row.symbol}>
-                    <td><span className="inline-flex items-center gap-2.5"><StockLogo symbol={row.contract?.underlying ?? row.symbol} name={row.name} size={28} /><span><span className="block font-semibold text-text">{row.contract ? `${row.contract.underlying} ${row.contract.strike.toLocaleString("en-IN")} ${row.contract.right}` : row.symbol}</span><span className="block text-micro text-muted">{row.name}</span></span></span></td>
-                    <td className="text-text-2">{row.contract?.right ?? "—"}</td>
-                    <td className="num">{row.contract ? row.contract.strike.toLocaleString("en-IN") : "—"}</td>
-                    <td className="whitespace-nowrap text-text-2">{row.contract?.expiry ?? "—"}</td>
-                    <td className="num">{row.lots ?? "—"}</td>
-                    <td className="num">{row.quantity}</td>
-                    <td className="num">{row.averageCost}</td>
-                    <td className="num">{row.mark ?? "—"}</td>
-                    <td className="num font-medium text-text">{row.marketValue ?? "—"}</td>
-                    <td className={`num font-semibold ${pnlTone(row.unrealized)}`}>{row.unrealized ?? "—"}</td>
-                    <td className={`num ${pnlTone(row.realized)}`}>{row.realized}</td>
-                    <td><Badge tone={(row.status ?? "OPEN") === "OPEN" ? "primary" : "neutral"}>{row.status ?? "OPEN"}</Badge></td>
-                    <td className="whitespace-nowrap text-data text-muted">{istStamp(row.openedAt)}</td>
-                    <td className="whitespace-nowrap text-data text-muted">{istStamp(row.updatedAt)}</td>
+                    <td data-label="Instrument"><span className="inline-flex items-center gap-2.5"><StockLogo symbol={row.contract?.underlying ?? row.symbol} name={row.name} size={28} /><span><span className="block font-semibold text-text">{row.contract ? `${row.contract.underlying} ${row.contract.strike.toLocaleString("en-IN")} ${row.contract.right}` : row.symbol}</span><span className="block text-micro text-muted">{row.name}</span></span></span></td>
+                    <td data-label="Type" className="text-text-2">{row.contract?.right ?? "—"}</td>
+                    <td data-label="Strike" className="num">{row.contract ? row.contract.strike.toLocaleString("en-IN") : "—"}</td>
+                    <td data-label="Expiry" className="whitespace-nowrap text-text-2">{row.contract?.expiry ?? "—"}</td>
+                    <td data-label="Lots" className="num">{row.lots ?? "—"}</td>
+                    <td data-label="Qty" className="num">{row.quantity}</td>
+                    <td data-label="Avg" className="num">{row.averageCost}</td>
+                    <td data-label="Mark" className="num">{row.mark ?? "—"}</td>
+                    <td data-label="Value" className="num font-medium text-text">{row.marketValue ?? "—"}</td>
+                    <td data-label="Unrealized" className={`num font-semibold ${pnlTone(row.unrealized)}`}>{row.unrealized ?? "—"}</td>
+                    <td data-label="Realized" className={`num ${pnlTone(row.realized)}`}>{row.realized}</td>
+                    <td data-label="Status"><Badge tone={(row.status ?? "OPEN") === "OPEN" ? "primary" : "neutral"}>{row.status ?? "OPEN"}</Badge></td>
+                    <td data-label="Opened" className="whitespace-nowrap text-data text-muted">{istStamp(row.openedAt)}</td>
+                    <td data-label="Updated" className="whitespace-nowrap text-data text-muted">{istStamp(row.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -507,20 +507,20 @@ function ClosedTrades() {
     >
       {error ? <Notice tone="loss" className="m-4">{error}</Notice> : null}
       <div className="max-h-[50vh] overflow-auto">
-        <table className="text-dense">
+        <table className="stack-sm text-dense">
           <thead><tr><th>Instrument</th><th>Entry</th><th>Exit</th><th className="num">Qty</th><th className="num">Gross</th><th className="num">Fees</th><th className="num">Net</th><th className="num">Return</th><th>Duration</th></tr></thead>
           <tbody>
             {shown.length === 0 ? <tr><td colSpan={9}><EmptyState title="No completed trades in this view" body="Closed round trips appear here with fees and net P&L." /></td></tr> : shown.map((row) => (
               <tr key={row.id}>
-                <td><span className="font-semibold text-text">{optionTradeLabel(row.symbol)}</span> <span className="text-micro text-muted">{row.direction}</span></td>
-                <td className="whitespace-nowrap"><span className="block text-data text-muted">{istStamp(row.entryAt)}</span><span className="num">{row.averageEntry}</span></td>
-                <td className="whitespace-nowrap"><span className="block text-data text-muted">{istStamp(row.exitAt)}</span><span className="num">{row.averageExit}</span></td>
-                <td className="num">{row.quantity}</td>
-                <td className={`num ${pnlTone(row.gross)}`}>{row.gross}</td>
-                <td className="num text-text-2">{row.charges}</td>
-                <td className={`num font-semibold ${pnlTone(row.net)}`}>{row.net}</td>
-                <td className={`num ${pnlTone(row.ret)}`}>{row.ret}</td>
-                <td className="text-data text-text-2">{row.holdingSeconds}s{row.note ? ` · ${row.note}` : ""}</td>
+                <td data-label="Instrument"><span className="font-semibold text-text">{optionTradeLabel(row.symbol)}</span> <span className="text-micro text-muted">{row.direction}</span></td>
+                <td data-label="Entry" className="whitespace-nowrap"><span className="block text-data text-muted">{istStamp(row.entryAt)}</span><span className="num">{row.averageEntry}</span></td>
+                <td data-label="Exit" className="whitespace-nowrap"><span className="block text-data text-muted">{istStamp(row.exitAt)}</span><span className="num">{row.averageExit}</span></td>
+                <td data-label="Qty" className="num">{row.quantity}</td>
+                <td data-label="Gross" className={`num ${pnlTone(row.gross)}`}>{row.gross}</td>
+                <td data-label="Fees" className="num text-text-2">{row.charges}</td>
+                <td data-label="Net" className={`num font-semibold ${pnlTone(row.net)}`}>{row.net}</td>
+                <td data-label="Return" className={`num ${pnlTone(row.ret)}`}>{row.ret}</td>
+                <td data-label="Duration" className="text-data text-text-2">{row.holdingSeconds}s{row.note ? ` · ${row.note}` : ""}</td>
               </tr>
             ))}
           </tbody>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { DemoModeBadge, StockLogo } from "@/components/stock-identity";
 import { rupeesToPaise } from "@/lib/money";
 import { calculateCharges } from "@/lib/trading/fees";
@@ -66,6 +66,9 @@ export function DemoTicket({
   const [scope, setScope] = useState<"session" | "all">("session");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  // A second tap within a moment of the first is ignored, so one tap places one order.
+  const [sending, setSending] = useState(false);
+  const lastSubmit = useRef(0);
   const position = book.positions.find((item) => item.symbol === symbol) ?? null;
   const markPaise = price != null ? Number(rupeesToPaise(price.toFixed(2))) : null;
   const marks = markPaise != null ? { [symbol]: markPaise } : {};
@@ -82,6 +85,11 @@ export function DemoTicket({
   const reward = position && position.targetPaise ? Math.abs(position.targetPaise - position.avgPaise) * Math.abs(position.quantity) : null;
 
   function submit() {
+    const now = Date.now();
+    if (now - lastSubmit.current < 800) return;
+    lastSubmit.current = now;
+    setSending(true);
+    window.setTimeout(() => setSending(false), 800);
     const parsed = parseTicket(quantity, limitPrice, stopPrice, stopLoss, takeProfit, type);
     if (!parsed.ok) {
       setError(parsed.error);
@@ -98,8 +106,9 @@ export function DemoTicket({
   }
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-black/50 p-4">
-      <div className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl border border-border bg-panel p-4 text-text">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-[var(--scrim)] sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={`Paper trade ${symbol}`}>
+      <div className="anim-sheet flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-sheet border border-border bg-panel text-text sm:rounded-2xl">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
@@ -109,18 +118,18 @@ export function DemoTicket({
             </div>
             <p className="mt-1 text-[0.6875rem] text-muted">{date || "No date"} · {cursor != null ? formatIst(cursor) : "Replay time unavailable"} · {timeframe} · {REPLAY_STATUS_LABEL[status]}</p>
           </div>
-          <button type="button" className="rounded-lg px-2 py-1 text-xs text-muted" aria-label="Close paper trade" onClick={onClose}>Close</button>
+          <button type="button" className="h-10 rounded-lg px-3 text-xs text-muted active:bg-hover" aria-label="Close paper trade" onClick={onClose}>Close</button>
         </div>
         <p className="mt-2 text-[0.6875rem] text-info">Simulated price {price != null ? `₹${price.toFixed(2)}` : "—"}. A market order uses the open while the minute is forming, and the close after that minute ends. Stops and limits use only the revealed range.</p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-          <button type="button" className={`rounded-full py-1.5 font-semibold ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("BUY")}>Buy</button>
-          <button type="button" className={`rounded-full py-1.5 font-semibold ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("SELL")}>Sell</button>
-          <label className="text-[0.6875rem] text-muted">Quantity<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm text-text" value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" /></label>
-          <label className="text-[0.6875rem] text-muted">Order<select className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={type} onChange={(event) => setType(event.target.value as DemoOrderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option><option value="STOP_LIMIT">Stop-limit</option></select></label>
-          {type === "LIMIT" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Limit<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal" /></label> : null}
-          {type === "STOP" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Stop trigger<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} inputMode="decimal" /></label> : null}
-          <label className="text-[0.6875rem] text-muted">Stop-loss<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
-          <label className="text-[0.6875rem] text-muted">Target<input className="mt-1 w-full rounded-lg border border-border bg-background px-2 py-1 text-sm" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
+          <button type="button" className={`h-11 rounded-full font-semibold sm:h-9 ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("BUY")}>Buy</button>
+          <button type="button" className={`h-11 rounded-full font-semibold sm:h-9 ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border text-muted"}`} onClick={() => setSide("SELL")}>Sell</button>
+          <label className="text-[0.6875rem] text-muted">Quantity<input className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8 text-text" value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" /></label>
+          <label className="text-[0.6875rem] text-muted">Order<select className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8" value={type} onChange={(event) => setType(event.target.value as DemoOrderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option><option value="STOP">Stop</option><option value="STOP_LIMIT">Stop-limit</option></select></label>
+          {type === "LIMIT" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Limit<input className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8" value={limitPrice} onChange={(event) => setLimitPrice(event.target.value)} inputMode="decimal" /></label> : null}
+          {type === "STOP" || type === "STOP_LIMIT" ? <label className="text-[0.6875rem] text-muted">Stop trigger<input className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8" value={stopPrice} onChange={(event) => setStopPrice(event.target.value)} inputMode="decimal" /></label> : null}
+          <label className="text-[0.6875rem] text-muted">Stop-loss<input className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
+          <label className="text-[0.6875rem] text-muted">Target<input className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-2 text-sm sm:h-8" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} inputMode="decimal" placeholder="Optional" /></label>
         </div>
         <label className="mt-2 flex items-center gap-2 text-[0.6875rem] text-muted"><input type="checkbox" checked={book.allowShort} onChange={(event) => onAllowShort(event.target.checked)} />Allow short selling. A sell above the long quantity opens a short.</label>
         <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.6875rem] text-muted">
@@ -153,9 +162,6 @@ export function DemoTicket({
             <button type="button" className="text-loss" onClick={() => onCancel(order.id)}>Cancel</button>
           </p>
         ))}
-        {error ? <p className="mt-2 text-[0.6875rem] text-warning">{error}</p> : null}
-        {notice ? <p className="mt-2 text-[0.6875rem] text-info">{notice}</p> : null}
-        <button type="button" className={`mt-3 w-full rounded-full py-2 text-sm font-semibold ${side === "BUY" ? "bg-profit text-on-signal" : "bg-loss text-on-signal"}`} onClick={submit}>{side === "BUY" ? "Confirm buy" : "Confirm sell"}</button>
         <div className="mt-4 border-t border-border pt-3">
           <div className="flex items-center gap-2 text-[0.6875rem]">
             <span className="font-semibold">Trades</span>
@@ -168,6 +174,12 @@ export function DemoTicket({
           </div>
         </div>
         <p className="mt-3 text-[0.625rem] text-muted">This book stays in this browser. It is not sent to a broker or the practice ledger. Changing timeframe does not reset it.</p>
+      </div>
+      <div className="shrink-0 border-t border-border bg-panel px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2">
+        {error ? <p className="mb-2 text-[0.6875rem] text-warning" role="alert">{error}</p> : null}
+        {notice ? <p className="mb-2 text-[0.6875rem] text-info" role="status">{notice}</p> : null}
+        <button type="button" disabled={sending} className={`h-12 w-full rounded-full text-sm font-semibold disabled:opacity-60 sm:h-10 ${side === "BUY" ? "bg-profit text-on-signal" : "bg-loss text-on-signal"}`} onClick={submit}>{sending ? "Placing…" : side === "BUY" ? "Confirm buy" : "Confirm sell"}</button>
+      </div>
       </div>
     </div>
   );

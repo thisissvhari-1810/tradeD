@@ -327,7 +327,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
     >
       <header
         className={cx(
-          "flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 transition-colors",
+          "flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border px-2 transition-colors max-sm:py-1.5 sm:h-12 sm:flex-nowrap",
           !maximized && "cursor-move touch-none select-none hover:bg-elevated/50",
           dragging && "bg-elevated/60",
         )}
@@ -345,7 +345,7 @@ export function OptionChainPanel({ symbol, replay, onClose, onOpenChart, onOrder
             <button key={item.symbol} type="button" aria-pressed={underlying === item.symbol} className={cx("h-7 rounded-sm px-2.5 text-data font-semibold transition-colors", underlying === item.symbol ? "bg-panel text-primary shadow-e1" : "text-muted hover:text-text")} onClick={() => choose(item.symbol)}>{item.symbol}</button>
           ))}
         </div>
-        <div className="relative min-w-0 flex-1" data-no-drag>
+        <div className="relative min-w-0 flex-1 max-sm:order-last max-sm:basis-full" data-no-drag>
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden />
           <input className="oc-search w-full min-w-0" value={query} placeholder="Search underlying" aria-label="Search underlying" onChange={(event) => setQuery(event.target.value)} />
           {query ? <button type="button" className="absolute right-1 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center text-muted hover:text-text" aria-label="Clear search" onClick={() => { setQuery(""); setHits([]); }}><X className="h-3 w-3" aria-hidden /></button> : null}

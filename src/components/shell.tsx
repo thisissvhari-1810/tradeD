@@ -5,7 +5,7 @@ import type { FeatureKey, Features } from "@/lib/auth/features";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, Moon, MoreHorizontal, Palette, PieChart, Settings, ShieldCheck, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, LayoutGrid, Moon, Palette, PieChart, Settings, ShieldCheck, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
@@ -64,6 +64,7 @@ type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; 
 const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: House },
   { href: "/chart", label: "Chart", icon: CandlestickChart },
+  { href: "/watchlist", label: "Watchlist", icon: Star, rail: false },
   { href: "/options", label: "Options", icon: GitBranch },
   { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound, feature: "multiAccount" },
   // rail: false — left out of the desktop sidebar; still in the phone menu, search and the chart's side panel.
@@ -76,7 +77,14 @@ const NAV: NavItem[] = [
   { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
 ];
 
-const TAB_BAR = ["/", "/chart", "/options", "/positions"] as const;
+/** The phone's bottom bar: five destinations; everything else is in the header's menu. */
+const TAB_BAR: Array<{ href: string; label: string; icon: LucideIcon; feature?: FeatureKey; match: string[] }> = [
+  { href: "/", label: "Home", icon: House, match: ["/"] },
+  { href: "/watchlist", label: "Watchlist", icon: Star, match: ["/watchlist", "/markets"] },
+  { href: "/chart", label: "Trade", icon: CandlestickChart, match: ["/chart", "/terminal", "/options"] },
+  { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio", match: ["/positions", "/orders"] },
+  { href: "/holdings", label: "Portfolio", icon: PieChart, feature: "portfolio", match: ["/holdings", "/funds"] },
+];
 
 const TICKER_LABEL: Record<string, string> = { "Nifty 50": "NIFTY", "Nifty Bank": "BANKNIFTY", "India VIX": "INDIA VIX" };
 
@@ -367,6 +375,10 @@ export function Shell({ children }: { children: ReactNode }) {
               </Tooltip>
             </div>
 
+            <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text lg:hidden" aria-label="All pages" aria-expanded={menu} onClick={() => { setMenu(true); setOpenUser(false); setOpenNotes(false); }}>
+              <LayoutGrid className="h-[1.125rem] w-[1.125rem]" aria-hidden />
+            </button>
+
             <div className="relative shrink-0">
               <button type="button" className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => { setOpenUser((value) => !value); setOpenNotes(false); }} title={user?.email || "Account"} aria-label="Account menu" aria-expanded={openUser}>
                 {(user?.name || "T").slice(0, 1).toUpperCase()}
@@ -392,23 +404,18 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[calc(var(--tabbar)+env(safe-area-inset-bottom))] border-t border-border-soft bg-panel/92 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
-          {TAB_BAR.map((href) => {
-            const item = NAV.find((link) => link.href === href)!;
+          {TAB_BAR.map((item) => {
             if (item.feature && user?.features && !user.features[item.feature]) return null;
             const Icon = item.icon;
-            const current = active(href);
+            const current = item.match.some((href) => active(href));
             return (
-              <Link key={href} href={href} aria-current={current ? "page" : undefined} className={cx("relative flex flex-1 flex-col items-center justify-center gap-1 text-micro font-medium transition-colors", current ? "text-primary" : "text-muted")}>
+              <Link key={item.href} href={item.href} aria-current={current ? "page" : undefined} className={cx("relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 text-micro font-medium transition-colors", current ? "text-primary" : "text-muted active:text-text")}>
                 {current ? <span className="absolute top-0 h-[0.1875rem] w-8 rounded-b-full bg-primary" aria-hidden /> : null}
-                <Icon className="h-5 w-5" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
-                {item.label}
+                <Icon className="h-[1.375rem] w-[1.375rem]" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
+                <span className="max-w-full truncate px-0.5">{item.label}</span>
               </Link>
             );
           })}
-          <button type="button" className={cx("flex flex-1 flex-col items-center justify-center gap-1 text-micro font-medium", menu || !TAB_BAR.some((href) => active(href)) ? "text-primary" : "text-muted")} onClick={() => setMenu(true)} aria-label="More pages" aria-expanded={menu}>
-            <MoreHorizontal className="h-5 w-5" aria-hidden />
-            More
-          </button>
         </nav>
 
         {menu ? (

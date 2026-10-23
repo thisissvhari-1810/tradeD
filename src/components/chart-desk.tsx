@@ -6,7 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
 import { ChartHeaderTools } from "@/components/chart-header-tools";
-import { ChartToolbar, FavouritesBar, type RemoveScope, type VisibilityAction } from "@/components/chart-toolbar";
+import { ChartIcon } from "@/components/chart-icons";
+import { toolEntry } from "@/components/drawing-tools";
+import { ChartToolbar, FavouritesBar, MobileDrawingSheet, type RemoveScope, type VisibilityAction } from "@/components/chart-toolbar";
 import { useDrawingPrefs } from "@/components/drawing-prefs";
 import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
@@ -215,6 +217,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [reload, setReload] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [full, setFull] = useState(false);
+  // Phones: the drawing tools open as a bottom sheet (the toolbar row is for larger screens).
+  const [drawSheet, setDrawSheet] = useState(false);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [candleMeta, setCandleMeta] = useState({ mode: "", source: "", message: "" });
   const [chartError, setChartError] = useState("");
@@ -597,8 +601,12 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     if (document.fullscreenElement) {
       void document.exitFullscreen();
       setFull(false);
+    } else if (full) {
+      setFull(false);
     } else {
-      void node.requestFullscreen();
+      // Where the browser cannot put an element in full screen (iPhone Safari), the chart covers the
+      // page instead (see the root's class), which still hides the header and the bottom bar.
+      if (typeof node.requestFullscreen === "function") void node.requestFullscreen().catch(() => undefined);
       setFull(true);
     }
   }
@@ -1078,12 +1086,12 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }
 
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+    <div ref={rootRef} className={cx("flex h-full min-h-0 flex-col overflow-hidden bg-background", full && "fixed inset-0 z-[70] h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]")}>
       {/* One compact row: identity never shrinks; only the tool strip scrolls when space runs out. */}
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-panel pl-2 pr-1">
-        <div className="flex shrink-0 items-center gap-2" title={stamp}>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 border-b border-border bg-panel pl-2 pr-1 max-lg:pt-1 lg:h-11 lg:flex-nowrap">
+        <div className="flex min-w-0 shrink-0 items-center gap-2 max-lg:h-10 max-lg:w-full" title={stamp}>
           <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={26} />
-          <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+          <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap max-lg:flex-1 max-lg:overflow-hidden">
             <span className="text-dense font-semibold">{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
             <span className="text-micro text-muted">{optionView ? optionView.expiry : "NSE"}</span>
             <span className="num text-dense font-semibold">{priceLabel}</span>
@@ -1097,10 +1105,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
           </IconButton>
         </div>
-        <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto max-lg:h-11 max-lg:basis-full">
         <div className="flex shrink-0 items-center gap-0.5 rounded-input bg-sunken p-0.5" role="toolbar" aria-label="Timeframe">
           {CHART_SPANS.map((span) => (
-            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "hidden", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
+            <button key={span} type="button" className={cx("h-7 shrink-0 rounded-xs px-2 text-data", !PRIMARY_SPANS.has(span) && timeframe !== span && "lg:hidden", "max-lg:h-8 max-lg:px-2.5", timeframe === span ? "bg-panel font-semibold text-text shadow-e1" : "text-muted hover:text-text")} aria-pressed={timeframe === span} onClick={() => setTimeframe(span)}>{SPAN_LABEL[span]}</button>
           ))}
         </div>
         <ChartHeaderTools
@@ -1165,7 +1173,26 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           <label>Oscillator <select className="ml-1 py-1" value={flags.oscillator} onChange={(event) => setFlags((current) => ({ ...current, oscillator: event.target.value as Flags["oscillator"] }))}><option value="none">Off</option><option value="rsi">RSI</option><option value="macd">MACD</option></select></label>
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+      <MobileDrawingSheet
+        open={drawSheet}
+        onClose={() => setDrawSheet(false)}
+        tool={tool}
+        onTool={setTool}
+        lockAll={lockAll}
+        onLockAll={() => setLockAll((value) => !value)}
+        drawingsHidden={drawingsHidden}
+        indicatorsHidden={indicatorsHidden}
+        onVisibility={applyVisibility}
+        onRemove={removeObjects}
+        objectsOpen={objectsOpen}
+        onObjects={() => setObjectsOpen((value) => !value)}
+        canUndo={historyTick >= 0 && pastRef.current.length > 0}
+        canRedo={futureRef.current.length > 0}
+        onUndo={undoDrawings}
+        onRedo={redoDrawings}
+      />
+      {/* Positions on phones: one scrolling page (a shorter chart, then the positions tabs, then the panel). */}
+      <div className={cx("flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row", variant === "positions" && "max-lg:overflow-y-auto")}>
         <ChartToolbar
           tool={tool}
           onTool={setTool}
@@ -1184,11 +1211,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <DrawingList drawings={drawings} selectedId={selectedDrawing} onSelect={setSelectedDrawing} onChange={rememberDrawings} lockAll={lockAll} onClearAll={() => removeObjects("drawings")} />
           </aside>
         ) : null}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className={cx("flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden", variant === "positions" && "max-lg:flex-none")}>
       {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={prior?.date === replay.date ? prior.session : null} /> : null}
       {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[0.6875rem] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div ref={chartAreaRef} className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={chartAreaRef} className={cx("relative flex min-h-0 flex-1 flex-col", variant === "positions" && "max-lg:h-[42dvh] max-lg:flex-none")}>
             {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
             {replay.active && replay.status === "loading" ? <p className="p-4 text-sm text-info">Loading the selected session…</p> : null}
             {(!replay.active || optionView) && chartError ? (
@@ -1234,6 +1261,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               />
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
+            {shown.length > 0 ? (
+              <div className="pointer-events-none absolute bottom-9 left-2 z-20 flex items-center gap-2 lg:hidden">
+                <button type="button" className={cx("pointer-events-auto inline-flex h-11 items-center gap-1.5 rounded-pill px-3.5 text-data font-semibold shadow-e3", tool !== "cursor" ? "bg-primary text-on-primary" : "surface-overlay text-text")} aria-haspopup="dialog" aria-expanded={drawSheet} onClick={() => setDrawSheet(true)}>
+                  <ChartIcon name={tool !== "cursor" ? (toolEntry(tool)?.icon ?? "trend") : "trend"} />
+                  {tool !== "cursor" ? toolEntry(tool)?.label ?? "Drawing" : "Draw"}
+                </button>
+                {tool !== "cursor" ? <button type="button" className="surface-overlay pointer-events-auto inline-flex h-11 items-center rounded-pill px-3.5 text-data font-semibold text-text shadow-e3" onClick={() => setTool("cursor")}>Done</button> : null}
+              </div>
+            ) : null}
             {strategyOpen ? (
               <StrategyPanel
                 settings={strategy}
@@ -1310,14 +1346,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           {replay.active ? null : <p className="truncate border-t border-border px-3 py-0.5 text-micro text-muted" title={`${stamp} ${candleMeta.message}`}>{`${stamp}${candleMeta.mode ? ` · ${candleMeta.mode}` : ""} ${candleMeta.message}`}</p>}
           {variant === "positions" ? (
             <section className="border-t border-border bg-panel">
-              <div className="flex h-10 items-center gap-1 border-b border-border px-2" role="tablist" aria-label="Positions and orders">
+              <div className="no-scrollbar flex h-10 items-center gap-1 overflow-x-auto border-b border-border px-2" role="tablist" aria-label="Positions and orders">
                 {(["open", "closed", "orders", "history", "replay"] as const).map((tab) => (
-                  <button key={tab} type="button" role="tab" aria-selected={dock === tab} className={cx("relative h-10 px-3 text-[0.8125rem] font-medium", dock === tab ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
+                  <button key={tab} type="button" role="tab" aria-selected={dock === tab} className={cx("relative h-10 shrink-0 px-3 text-[0.8125rem] font-medium", dock === tab ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary" : "text-muted hover:text-text")} onClick={() => { setDock(tab); setDockOpen(true); }}>{tab === "open" ? "Open" : tab === "closed" ? "Closed" : tab === "orders" ? "Orders" : tab === "history" ? "History" : "Replay book"}</button>
                 ))}
-                <button type="button" className="ml-auto h-7 rounded-input px-2 text-data text-muted hover:bg-elevated hover:text-text" onClick={() => setDockOpen((value) => !value)}>{dockOpen ? "Collapse" : "Expand"}</button>
+                <button type="button" className="ml-auto h-7 shrink-0 rounded-input px-2 text-data text-muted hover:bg-elevated hover:text-text" onClick={() => setDockOpen((value) => !value)}>{dockOpen ? "Collapse" : "Expand"}</button>
               </div>
               {dockOpen ? (
-                <div className="flex max-h-60 min-h-0 flex-col">
+                <div className="flex max-h-60 min-h-0 flex-col max-lg:max-h-none">
                   {dock === "open" ? <OpenTable mode="demo" practice={practice} practiceError={practiceError} broker={null} brokerNote="" onPick={selectSymbol} /> : null}
                   {dock === "closed" ? <ClosedTable rows={(activity?.executions ?? []).filter((row) => Number(row.realized) !== 0)} onPick={selectSymbol} /> : null}
                   {dock === "orders" ? <OrderTable mode="demo" rows={activity?.orders ?? []} note="" onPick={selectSymbol} /> : null}

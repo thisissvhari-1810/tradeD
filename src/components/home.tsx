@@ -1,17 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CandlestickChart, ChevronDown, GitBranch, History, Layers, ListPlus, ReceiptText, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
-import { api, ApiError, moveOf, type Quote } from "@/components/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CandlestickChart, GitBranch, History, Layers, ReceiptText, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
+import { api, ApiError } from "@/components/api";
 import { useDesk, type IndexQuote } from "@/components/shell";
-import { StockLogo, StockSearchField, WatchStar } from "@/components/stock-identity";
+import { StockLogo } from "@/components/stock-identity";
+import { InlineState, WatchlistCard } from "@/components/watchlist-card";
 import { Badge, Button, cx, PriceCell, SegmentedControl, Skeleton, Sparkline, type Tone } from "@/components/ui";
 import { mayPractice } from "@/lib/auth/permissions";
 import { parseOptionLedgerSymbol } from "@/lib/options/contract";
 import { compactVolume, inr, parseInr, signedNumber, signedPercent, signOf, splitInr } from "@/lib/format";
 
-type List = { id: string; name: string; items: Array<{ symbol: string; name: string; exchange: string }> };
 type Portfolio = {
   periodLabel?: string;
   startingCapital: string;
@@ -31,7 +31,6 @@ type Portfolio = {
   equityCurve?: Array<{ at: string; equity: string }>;
   positions: Array<{ symbol: string }>;
 };
-type Hit = { symbol: string; name: string; exchange: string };
 type Board = { gainers: Mover[]; losers: Mover[]; volume: Mover[]; message: string };
 type Mover = { symbol: string; name: string; last: number; previous: number; change: number; percent: number; volume: number | null };
 type Candle = { time: number; close: number };
@@ -53,7 +52,6 @@ const ACTIONS = [
 ] as const;
 
 const RANGE_MS: Record<Range, number> = { "1D": 864e5, "1W": 7 * 864e5, "1M": 30 * 864e5, ALL: Infinity };
-const WATCH_PREVIEW = 8;
 
 function istDay(seconds: number) {
   return new Date(seconds * 1000).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
@@ -66,17 +64,8 @@ function greeting() {
 
 export function Home() {
   const desk = useDesk();
-  const [lists, setLists] = useState<List[]>([]);
-  const [listsState, setListsState] = useState<"loading" | "ready" | "error">("loading");
-  const [listId, setListId] = useState("");
-  const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<Hit[]>([]);
-  const [searched, setSearched] = useState("");
-  const [searchError, setSearchError] = useState(false);
-  const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [portfolioState, setPortfolioState] = useState<PortfolioState>("loading");
-  const [showAll, setShowAll] = useState(false);
   const [mover, setMover] = useState<"gainers" | "losers" | "volume">("gainers");
   const [board, setBoard] = useState<Board | null>(null);
   const [boardError, setBoardError] = useState("");
@@ -89,12 +78,6 @@ export function Home() {
   }), []);
 
   useEffect(() => {
-    api<{ lists: List[] }>("/api/watchlists").then((data) => {
-      setLists(data.lists);
-      setListsState("ready");
-      const saved = localStorage.getItem("td-watchlist");
-      setListId(saved && data.lists.some((item) => item.id === saved) ? saved : data.lists[0]?.id ?? "");
-    }).catch(() => setListsState("error"));
     void loadPortfolio();
     const loadBoard = () => api<Board>("/api/market/movers").then((data) => { setBoard(data); setBoardError(""); }).catch((error: unknown) => setBoardError(error instanceof Error ? error.message : "Market movers unavailable."));
     loadBoard();
@@ -107,66 +90,6 @@ export function Home() {
     };
   }, [loadPortfolio]);
 
-  const list = lists.find((item) => item.id === listId) ?? lists[0];
-  const symbols = useMemo(() => list?.items.map((item) => item.symbol) ?? [], [list]);
-
-  useEffect(() => {
-    if (!symbols.length) return;
-    let stop = false;
-    const load = () => {
-      api<{ quotes: Array<Quote | { symbol: string; error: string }> }>(`/api/market/quotes?symbols=${symbols.join(",")}`)
-        .then((data) => {
-          if (stop) return;
-          const next: Record<string, Quote> = {};
-          for (const row of data.quotes) if ("last" in row) next[row.symbol] = row;
-          setQuotes(next);
-        })
-        .catch(() => undefined);
-    };
-    load();
-    const timer = window.setInterval(load, 5000);
-    return () => { stop = true; window.clearInterval(timer); };
-  }, [symbols]);
-
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      if (query.trim().length < 1) { setHits([]); setSearched(""); return; }
-      api<Hit[]>(`/api/instruments?q=${encodeURIComponent(query)}`).then((rows) => { setHits(rows); setSearched(query); setSearchError(false); }).catch(() => { setHits([]); setSearched(query); setSearchError(true); });
-    }, 160);
-    return () => window.clearTimeout(handle);
-  }, [query]);
-
-  const rows = useMemo(() => [...(list?.items ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [list]);
-  // Advancers and decliners in this watchlist, from the same live quotes as the rows.
-  const breadth = useMemo(() => {
-    let up = 0;
-    let down = 0;
-    for (const item of list?.items ?? []) {
-      const move = moveOf(quotes[item.symbol]?.last, quotes[item.symbol]?.previousClose);
-      if (move && move.abs > 0) up += 1;
-      if (move && move.abs < 0) down += 1;
-    }
-    return { up, down };
-  }, [list, quotes]);
-  const visibleRows = showAll ? rows : rows.slice(0, WATCH_PREVIEW);
-
-  const searchStatus = query.trim().length < 1 ? "idle" : searched !== query ? "loading" : searchError ? "error" : hits.length === 0 ? "empty" : "ready";
-  const onList = (symbol: string) => Boolean(list?.items.some((item) => item.symbol === symbol));
-
-  function toggleWatch(symbol: string, name: string, exchange: string) {
-    const target = list ?? lists[0];
-    if (!target) {
-      desk.toast("No watchlist is available for this account.");
-      return;
-    }
-    const active = target.items.some((item) => item.symbol === symbol);
-    void api("/api/watchlists", { action: active ? "remove" : "add", id: target.id, symbol }).then(() => {
-      setLists((current) => current.map((item) => item.id === target.id
-        ? { ...item, items: active ? item.items.filter((row) => row.symbol !== symbol) : [...item.items, { symbol, name, exchange }] }
-        : item));
-    }).catch((error: unknown) => desk.toast(error instanceof Error ? error.message : "Watchlist update failed."));
-  }
-
   const user = desk.user;
   const live = desk.mode === "live";
   const replayAllowed = user?.features?.replay !== false;
@@ -175,82 +98,29 @@ export function Home() {
 
   return (
     <div className="h-full min-h-0 overflow-auto">
-      <div className="mx-auto grid max-w-[102.5rem] gap-4 p-3 sm:p-4 lg:p-5 xl:grid-cols-[minmax(0,1fr)_minmax(17.5rem,19.75rem)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <WelcomeHero name={user?.name?.split(" ")[0]} live={live} />
+      {/* Phones and small tablets: one column in priority order (account, watchlist, market, activity,
+          shortcuts); the column wrappers dissolve (contents) so each card can take its place. */}
+      <div className="mx-auto grid max-w-[102.5rem] gap-3 p-3 sm:gap-4 sm:p-4 lg:p-5 xl:grid-cols-[minmax(0,1fr)_minmax(17.5rem,19.75rem)]">
+        <div className="flex min-w-0 flex-col gap-4 max-lg:contents">
+          <div className="max-lg:order-1"><WelcomeHero name={user?.name?.split(" ")[0]} live={live} /></div>
 
-          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(16.875rem,1fr)]">
-            <AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} />
-            <MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} />
+          <div className="grid min-w-0 gap-4 max-lg:contents lg:grid-cols-[minmax(0,1.65fr)_minmax(16.875rem,1fr)]">
+            <div className="min-w-0 max-lg:order-2 lg:contents"><AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} /></div>
+            <div className="min-w-0 max-lg:order-4 lg:contents"><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
           </div>
 
-          <QuickActions live={live} replayAllowed={replayAllowed} />
+          <div className="min-w-0 max-lg:order-7"><QuickActions live={live} replayAllowed={replayAllowed} /></div>
 
-          <MarketMovers board={board} error={boardError} mover={mover} onMover={setMover} onPick={desk.chooseSymbol} />
+          <div className="min-w-0 max-lg:order-5"><MarketMovers board={board} error={boardError} mover={mover} onMover={setMover} onPick={desk.chooseSymbol} /></div>
         </div>
 
-        <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-5 xl:max-h-[calc(100dvh-var(--topbar)-40px)] xl:self-start">
-          <section className="surface flex min-h-[21.25rem] min-w-0 flex-col overflow-hidden xl:min-h-[16.25rem] xl:flex-1" aria-label="Watchlist">
-            <div className="px-3 pb-2 pt-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h2 className="text-dense font-semibold">Watchlist</h2>
-                  <p className="text-micro text-muted">{list ? `${list.items.length} instrument${list.items.length === 1 ? "" : "s"}` : listsState === "error" ? "Unavailable" : "Loading…"}</p>
-                </div>
-                {lists.length > 1 ? (
-                  <label className="relative">
-                    <span className="sr-only">Choose watchlist</span>
-                    <select className="h-7 appearance-none py-0 pl-2 pr-6 text-data font-medium" value={list?.id ?? ""} onChange={(event) => { setListId(event.target.value); localStorage.setItem("td-watchlist", event.target.value); }}>
-                      {lists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" aria-hidden />
-                  </label>
-                ) : <Breadth up={breadth.up} down={breadth.down} />}
-              </div>
-              <StockSearchField
-                query={query}
-                onQuery={setQuery}
-                hits={hits}
-                status={searchStatus}
-                watched={onList}
-                placeholder="Search and add"
-                onSelect={(hit) => { desk.openChart(hit.symbol); setQuery(""); setHits([]); }}
-                onToggleWatch={(hit) => toggleWatch(hit.symbol, hit.name, hit.exchange)}
-              />
-              {lists.length > 1 ? <div className="mt-2 flex justify-end"><Breadth up={breadth.up} down={breadth.down} /></div> : null}
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto border-t border-border-soft px-1.5 py-1">
-              {listsState === "loading" ? <WatchlistSkeleton /> : null}
-              {listsState === "error" ? <InlineState icon={<WifiOff className="h-5 w-5" />} title="Watchlist unavailable" body="The saved watchlists could not be loaded. Refresh the page to retry." /> : null}
-              {listsState === "ready" && rows.length === 0 ? (
-                <InlineState icon={<ListPlus className="h-5 w-5" />} title="Your watchlist is empty" body="Search above and tap the star to track an instrument here." />
-              ) : null}
-              <ul>
-                {visibleRows.map((item) => <WatchRow key={item.symbol} item={item} quote={quotes[item.symbol]} onOpen={() => desk.chooseSymbol(item.symbol)} onRemove={() => toggleWatch(item.symbol, item.name, item.exchange)} />)}
-              </ul>
-            </div>
-            {rows.length > WATCH_PREVIEW ? (
-              <button type="button" className="h-9 shrink-0 border-t border-border-soft text-data font-medium text-primary transition-colors hover:bg-hover" onClick={() => setShowAll((value) => !value)} aria-expanded={showAll}>
-                {showAll ? "Show fewer" : `View all ${rows.length}`}
-              </button>
-            ) : null}
-          </section>
+        <aside className="flex min-w-0 flex-col gap-4 max-lg:contents xl:sticky xl:top-5 xl:max-h-[calc(100dvh-var(--topbar)-40px)] xl:self-start">
+          <WatchlistCard className="max-lg:order-3 max-lg:max-h-[30rem] xl:min-h-[16.25rem] xl:flex-1" />
 
-          <RecentActivity allowed={activityAllowed} historyHref={historyHref} />
+          <div className="min-w-0 max-lg:order-6"><RecentActivity allowed={activityAllowed} historyHref={historyHref} /></div>
         </aside>
       </div>
     </div>
-  );
-}
-
-function Breadth({ up, down }: { up: number; down: number }) {
-  if (up + down === 0) return null;
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1 text-micro font-semibold" title={`${up} up, ${down} down today in this watchlist`}>
-      <span className="num inline-flex items-center gap-0.5 rounded-sm bg-profit-soft px-1.5 py-0.5 text-profit"><ArrowUpRight className="h-3 w-3" aria-hidden />{up}</span>
-      <span className="num inline-flex items-center gap-0.5 rounded-sm bg-loss-soft px-1.5 py-0.5 text-loss"><ArrowDownRight className="h-3 w-3" aria-hidden />{down}</span>
-      <span className="sr-only">{up} up and {down} down today</span>
-    </span>
   );
 }
 
@@ -261,10 +131,10 @@ function WelcomeHero({ name, live }: { name?: string; live: boolean }) {
         <p className="eyebrow" suppressHydrationWarning>
           {greeting()}{name ? `, ${name}` : ""} · {live ? "Live prices · paper wallet" : "Practice account"}
         </p>
-        <h1 className="mt-1 text-[clamp(1.375rem,2.1vw,1.75rem)] font-semibold leading-tight tracking-[-0.03em] text-text">
+        <h1 className="mt-1 hidden text-[clamp(1.375rem,2.1vw,1.75rem)] sm:block font-semibold leading-tight tracking-[-0.03em] text-text">
           Your market. <span className="bg-gradient-to-r from-primary to-demo bg-clip-text text-transparent">Your edge.</span>
         </h1>
-        <p className="mt-0.5 text-data text-muted">A smarter view of your trading day.</p>
+        <p className="mt-0.5 hidden text-data text-muted sm:block">A smarter view of your trading day.</p>
       </div>
       <MarketStatus />
     </header>
@@ -647,52 +517,3 @@ function timeLabel(iso: string) {
     : date.toLocaleDateString("en-IN", { ...zone, day: "numeric", month: "short" });
 }
 
-function WatchRow({ item, quote, onOpen, onRemove }: { item: List["items"][number]; quote?: Quote; onOpen: () => void; onRemove: () => void }) {
-  const move = moveOf(quote?.last, quote?.previousClose);
-  const last = quote ? Number(quote.last) : null;
-  const tone = move == null || move.abs === 0 ? "text-muted" : move.abs > 0 ? "text-profit" : "text-loss";
-  return (
-    <li className="group flex items-center gap-0.5 rounded-md transition-colors hover:bg-hover focus-within:bg-hover">
-      <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md py-1.5 pl-1.5 text-left" onClick={onOpen} title={item.name}>
-        <StockLogo symbol={item.symbol} name={item.name} size={26} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-data font-semibold leading-tight text-text">{item.symbol}</span>
-          <span className="block truncate text-[0.6875rem] leading-tight text-muted">{item.name}</span>
-        </span>
-        <span className="shrink-0 text-right">
-          {quote ? <PriceCell value={last} className="block text-data font-semibold leading-tight text-text" /> : <Skeleton className="ml-auto h-3.5 w-14" />}
-          <span className={cx("num block whitespace-nowrap text-[0.6875rem] font-medium leading-tight", tone)}>
-            {move ? `${move.abs > 0 ? "▲" : move.abs < 0 ? "▼" : ""} ${signedPercent(move.pct)}` : quote ? "—" : ""}
-          </span>
-        </span>
-      </button>
-      <span className="opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-        <WatchStar active onToggle={onRemove} label={`Remove ${item.symbol} from watchlist`} />
-      </span>
-    </li>
-  );
-}
-
-function WatchlistSkeleton() {
-  return (
-    <div className="space-y-1 p-1.5" aria-busy="true" aria-label="Loading watchlist">
-      {[0, 1, 2, 3, 4, 5].map((item) => (
-        <div key={item} className="flex items-center gap-2.5 py-1.5">
-          <Skeleton className="h-[1.625rem] w-[1.625rem] rounded-[28%]" />
-          <div className="flex-1"><Skeleton className="h-3 w-16" /><Skeleton className="mt-1.5 h-2.5 w-28" /></div>
-          <div><Skeleton className="h-3 w-14" /><Skeleton className="ml-auto mt-1.5 h-2.5 w-10" /></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function InlineState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
-  return (
-    <div className="flex flex-col items-center px-6 py-8 text-center">
-      <span className="mb-3 grid h-10 w-10 place-items-center rounded-lg border border-border-soft bg-sunken text-muted">{icon}</span>
-      <p className="text-dense font-semibold text-text">{title}</p>
-      <p className="mt-1 max-w-xs text-data text-muted">{body}</p>
-    </div>
-  );
-}
