@@ -296,7 +296,8 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <DeskContext.Provider value={value}>
-      <div className="flex h-dvh min-h-0 bg-background">
+      {/* While the Premium page is open the whole shell takes the Premium theme (tokens.css). */}
+      <div className="flex h-dvh min-h-0 bg-background text-text" data-premium-shell={path.startsWith("/premium") ? "" : undefined}>
         <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft/60 bg-background lg:flex" aria-label="Primary">
           <div className="flex h-[var(--topbar)] shrink-0 items-center justify-center">
             <BrandMark />

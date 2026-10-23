@@ -188,6 +188,69 @@
   color-scheme: dark;
 }
 
+/*
+ * Premium page theme. While /premium is open the app shell carries data-premium-shell, and these
+ * semantic tokens override the light or dark theme for everything inside it (header, sidebar,
+ * ticker, search, menus, main area). The user's saved theme is untouched: leaving /premium removes
+ * the attribute and the normal tokens apply again. Market green / red keep their meaning.
+ */
+[data-premium-shell] {
+  --background: #0a0908;
+  --panel: #110f0c;
+  --elevated: #1a1712;
+  --overlay: #1e1a14;
+  --sunken: #0d0b09;
+  --hover: #1c1913;
+  --primary: #e3b341;
+  --primary-hover: #f2c75c;
+  --primary-soft: #2b2310;
+  --on-primary: #1a1406;
+  --on-signal: #ffffff;
+  --profit: #2ebd85;
+  --profit-soft: #0f2a21;
+  --loss: #f6465d;
+  --loss-soft: #33161c;
+  --warning: #f0b90b;
+  --warning-soft: #2e2510;
+  --gold: #e3b341;
+  --gold-strong: #f2c75c;
+  --gold-soft: #2b2310;
+  --on-gold: #1a1406;
+  --premium-surface: #0a0908;
+  --premium-raised: #15130f;
+  --premium-border: rgb(227 179 65 / 0.26);
+  --premium-text: #f5f1e6;
+  --premium-muted: #a8a397;
+  --info: #e3b341;
+  --info-soft: #2b2310;
+  --demo: #c9a6ff;
+  --demo-soft: #241d33;
+  --text: #f5f1e6;
+  --text-2: #d6d0c2;
+  --muted: #9a9486;
+  --disabled: #4a463e;
+  --border: #2a251b;
+  --border-soft: #1f1b14;
+  --border-strong: #3d3627;
+  --grid: #1a1712;
+  --cream: #15130f;
+  --focus: #f2c75c;
+  --focus-ring: #f2c75c;
+  --scrim: rgba(0, 0, 0, 0.65);
+  --highlight: rgba(255, 236, 190, 0.04);
+  --hero-glow: rgba(227, 179, 65, 0.12);
+  --hero-glow-2: rgba(227, 179, 65, 0.06);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(227, 179, 65, 0.05);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(227, 179, 65, 0.05);
+  --shadow-3: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-4: 0 28px 72px rgba(0, 0, 0, 0.6);
+  --shadow-inset: inset 0 1px 0 rgba(255, 236, 190, 0.05);
+  color-scheme: dark;
+  color: var(--text);
+}
+/* The page behind the shell (overscroll, safe areas) matches while Premium is open. */
+html:has([data-premium-shell]), html:has([data-premium-shell]) body { background: #0a0908; }
+
 @media (prefers-reduced-motion: reduce) {
   :root {
     --dur-press: 0ms;
