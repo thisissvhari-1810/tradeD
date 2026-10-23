@@ -1116,7 +1116,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </div>
           {replay.active
             ? <span className="inline-flex items-center gap-1 rounded-pill bg-demo-soft px-2 py-0.5 text-micro font-medium text-demo"><span className="h-1.5 w-1.5 rounded-full bg-demo" aria-hidden />Replay</span>
-            : <span className={`hidden items-center gap-1 whitespace-nowrap text-micro 2xl:inline-flex ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stamp}><span className={`h-1.5 w-1.5 rounded-full ${feedLabel === "Live" ? "bg-profit" : "bg-muted"}`} aria-hidden />{feedLabel}</span>}
+            : marketClosed ? null : <span className={`hidden items-center gap-1 whitespace-nowrap text-micro 2xl:inline-flex ${feedLabel === "Live" ? "text-profit" : "text-muted"}`} title={stamp}><span className={`h-1.5 w-1.5 rounded-full ${feedLabel === "Live" ? "bg-profit" : "bg-muted"}`} aria-hidden />{feedLabel}</span>}
           {optionView ? <button type="button" className="rounded-full border border-border px-2 py-0.5 text-micro text-muted" onClick={() => setOptionView(null)}>Back to {optionView.underlying}</button> : null}
           <IconButton label={watched ? "Remove from watchlist" : "Add to watchlist"} active={watched} onClick={toggleWatch}>
             <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
@@ -1369,7 +1369,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           onSpeed={(speed) => setReplay((current) => ({ ...current, speed }))}
         />
       ) : null}
-          {replay.active ? null : <p className="truncate border-t border-border px-3 py-0.5 text-micro text-muted" title={`${stamp} ${candleMeta.message}`}>{`${stamp}${candleMeta.mode ? ` · ${candleMeta.mode}` : ""} ${candleMeta.message}`}</p>}
           {variant === "positions" ? (
             <section className="border-t border-border bg-panel">
               <div className="no-scrollbar flex h-10 items-center gap-1 overflow-x-auto border-b border-border px-2" role="tablist" aria-label="Positions and orders">

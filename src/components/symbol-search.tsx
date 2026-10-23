@@ -56,6 +56,8 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
   const [cursor, setCursor] = useState(0);
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [recent, setRecent] = useState<string[]>([]);
+  // Before typing: indices and every stock A–Z (from the instrument master), loaded a page at a time.
+  const [browse, setBrowse] = useState<{ rows: Instrument[]; state: "idle" | "loading" | "ready" | "error"; done: boolean }>({ rows: [], state: "idle", done: false });
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const requestId = useRef(0);
@@ -68,11 +70,34 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
       setQuery("");
       setCursor(0);
       setRecent(readRecent());
+      if (browse.state === "idle" || browse.state === "error") setBrowse({ rows: [], state: "loading", done: false });
     }
   }
   useEffect(() => {
     if (open) window.setTimeout(() => inputRef.current?.focus(), 30);
   }, [open]);
+
+  const browseLoading = open && browse.state === "loading" && browse.rows.length === 0;
+  useEffect(() => {
+    if (!browseLoading) return;
+    let stop = false;
+    api<Instrument[]>("/api/instruments")
+      .then((rows) => { if (!stop) setBrowse({ rows, state: "ready", done: rows.length < 50 }); })
+      .catch(() => { if (!stop) setBrowse({ rows: [], state: "error", done: false }); });
+    return () => { stop = true; };
+  }, [browseLoading]);
+  function loadMore() {
+    if (browse.state === "loading" || browse.done) return;
+    const skip = browse.rows.filter((row) => row.sector !== "INDEX").length;
+    setBrowse((current) => ({ ...current, state: "loading" }));
+    api<Instrument[]>(`/api/instruments?skip=${skip}`)
+      .then((rows) => setBrowse((current) => {
+        const seen = new Set(current.rows.map((row) => row.symbol));
+        const fresh = rows.filter((row) => !seen.has(row.symbol));
+        return { rows: [...current.rows, ...fresh], state: "ready", done: fresh.length === 0 || rows.length < 50 };
+      }))
+      .catch(() => setBrowse((current) => ({ ...current, state: "ready", done: true })));
+  }
 
   // Debounced search; a slower, older answer never replaces a newer one.
   useEffect(() => {
@@ -89,14 +114,23 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
 
   const q = query.trim();
   const status: Status = !q ? "idle" : result.q !== q ? "loading" : result.failed ? "error" : result.rows.length ? "ready" : "empty";
+  const toRow = (row: Instrument) => ({ symbol: row.symbol, name: row.name, exchange: row.exchange, type: TYPE_LABEL[row.sector] ?? row.sector });
+  const recentRows = useMemo(() => recent.map((symbol) => {
+    const known = browse.rows.find((row) => row.symbol === symbol);
+    return known ? toRow(known) : { symbol, name: "", exchange: "NSE", type: "" };
+  }), [recent, browse.rows]);
   const rows = useMemo<Array<{ symbol: string; name: string; exchange: string; type: string }>>(() => {
-    if (!q) return recent.map((symbol) => ({ symbol, name: "", exchange: "NSE", type: "" }));
+    if (!q) {
+      const recentSet = new Set(recent);
+      return [...recentRows, ...browse.rows.filter((row) => !recentSet.has(row.symbol)).map(toRow)];
+    }
     if (status !== "ready") return [];
-    return result.rows.slice(0, 40).map((row) => ({ symbol: row.symbol, name: row.name, exchange: row.exchange, type: TYPE_LABEL[row.sector] ?? row.sector }));
-  }, [q, recent, status, result.rows]);
+    return result.rows.map(toRow);
+  }, [q, recent, recentRows, browse.rows, status, result.rows]);
+  const recentCount = q ? 0 : recentRows.length;
 
   // Live price and change for the visible rows, when the feed has them.
-  const quoted = rows.slice(0, 20).map((row) => row.symbol).join(",");
+  const quoted = rows.slice(0, 30).map((row) => row.symbol).join(",");
   useEffect(() => {
     if (!open || !quoted) return;
     let stop = false;
@@ -172,17 +206,19 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
           {query ? <button type="button" className="absolute right-6 top-[calc(50%-0.25rem)] grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-muted hover:text-text lg:right-5" aria-label="Clear search" onClick={() => { setQuery(""); inputRef.current?.focus(); }}><X className="h-4 w-4" aria-hidden /></button> : null}
         </div>
         <p className="px-4 pb-1 text-micro font-semibold uppercase tracking-wide text-muted lg:px-3">
-          {status === "idle" ? (recent.length ? "Recent" : "Type a name or symbol") : status === "loading" ? "Searching…" : status === "ready" ? "Results" : ""}
+          {status === "idle" ? (recent.length ? "Recent" : "All stocks") : status === "loading" ? "Searching…" : status === "ready" ? `${rows.length} result${rows.length === 1 ? "" : "s"}` : ""}
         </p>
         <ul id="td-symbol-results" ref={listRef} role="listbox" aria-label="Stocks" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
           {status === "empty" ? <li className="px-3 py-6 text-center text-data text-muted">No stock or index matches “{q}”.</li> : null}
           {status === "error" ? <li className="px-3 py-6 text-center text-data text-loss" role="alert">Search is unavailable right now. Check the connection and try again.</li> : null}
           {rows.map((row, index) => {
+            const heading = !q && recentCount > 0 && index === recentCount ? <p className="px-2 pb-1 pt-3 text-micro font-semibold uppercase tracking-wide text-muted">All stocks</p> : null;
             const selected = row.symbol === current.symbol && row.exchange === current.exchange;
             const quote = quotes[row.symbol];
             const move = moveOf(quote?.last, quote?.previousClose);
             return (
               <li key={`${row.exchange}:${row.symbol}`} id={`td-symbol-${index}`} role="option" aria-selected={index === active}>
+                {heading}
                 <button
                   type="button"
                   className={cx("flex min-h-14 w-full items-center gap-3 rounded-md px-2 text-left lg:min-h-11", index === active ? "bg-hover" : "hover:bg-hover", selected && "ring-1 ring-primary/40")}
@@ -209,6 +245,13 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
               </li>
             );
           })}
+          {!q && browse.state === "loading" ? <li className="px-3 py-4 text-center text-data text-muted">Loading stocks…</li> : null}
+          {!q && browse.state === "error" ? <li className="px-3 py-4 text-center text-data text-loss" role="alert">The stock list could not be loaded. Type to search instead.</li> : null}
+          {!q && browse.state === "ready" && !browse.done ? (
+            <li className="px-2 pt-1">
+              <button type="button" className="h-11 w-full rounded-md border border-border-soft text-data font-medium text-primary hover:bg-hover lg:h-9" onClick={loadMore}>Show more stocks</button>
+            </li>
+          ) : null}
         </ul>
       </div>
     </div>

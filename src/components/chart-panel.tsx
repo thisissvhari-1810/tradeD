@@ -21,6 +21,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { bollinger, ema, macd, rsi, sma, supertrend, toLine, vwap } from "@/lib/market/indicators";
+import { cx } from "@/components/ui";
 import { axisFontSize, themeColor, withAlpha } from "@/lib/theme";
 import { emptyAppearance, type ChartPaint } from "@/lib/color/appearance";
 
@@ -461,29 +462,39 @@ function candleCaption(bar: Candle, basis: number): string {
   return `${when} IST Open ${bar.open.toFixed(2)} High ${bar.high.toFixed(2)} Low ${bar.low.toFixed(2)} Close ${bar.close.toFixed(2)} Volume ${bar.volume} ${sign}${change.toFixed(2)} ${sign}${percent.toFixed(2)} percent`;
 }
 
+/**
+ * One-line OHLC strip at the top left of the chart (Kite-style): the candle under the crosshair, or
+ * the latest candle. High is green, low red, close green or red by the candle's direction.
+ */
 function CandleReadout({ candles, hover }: { candles: Candle[]; hover: Candle | null }) {
   const bar = hover ?? candles.at(-1);
   if (!bar) return null;
   const basis = previousClose(candles, bar);
   const change = bar.close - basis;
   const percent = basis ? (change / basis) * 100 : 0;
-  const when = new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(new Date(bar.time * 1000));
-  const up = change > 0;
-  const down = change < 0;
-  const sign = up ? "+" : "";
+  const date = new Date(bar.time * 1000);
+  const zone = { timeZone: "Asia/Kolkata" } as const;
+  // Daily and longer candles are stamped at midnight IST: they show the date only.
+  const daily = new Intl.DateTimeFormat("en-GB", { ...zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date) === "00:00";
+  const when = new Intl.DateTimeFormat("en-IN", daily ? { ...zone, day: "2-digit", month: "short", year: "numeric" } : { ...zone, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+  const closeTone = bar.close > bar.open ? "text-profit" : bar.close < bar.open ? "text-loss" : "text-text";
+  const changeTone = change > 0 ? "text-profit" : change < 0 ? "text-loss" : "text-muted";
+  const sign = change > 0 ? "+" : "";
+  const value = (label: string, amount: number, tone: string) => (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="text-muted">{label}</span>
+      <span className={cx("font-semibold", tone)}>{amount.toFixed(2)}</span>
+    </span>
+  );
   return (
-    <div className="td-chart-legend pointer-events-none absolute right-20 top-2 z-10 max-w-[16rem] border max-lg:right-16 max-lg:top-1 max-lg:max-w-[12.5rem] border-border bg-panel/95 px-2 py-1 font-mono text-[0.625rem] leading-4 text-text">
-      <p>{when} IST</p>
-      <p><span className="text-muted">O</span> {bar.open.toFixed(2)} <span className="text-muted">H</span> {bar.high.toFixed(2)} <span className="text-muted">L</span> {bar.low.toFixed(2)} <span className="text-muted">C</span> {bar.close.toFixed(2)}</p>
-      <p><span className="text-muted">Vol</span> {new Intl.NumberFormat("en-IN").format(bar.volume)} <span className={down ? "text-loss" : up ? "text-profit" : "text-muted"}>{sign}{change.toFixed(2)} ({sign}{percent.toFixed(2)}%)</span></p>
+    <div className="td-chart-legend no-scrollbar pointer-events-none absolute left-2 top-1.5 z-10 flex max-w-[calc(100%-3.75rem)] items-baseline gap-x-1.5 overflow-hidden whitespace-nowrap rounded-sm bg-panel/80 px-1 py-0.5 font-mono text-[0.625rem] sm:gap-x-2.5 sm:px-1.5 sm:text-[0.6875rem] leading-4 tabular-nums text-text backdrop-blur-[2px]">
+      <span className="text-muted max-[380px]:hidden">{when}</span>
+      {value("O", bar.open, "text-text")}
+      {value("H", bar.high, "text-profit")}
+      {value("L", bar.low, "text-loss")}
+      {value("C", bar.close, closeTone)}
+      {/* Phones show the change in the header already; the strip keeps to date and OHLC. */}
+      <span className={cx("max-sm:hidden", changeTone)}>{sign}{change.toFixed(2)} ({sign}{percent.toFixed(2)}%)</span>
     </div>
   );
 }
@@ -557,7 +568,8 @@ function mountChart(container: HTMLDivElement, scheme: ChartScheme) {
     grid: chartThemeOptions(colors).grid,
     localization: { timeFormatter: (time: Time) => formatKolkata(time) },
     crosshair: { mode: 1, vertLine: { ...chartThemeOptions(colors).crosshair.vertLine, style: LineStyle.Dashed, width: 1 }, horzLine: { ...chartThemeOptions(colors).crosshair.horzLine, style: LineStyle.Dashed, width: 1 } },
-    rightPriceScale: { borderColor: colors.border, minimumWidth: 84, entireTextOnly: true },
+    // No minimum width: the scale is as wide as its labels, so no empty band is left at the right edge.
+    rightPriceScale: { borderColor: colors.border, entireTextOnly: true },
     leftPriceScale: { visible: false, borderColor: colors.border },
     handleScroll: true,
     handleScale: { axisPressedMouseMove: { time: true, price: true }, mouseWheel: true, pinch: true },
