@@ -480,7 +480,7 @@ function CandleReadout({ candles, hover }: { candles: Candle[]; hover: Candle | 
   const down = change < 0;
   const sign = up ? "+" : "";
   return (
-    <div className="pointer-events-none absolute right-20 top-2 z-10 max-w-[16rem] border border-border bg-panel/95 px-2 py-1 font-mono text-[0.625rem] leading-4 text-text">
+    <div className="td-chart-legend pointer-events-none absolute right-20 top-2 z-10 max-w-[16rem] border max-lg:right-16 max-lg:top-1 max-lg:max-w-[12.5rem] border-border bg-panel/95 px-2 py-1 font-mono text-[0.625rem] leading-4 text-text">
       <p>{when} IST</p>
       <p><span className="text-muted">O</span> {bar.open.toFixed(2)} <span className="text-muted">H</span> {bar.high.toFixed(2)} <span className="text-muted">L</span> {bar.low.toFixed(2)} <span className="text-muted">C</span> {bar.close.toFixed(2)}</p>
       <p><span className="text-muted">Vol</span> {new Intl.NumberFormat("en-IN").format(bar.volume)} <span className={down ? "text-loss" : up ? "text-profit" : "text-muted"}>{sign}{change.toFixed(2)} ({sign}{percent.toFixed(2)}%)</span></p>

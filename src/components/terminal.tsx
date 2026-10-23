@@ -569,8 +569,8 @@ export function Terminal() {
           </div>
           <form className="flex flex-1 flex-col gap-2 overflow-auto p-3 text-xs" onSubmit={(event) => { event.preventDefault(); if (canTrade) setReview(true); }}>
             <div className="grid grid-cols-2 gap-1">
-              <button type="button" className={`py-2 ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border"}`} onClick={() => setSide("BUY")}>Buy</button>
-              <button type="button" className={`py-2 ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border"}`} onClick={() => setSide("SELL")}>Sell</button>
+              <button type="button" className={`py-2 max-lg:min-h-11 ${side === "BUY" ? "bg-profit text-on-signal" : "border border-border"}`} style={side === "BUY" ? { color: "var(--on-signal)" } : undefined} onClick={() => setSide("BUY")}>Buy</button>
+              <button type="button" className={`py-2 max-lg:min-h-11 ${side === "SELL" ? "bg-loss text-on-signal" : "border border-border"}`} style={side === "SELL" ? { color: "var(--on-signal)" } : undefined} onClick={() => setSide("SELL")}>Sell</button>
             </div>
             <Field label="Instrument" value={symbol} readOnly />
             <Field label="Exchange / segment" value="NSE equity" readOnly />
@@ -598,7 +598,7 @@ export function Terminal() {
             {desk.mode === "live" ? <p className="text-warning">Paper order at live prices. Virtual money only; nothing is sent to Dhan. Real orders: Accounts → Live.</p> : null}
             {desk.user && !mayPractice(desk.user) ? <p className="text-muted">Practice orders are available on accounts with trading enabled.</p> : null}
             {orderMessage ? <p className="text-text">{orderMessage}</p> : null}
-            <button className={`mt-auto py-2 text-white ${side === "BUY" ? "bg-profit" : "bg-loss"}`} disabled={!canTrade}>Review {side.toLowerCase()}</button>
+            <button className={`sticky bottom-0 z-10 mt-auto h-12 rounded-input font-semibold text-on-signal shadow-e2 disabled:opacity-60 max-lg:min-h-12 lg:static lg:h-auto lg:rounded-none lg:py-2 lg:shadow-none ${side === "BUY" ? "bg-profit" : "bg-loss"}`} style={{ color: "var(--on-signal)" }} disabled={!canTrade}>Review {side.toLowerCase()}</button>
           </form>
         </aside>
       </div>

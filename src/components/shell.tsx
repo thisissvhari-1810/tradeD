@@ -5,10 +5,12 @@ import type { FeatureKey, Features } from "@/lib/auth/features";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, LayoutGrid, Moon, Palette, PieChart, Settings, ShieldCheck, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, LayoutGrid, Moon, Palette, PieChart, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
+import { MobileSettingsPanel } from "@/components/mobile-settings";
+import { useMobilePrefs } from "@/components/mobile-prefs";
 import { Badge, Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
 import { appearanceKey, applyAppearance, emptyAppearance, loadAppearance, presetAppearance, saveAppearance, type Appearance } from "@/lib/color/appearance";
 
@@ -109,6 +111,12 @@ export function Shell({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [appearance, setAppearanceState] = useState<Appearance>(() => emptyAppearance("classic"));
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
+  const mobilePrefs = useMobilePrefs();
+  useEffect(() => {
+    document.documentElement.dataset.density = mobilePrefs.density;
+    document.documentElement.dataset.chartLegend = mobilePrefs.chartLegend ? "on" : "off";
+  }, [mobilePrefs.density, mobilePrefs.chartLegend]);
   const [indices, setIndices] = useState<IndexQuote[]>([]);
   const [indexNote, setIndexNote] = useState("");
 
@@ -393,6 +401,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <div className="my-1 h-px bg-border" />
                   <MenuItem icon={theme === "light" ? Moon : Sun} label={theme === "light" ? "Dark theme" : "Light theme"} onClick={() => { toggleTheme(); setOpenUser(false); }} />
                   <MenuItem icon={Palette} label="Chart colours" onClick={() => { setAppearanceOpen(true); setOpenUser(false); }} />
+                  <MenuItem icon={Smartphone} label="Mobile & compact mode" onClick={() => { setMobileSettingsOpen(true); setOpenUser(false); }} />
                   <div className="my-1 h-px bg-border" />
                   <MenuItem icon={LogOut} label="Sign out" onClick={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }} />
                 </div>
@@ -412,7 +421,7 @@ export function Shell({ children }: { children: ReactNode }) {
               <Link key={item.href} href={item.href} aria-current={current ? "page" : undefined} className={cx("relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 text-micro font-medium transition-colors", current ? "text-primary" : "text-muted active:text-text")}>
                 {current ? <span className="absolute top-0 h-[0.1875rem] w-8 rounded-b-full bg-primary" aria-hidden /> : null}
                 <Icon className="h-[1.375rem] w-[1.375rem]" strokeWidth={current ? 2.1 : 1.8} aria-hidden />
-                <span className="max-w-full truncate px-0.5">{item.label}</span>
+                <span className={cx("max-w-full truncate px-0.5", !mobilePrefs.navLabels && "sr-only")}>{item.label}</span>
               </Link>
             );
           })}
@@ -434,6 +443,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </div>
               <div className="mt-4 flex gap-2 border-t border-border-soft pt-4">
                 <Button block icon={theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />} onClick={toggleTheme}>{theme === "light" ? "Dark theme" : "Light theme"}</Button>
+                <Button block icon={<Smartphone className="h-4 w-4" />} onClick={() => { setMenu(false); setMobileSettingsOpen(true); }}>Mobile settings</Button>
                 <Button block icon={<X className="h-4 w-4" />} onClick={() => setMenu(false)}>Close</Button>
               </div>
             </div>
@@ -471,6 +481,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         ) : null}
 
+        {mobileSettingsOpen ? <MobileSettingsPanel onClose={() => setMobileSettingsOpen(false)} /> : null}
         {appearanceOpen ? <AppearancePanel appearance={appearance} onChange={setAppearance} onClose={() => setAppearanceOpen(false)} /> : null}
 
         {pendingMode ? (

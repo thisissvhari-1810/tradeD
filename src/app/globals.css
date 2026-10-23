@@ -347,3 +347,9 @@ tbody tr:hover td { background: var(--hover); }
   table.stack-sm td:first-child { grid-column: 1 / -1; }
   table.stack-sm td:first-child::before { display: none; }
 }
+
+/* Mobile & compact mode (Settings): applied on phones and tablets only; desktop keeps its layout. */
+@media (max-width: 1023px) {
+  :root[data-density="compact"] { --topbar: 3rem; --tabbar: 3.5rem; }
+  :root[data-chart-legend="off"] .td-chart-legend { display: none; }
+}

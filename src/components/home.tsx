@@ -7,6 +7,7 @@ import { api, ApiError } from "@/components/api";
 import { useDesk, type IndexQuote } from "@/components/shell";
 import { StockLogo } from "@/components/stock-identity";
 import { InlineState, WatchlistCard } from "@/components/watchlist-card";
+import { useMobilePrefs } from "@/components/mobile-prefs";
 import { Badge, Button, cx, PriceCell, SegmentedControl, Skeleton, Sparkline, type Tone } from "@/components/ui";
 import { mayPractice } from "@/lib/auth/permissions";
 import { parseOptionLedgerSymbol } from "@/lib/options/contract";
@@ -91,6 +92,7 @@ export function Home() {
   }, [loadPortfolio]);
 
   const user = desk.user;
+  const mobile = useMobilePrefs();
   const live = desk.mode === "live";
   const replayAllowed = user?.features?.replay !== false;
   const activityAllowed = user ? mayPractice(user) && user.features?.orderHistory !== false : null;
@@ -106,12 +108,12 @@ export function Home() {
 
           <div className="grid min-w-0 gap-4 max-lg:contents lg:grid-cols-[minmax(0,1.65fr)_minmax(16.875rem,1fr)]">
             <div className="min-w-0 max-lg:order-2 lg:contents"><AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} /></div>
-            <div className="min-w-0 max-lg:order-4 lg:contents"><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
+            <div className={cx("min-w-0 max-lg:order-4 lg:contents", !mobile.homeMarketCards && "max-lg:hidden")}><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
           </div>
 
-          <div className="min-w-0 max-lg:order-7"><QuickActions live={live} replayAllowed={replayAllowed} /></div>
+          <div className={cx("min-w-0 max-lg:order-7", !mobile.homeMarketCards && "max-lg:hidden")}><QuickActions live={live} replayAllowed={replayAllowed} /></div>
 
-          <div className="min-w-0 max-lg:order-5"><MarketMovers board={board} error={boardError} mover={mover} onMover={setMover} onPick={desk.chooseSymbol} /></div>
+          <div className={cx("min-w-0 max-lg:order-5", !mobile.homeMarketCards && "max-lg:hidden")}><MarketMovers board={board} error={boardError} mover={mover} onMover={setMover} onPick={desk.chooseSymbol} /></div>
         </div>
 
         <aside className="flex min-w-0 flex-col gap-4 max-lg:contents xl:sticky xl:top-5 xl:max-h-[calc(100dvh-var(--topbar)-40px)] xl:self-start">

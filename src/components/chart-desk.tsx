@@ -1,14 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useHydrated } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
 import { ChartHeaderTools } from "@/components/chart-header-tools";
-import { ChartIcon } from "@/components/chart-icons";
-import { toolEntry } from "@/components/drawing-tools";
+import { SymbolSearch } from "@/components/symbol-search";
+import { MobileChartActions } from "@/components/mobile-chart-actions";
 import { ChartToolbar, FavouritesBar, MobileDrawingSheet, type RemoveScope, type VisibilityAction } from "@/components/chart-toolbar";
 import { useDrawingPrefs } from "@/components/drawing-prefs";
 import { DrawingList } from "@/components/drawing-editor";
@@ -220,6 +219,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [full, setFull] = useState(false);
   // Phones: the drawing tools open as a bottom sheet (the toolbar row is for larger screens).
   const [drawSheet, setDrawSheet] = useState(false);
+  // Phones: the quick drawing toolbar over the chart (opened from Draw).
+  const [drawBar, setDrawBar] = useState(false);
+  // The stock picker opened from the symbol at the top left.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [candleMeta, setCandleMeta] = useState({ mode: "", source: "", message: "" });
   const [chartError, setChartError] = useState("");
@@ -1089,12 +1093,24 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   return (
     <div ref={rootRef} className={cx("flex h-full min-h-0 flex-col overflow-hidden bg-background", full && "fixed inset-0 z-[70] h-dvh pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]")}>
       {/* One compact row: identity never shrinks; only the tool strip scrolls when space runs out. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-2 border-b border-border bg-panel pl-2 pr-1 max-lg:pt-1 lg:h-11 lg:flex-nowrap">
+      <div className="relative z-40 flex shrink-0 flex-wrap items-center gap-x-2 border-b border-border bg-panel pl-2 pr-1 max-lg:pt-1 lg:h-11 lg:flex-nowrap">
         <div className="flex min-w-0 shrink-0 items-center gap-2 max-lg:h-10 max-lg:w-full" title={stamp}>
-          <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={26} />
+          <button
+            type="button"
+            className="-ml-1 flex min-w-0 items-center gap-2 rounded-input py-1 pl-1 pr-1.5 hover:bg-hover focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] max-lg:min-h-10"
+            aria-haspopup="dialog"
+            aria-expanded={searchOpen}
+            title="Search and switch stock"
+            onClick={() => setSearchOpen((value) => !value)}
+          >
+            <StockLogo symbol={symbol} name={rail?.items.find((item) => item.symbol === symbol)?.name} size={26} />
+            <span className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap">
+              <span className="truncate text-dense font-semibold">{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
+              <span className="text-micro text-muted">{optionView ? optionView.expiry : "NSE"}</span>
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          </button>
           <div className="flex min-w-0 items-baseline gap-1.5 whitespace-nowrap max-lg:flex-1 max-lg:overflow-hidden">
-            <span className="text-dense font-semibold">{optionView ? `${optionView.underlying} ${optionView.strike.toLocaleString("en-IN")} ${optionView.right}` : symbol}</span>
-            <span className="text-micro text-muted">{optionView ? optionView.expiry : "NSE"}</span>
             <span className="num text-dense font-semibold">{priceLabel}</span>
             {changeLabel ? <span className={`num text-data ${changeTone}`}>{changeLabel}</span> : null}
           </div>
@@ -1106,6 +1122,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             <Star className={`h-4 w-4 ${watched ? "fill-current text-primary" : ""}`} aria-hidden />
           </IconButton>
         </div>
+        <SymbolSearch open={searchOpen} current={{ symbol: optionView ? "" : symbol, exchange: "NSE" }} onSelect={selectSymbol} onClose={closeSearch} />
         <div className="no-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto max-lg:h-11 max-lg:basis-full">
         {/* Phones and tablets: one compact menu with every timeframe (the current one shown). */}
         <label className="relative shrink-0 lg:hidden">
@@ -1271,20 +1288,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
             {shown.length > 0 ? (
-              <div className="pointer-events-none absolute bottom-9 left-2 z-20 flex items-center gap-2 lg:hidden">
-                <button type="button" className={cx("pointer-events-auto inline-flex h-11 items-center gap-1.5 rounded-pill px-3.5 text-data font-semibold shadow-e3", tool !== "cursor" ? "bg-primary text-on-primary" : "surface-overlay text-text")} aria-haspopup="dialog" aria-expanded={drawSheet} onClick={() => setDrawSheet(true)}>
-                  <ChartIcon name={tool !== "cursor" ? (toolEntry(tool)?.icon ?? "trend") : "trend"} />
-                  {tool !== "cursor" ? toolEntry(tool)?.label ?? "Drawing" : "Draw"}
-                </button>
-                {tool !== "cursor" ? <button type="button" className="surface-overlay pointer-events-auto inline-flex h-11 items-center rounded-pill px-3.5 text-data font-semibold text-text shadow-e3" onClick={() => setTool("cursor")}>Done</button> : null}
-              </div>
-            ) : null}
-            {/* Phones (Kite-style): Buy and Sell under the thumb; they open the paper order ticket for this stock. */}
-            {shown.length > 0 && !replay.active && !optionView && practises && canPaperTrade && tool === "cursor" ? (
-              <div className="absolute bottom-9 right-[4.25rem] z-20 flex gap-2 lg:hidden">
-                <Link href={`/terminal?symbol=${encodeURIComponent(symbol)}&side=BUY`} className="inline-flex h-11 min-w-[4.5rem] items-center justify-center rounded-pill bg-profit px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Buy</Link>
-                <Link href={`/terminal?symbol=${encodeURIComponent(symbol)}&side=SELL`} className="inline-flex h-11 min-w-[4.5rem] items-center justify-center rounded-pill bg-loss px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Sell</Link>
-              </div>
+              <MobileChartActions
+                tool={tool}
+                onTool={setTool}
+                quickOpen={drawBar}
+                onQuick={setDrawBar}
+                onMore={() => setDrawSheet(true)}
+                trade={!replay.active && !optionView && practises && canPaperTrade ? symbol : null}
+              />
             ) : null}
             {strategyOpen ? (
               <StrategyPanel

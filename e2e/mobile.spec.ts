@@ -47,6 +47,23 @@ async function offscreenControls(page: Page) {
 
 const isPhoneOrTablet = (page: Page) => (page.viewportSize()?.width ?? 1366) < 1024;
 
+test.describe("stock search", () => {
+  test.skip(!signedIn, "Needs a test account.");
+  test("the symbol at the top left opens search, and a result switches the chart", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/chart?symbol=RELIANCE");
+    await page.getByTitle("Search and switch stock").click();
+    const dialog = page.getByRole("dialog", { name: "Search stocks" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel("Search name or symbol")).toBeFocused();
+    await dialog.getByLabel("Search name or symbol").fill("TCS");
+    await dialog.getByRole("button", { name: /^TCS/ }).first().click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTitle("Search and switch stock")).toContainText("TCS");
+    expect(await offscreenControls(page)).toEqual([]);
+  });
+});
+
 test("sign-in page fits the screen", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
@@ -105,24 +122,24 @@ test.describe("signed in", () => {
     const chartBox = (await page.locator("canvas").first().boundingBox())!;
     expect(chartBox.height).toBeGreaterThan(viewport.height * 0.35);
 
-    // Drawing tools open as a bottom sheet; a trend line is placed with one finger.
+    // Draw opens the quick toolbar; More opens every tool. A trend line is placed with one finger.
     await page.getByRole("button", { name: "Draw", exact: true }).click();
+    const quick = page.getByRole("toolbar", { name: "Quick drawing tools" });
+    await expect(quick).toBeVisible();
+    await quick.getByRole("button", { name: "More" }).click();
     const sheet = page.getByRole("dialog", { name: "Drawing tools" });
     await expect(sheet).toBeVisible();
-    await sheet.getByRole("button", { name: "Trend line", exact: true }).click();
-    await expect(sheet).toBeHidden();
+    await page.getByRole("button", { name: "Close drawing tools" }).first().click();
+    await quick.getByRole("button", { name: "Trend line", exact: true }).click();
     const x = chartBox.x + chartBox.width * 0.3;
     const y = chartBox.y + chartBox.height * 0.4;
     await page.mouse.move(x, y);
     await page.mouse.down();
     await page.mouse.move(x + chartBox.width * 0.3, y + 30, { steps: 8 });
     await page.mouse.up();
-    // A placed drawing can be undone from the sheet's actions.
-    await page.getByRole("button", { name: /Draw|Trend line/ }).first().click();
-    await sheet.getByRole("tab", { name: "Actions" }).click();
-    await expect(sheet.getByRole("button", { name: "Undo" })).toBeEnabled();
-    await sheet.getByRole("button", { name: "Undo" }).click();
-    await page.getByRole("button", { name: "Close drawing tools" }).click();
+    // A placed drawing can be undone.
+    await expect(page.getByRole("button", { name: "Undo" }).first()).toBeEnabled();
+    await page.getByRole("button", { name: "Undo" }).first().click();
 
     // The page itself never scrolls while the chart is touched.
     expect(await page.evaluate(() => document.scrollingElement?.scrollTop ?? 0)).toBe(0);

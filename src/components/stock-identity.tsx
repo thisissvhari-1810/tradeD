@@ -63,7 +63,9 @@ export function markLetters(symbol: string, name?: string) {
 
 export function StockLogo({ symbol, name, size = 32 }: { symbol: string; name?: string; size?: number }) {
   const key = symbol.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  const [src, setSrc] = useState<string | null>(() => logoSrc(symbol));
+  // A logo that failed to load is remembered per symbol, so a new symbol always tries its own logo.
+  const [failed, setFailed] = useState<string | null>(null);
+  const src = failed === key ? null : logoSrc(symbol);
   const color = markColor(symbol);
   return (
     <span
@@ -73,6 +75,7 @@ export function StockLogo({ symbol, name, size = 32 }: { symbol: string; name?: 
     >
       {src ? (
         <img
+          key={src}
           src={src}
           alt=""
           width={size}
@@ -82,7 +85,7 @@ export function StockLogo({ symbol, name, size = 32 }: { symbol: string; name?: 
           className="h-full w-full object-contain p-0.5"
           onError={() => {
             missingLogos.add(key);
-            setSrc(null);
+            setFailed(key);
           }}
         />
       ) : markLetters(symbol, name)}
