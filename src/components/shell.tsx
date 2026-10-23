@@ -361,16 +361,14 @@ export function Shell({ children }: { children: ReactNode }) {
             <Tooltip content={mode === "demo" ? "Simulated orders on your practice account. Click to switch view." : "Read-only broker view. Click to switch back to demo."}>
               <button
                 type="button"
-                // The same round mark on every screen size: a flask for Demo, a pulsing dot for Live.
-                className={cx(
-                  "grid h-9 w-9 shrink-0 place-items-center rounded-full border transition-colors",
-                  mode === "demo" ? "border-demo/35 bg-demo-soft hover:border-demo/60" : "border-profit/35 bg-profit-soft hover:border-profit/60",
-                )}
-                style={{ color: mode === "demo" ? "var(--demo)" : "var(--profit)" }}
+                // The same flask mark on every screen size. Live adds a pulsing green "on air" dot.
+                className="group relative grid h-9 w-9 shrink-0 place-items-center rounded-input border border-demo/25 bg-[linear-gradient(145deg,var(--demo-soft),color-mix(in_srgb,var(--demo)_16%,var(--demo-soft)))] shadow-e1 transition-[border-color,box-shadow,transform] hover:border-demo/50 hover:shadow-e2 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100"
+                style={{ color: "var(--demo)" }}
                 onClick={() => setPendingMode(mode === "demo" ? "live" : "demo")}
                 aria-label={mode === "demo" ? "Demo mode. Switch to live view" : "Live view. Switch to demo"}
               >
-                {mode === "demo" ? <FlaskConical className="h-4 w-4" aria-hidden /> : <span className="live-dot h-2.5 w-2.5 rounded-full bg-profit" aria-hidden />}
+                <FlaskConical className="h-[1.125rem] w-[1.125rem] transition-transform duration-300 group-hover:-rotate-12 motion-reduce:transition-none motion-reduce:group-hover:transform-none" strokeWidth={2} aria-hidden />
+                {mode === "live" ? <span className="live-dot absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-profit text-profit" aria-hidden /> : null}
               </button>
             </Tooltip>
 
