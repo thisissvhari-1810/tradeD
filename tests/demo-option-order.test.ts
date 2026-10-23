@@ -88,7 +88,7 @@ vi.mock("@/server/option-chain", () => ({
 const { placeOptionDemo, premiumMoved } = await import("../src/server/trading");
 const { AppError } = await import("../src/lib/http");
 
-const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
+const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 const order = { symbol: "NIFTY", expiry: "2026-10-20", strike: 23_150, right: "CE" as const, action: "BUY" as const, lots: 10, idempotencyKey: "test-key-0001", referencePremium: 62.8 };
 const START = 20_000_000n;
 

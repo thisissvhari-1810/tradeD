@@ -77,6 +77,16 @@
   --loss-soft: #fdecee;
   --warning: #a15c00;
   --warning-soft: #fff4e0;
+  /* TradeD Premium: gold on a near-black surface (the Premium page keeps its dark surface in both themes). */
+  --gold: #a87a10;
+  --gold-strong: #e3b341;
+  --gold-soft: #fbf3dc;
+  --on-gold: #1a1406;
+  --premium-surface: #0d0d0f;
+  --premium-raised: #17171a;
+  --premium-border: rgb(227 179 65 / 0.28);
+  --premium-text: #f5f1e6;
+  --premium-muted: #a8a397;
   --info: #0b6bcb;
   --info-soft: #e6f1fc;
   --star: #b7791f;
@@ -132,6 +142,15 @@
   --loss-soft: #33161c;
   --warning: #f0b90b;
   --warning-soft: #2e2510;
+  --gold: #e3b341;
+  --gold-strong: #f2c75c;
+  --gold-soft: #2b2310;
+  --on-gold: #1a1406;
+  --premium-surface: #09090b;
+  --premium-raised: #141417;
+  --premium-border: rgb(227 179 65 / 0.3);
+  --premium-text: #f5f1e6;
+  --premium-muted: #a8a397;
   --info: #4aa3ff;
   --info-soft: #10233a;
   --star: #f0b90b;

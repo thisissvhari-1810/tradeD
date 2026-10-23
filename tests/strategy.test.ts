@@ -129,8 +129,10 @@ describe("wiring", () => {
   const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
 
   it("the button is Strategy (not S1) with the tooltip, and opens the panel", () => {
-    expect(desk).toContain('title="Automatic Trading Strategy"');
-    expect(desk).toMatch(/>\s*Strategy\s*\{strategyOn/);
+    expect(desk).toContain('"Automatic Trading Strategy"');
+    // Free accounts see a crown and get the Premium prompt instead of the panel.
+    expect(desk).toContain('setUpgradeFor("strategy")');
+    expect(desk).toMatch(/[>}]\s*Strategy\s*\{strategyOn/);
     expect(desk).not.toMatch(/>\s*S1\s*\{/);
     expect(desk).toContain("<StrategyPanel");
   });

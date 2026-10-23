@@ -20,7 +20,7 @@ const db = vi.hoisted(() => {
       count: async ({ where = {} }: { where?: Record<string, unknown> } = {}) => state.users.filter((row) => matchUser(row, where)).length,
       create: async ({ data }: { data: Record<string, unknown> }) => {
         if (state.users.some((row) => row.email === data.email)) throw Object.assign(new Error("unique"), { code: "P2002" });
-        const row: Row = { id: id(), createdAt: new Date(), lastLoginAt: null, mfaEnabled: false, notes: "", tradingEnabled: true, featDemoTrading: true, featReplay: true, featMultiAccount: true, featBrokerConnection: true, featPortfolio: true, featOrderHistory: true, featAnalytics: true, ...data };
+        const row: Row = { id: id(), createdAt: new Date(), lastLoginAt: null, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, notes: "", tradingEnabled: true, featDemoTrading: true, featReplay: true, featMultiAccount: true, featBrokerConnection: true, featPortfolio: true, featOrderHistory: true, featAnalytics: true, ...data };
         state.users.push(row);
         return row;
       },
@@ -57,7 +57,7 @@ vi.mock("@/server/trading", () => ({ adjustFunds: async (...args: unknown[]) => 
 const admin = await import("../src/server/admin-users");
 const { hashToken } = await import("../src/server/auth");
 
-const actor = (over: Partial<SessionUser> = {}): SessionUser => ({ id: "c-admin-000000000000000000001", email: "owner@x.test", name: "Owner", role: "SUPER_ADMIN", status: "ACTIVE", tradingEnabled: true, mfaEnabled: false, features: ALL, ...over });
+const actor = (over: Partial<SessionUser> = {}): SessionUser => ({ id: "c-admin-000000000000000000001", email: "owner@x.test", name: "Owner", role: "SUPER_ADMIN", status: "ACTIVE", tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: ALL, ...over });
 const owner = actor();
 const ctx = { ip: "127.0.0.1", origin: "https://traded.test" };
 const standard: Features = { ...ALL, multiAccount: false, brokerConnection: false };

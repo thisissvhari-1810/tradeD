@@ -114,7 +114,7 @@ const listRoute = await import("../src/app/api/broker-accounts/route");
 const itemRoute = await import("../src/app/api/broker-accounts/[id]/route");
 const { resetRateLimits } = await import("../src/lib/security/rate-limit");
 
-const user = (id: string, status: SessionUser["status"] = "ACTIVE"): SessionUser => ({ id, email: `${id}@x.test`, name: id, role: "STUDENT", status, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } });
+const user = (id: string, status: SessionUser["status"] = "ACTIVE"): SessionUser => ({ id, email: `${id}@x.test`, name: id, role: "STUDENT", status, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } });
 const alice = user("alice");
 const bob = user("bob");
 const ctx = { ip: "127.0.0.1" };

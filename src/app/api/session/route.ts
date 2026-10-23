@@ -12,6 +12,7 @@ export const GET = query(async () => {
       status: user.status,
       tradingEnabled: user.tradingEnabled,
       features: user.features,
+      premium: user.premium,
     },
   });
 });

@@ -144,6 +144,39 @@ model User {
   closedTrades         ClosedTrade[]
   optionPaper          OptionPaperAccount?
   brokerAccounts       BrokerAccount[]
+  subscriptions        Subscription[]
+}
+
+enum PremiumPlan {
+  MONTHLY
+  HALF_YEARLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+}
+
+/// TradeD Premium. The only source of Premium access: a row is active while status is ACTIVE and
+/// now is between startsAt and endsAt (an expired row is simply past endsAt). Rows are granted by a
+/// Super Admin today; a verified payment will create them once a payment provider is configured.
+model Subscription {
+  id          String             @id @default(cuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan        PremiumPlan
+  status      SubscriptionStatus @default(ACTIVE)
+  startsAt    DateTime           @default(now())
+  endsAt      DateTime
+  /// ADMIN for a Super Admin grant; a payment provider's name once payments exist.
+  source      String             @default("ADMIN")
+  grantedById String?
+  note        String             @default("")
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId, endsAt])
 }
 
 model Session {

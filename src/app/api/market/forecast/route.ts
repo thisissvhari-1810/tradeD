@@ -6,12 +6,14 @@ import { query } from "@/server/http";
 import { requireUser } from "@/server/auth";
 import { getCandles } from "@/server/market";
 import { getHolidays } from "@/server/settings";
+import { requirePremium } from "@/server/premium";
 
 export const maxDuration = 30;
 
 export const GET = query(async (request) => {
   const user = await requireUser();
   requireFeature(user, "analytics");
+  requirePremium(user, "analytics");
   const url = new URL(request.url);
   const symbol = (url.searchParams.get("symbol") ?? "").trim().toUpperCase();
   const timeframe = url.searchParams.get("timeframe");

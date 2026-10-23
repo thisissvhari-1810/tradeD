@@ -155,7 +155,7 @@ vi.mock("@/server/dhan-account", () => ({ brokerAccountView: async () => broker.
 vi.mock("@/server/settings", () => ({ getDhanClientId: async () => "1234567890" }));
 
 const live = await import("../src/server/multi-account-live");
-const admin = { id: "a1", email: "a@example.test", name: "A", role: "SUPER_ADMIN" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
+const admin = { id: "a1", email: "a@example.test", name: "A", role: "SUPER_ADMIN" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 const student = { ...admin, id: "s1", role: "STUDENT" as const };
 
 beforeEach(() => {

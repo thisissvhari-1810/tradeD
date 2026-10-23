@@ -231,7 +231,7 @@ vi.mock("@/server/option-chain", () => ({
 
 const { placeOptionReplay } = await import("../src/server/trading");
 const { replayMarks, replayQuote, clearReplayTapes, HISTORICAL_UNAVAILABLE } = await import("../src/server/option-replay");
-const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
+const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 const SESSION = "2026-10-16.abcd1234";
 const NOW = new Date("2026-10-16T12:00:00.000Z");
 const START = 20_000_000n;

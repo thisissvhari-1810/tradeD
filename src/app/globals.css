@@ -34,6 +34,15 @@
   --color-disabled: var(--disabled);
   --color-border: var(--border);
   --color-cream: var(--cream);
+  --color-gold: var(--gold);
+  --color-gold-strong: var(--gold-strong);
+  --color-gold-soft: var(--gold-soft);
+  --color-on-gold: var(--on-gold);
+  --color-premium: var(--premium-surface);
+  --color-premium-raised: var(--premium-raised);
+  --color-premium-border: var(--premium-border);
+  --color-premium-text: var(--premium-text);
+  --color-premium-muted: var(--premium-muted);
   --color-focus-ring: var(--focus-ring);
   --font-sans: var(--font-ui), "Segoe UI", system-ui, sans-serif;
   --font-mono: var(--font-num), ui-monospace, monospace;

@@ -7,6 +7,9 @@ import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
 import { ChartHeaderTools } from "@/components/chart-header-tools";
 import { SymbolSearch } from "@/components/symbol-search";
+import { PremiumUpgradeDialog } from "@/components/premium/premium-upgrade-dialog";
+import { usePremium } from "@/components/premium/use-premium";
+import type { PremiumCapability } from "@/lib/premium/entitlements";
 import { MobileChartActions } from "@/components/mobile-chart-actions";
 import { ChartToolbar, FavouritesBar, MobileDrawingSheet, type RemoveScope, type VisibilityAction } from "@/components/chart-toolbar";
 import { useDrawingPrefs } from "@/components/drawing-prefs";
@@ -61,7 +64,7 @@ import { formatPnl, formatSignedBps, rupeesToPaise } from "@/lib/money";
 import { fromSummaryWire, newlyClosed, type ReplaySessionSummary, type ReplaySummaryWire } from "@/lib/trading/replay-summary";
 import { replayChipLabel } from "@/lib/trading/position-view";
 import { ReplaySummaryDialog } from "@/components/replay-summary-dialog";
-import { ChevronDown, PanelRightClose, PanelRightOpen, Star } from "lucide-react";
+import { ChevronDown, Crown, PanelRightClose, PanelRightOpen, Star } from "lucide-react";
 
 type Hit = { symbol: string; name: string; exchange: string };
 type PracticePosition = {
@@ -219,6 +222,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [full, setFull] = useState(false);
   // Phones: the drawing tools open as a bottom sheet (the toolbar row is for larger screens).
   const [drawSheet, setDrawSheet] = useState(false);
+  const premiumStrategy = usePremium("strategy");
+  // A Premium feature opened from a free account: the upgrade prompt.
+  const [upgradeFor, setUpgradeFor] = useState<PremiumCapability | null>(null);
   // Phones: the quick drawing toolbar over the chart (opened from Draw).
   const [drawBar, setDrawBar] = useState(false);
   // The stock picker opened from the symbol at the top left.
@@ -1014,7 +1020,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const s1Session = strategyDates.current || (replay.active && replay.date ? replay.date : "live");
   const s1Key = optionView ? null : `${symbol}|${s1Session}|${strategyDates.previous || "auto"}`;
   const s1Current = s1 && s1.key === s1Key ? s1 : null;
-  const strategyOn = strategy.enabled && !optionView;
+  // The Strategy overlay is Premium (the server refuses its data otherwise); a free account's saved setting stays off.
+  const strategyAllowed = premiumStrategy.allowed;
+  const strategyOn = strategy.enabled && !optionView && strategyAllowed;
   // In replay, nothing after the replay clock is shown (a missing cursor counts as before the open).
   const strategyResult = useMemo(
     // The replay clock limits only the replayed session; another chosen day shows everything it has.
@@ -1168,14 +1176,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </button>
           <button
             type="button"
-            aria-pressed={strategy.enabled}
+            aria-pressed={strategyOn}
             ref={strategyButtonRef}
             aria-expanded={strategyOpen}
             aria-label="Strategy"
-            title="Automatic Trading Strategy"
-            className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", strategy.enabled ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
-            onClick={() => setStrategyOpen((value) => !value)}
+            title={strategyAllowed ? "Automatic Trading Strategy" : "Automatic Trading Strategy (Premium)"}
+            className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", strategyOn ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
+            onClick={() => (strategyAllowed ? setStrategyOpen((value) => !value) : setUpgradeFor("strategy"))}
           >
+            {strategyAllowed ? null : <Crown className="h-3.5 w-3.5 text-gold" aria-hidden />}
             Strategy
             {strategyOn ? <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", strategyDot)} /> : null}
           </button>
@@ -1199,6 +1208,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           <label>Oscillator <select className="ml-1 py-1" value={flags.oscillator} onChange={(event) => setFlags((current) => ({ ...current, oscillator: event.target.value as Flags["oscillator"] }))}><option value="none">Off</option><option value="rsi">RSI</option><option value="macd">MACD</option></select></label>
         </div>
       ) : null}
+      {upgradeFor ? <PremiumUpgradeDialog capability={upgradeFor} onClose={() => setUpgradeFor(null)} /> : null}
       <MobileDrawingSheet
         open={drawSheet}
         onClose={() => setDrawSheet(false)}

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "crypto";
+import { premiumFrom, type Premium } from "@/lib/premium/entitlements";
 import { cookies } from "next/headers";
 import { hash, compare } from "bcryptjs";
 import { Secret, TOTP } from "otpauth";
@@ -20,6 +21,8 @@ export type SessionUser = {
   mfaEnabled: boolean;
   /** Super Admin controlled feature permissions, re-read on every request. */
   features: Features;
+  /** TradeD Premium, from the user's subscription rows (re-read on every request). */
+  premium: Premium;
 };
 
 export function newToken(): string {
@@ -62,7 +65,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   if (!token) return null;
   const session = await prisma.session.findUnique({
     where: { tokenHash: hashToken(token) },
-    include: { user: true },
+    include: { user: { include: { subscriptions: { where: { status: "ACTIVE" }, orderBy: { endsAt: "desc" }, take: 5 } } } },
   });
   if (!session || session.revokedAt || session.expiresAt.getTime() < Date.now()) return null;
   if (session.user.status === "DISABLED") return null;
@@ -75,6 +78,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     tradingEnabled: session.user.tradingEnabled,
     mfaEnabled: session.user.mfaEnabled,
     features: featuresOf(session.user),
+    premium: premiumFrom(session.user.role, session.user.subscriptions ?? []),
   };
 }
 

@@ -180,7 +180,7 @@ vi.mock("@/server/option-chain", () => ({
 }));
 
 const service = await import("../src/server/multi-account");
-const user = { id: "u1", email: "u@example.test", name: "U", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
+const user = { id: "u1", email: "u@example.test", name: "U", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 const NOW = new Date("2026-10-16T05:30:00.000Z");
 const submit = (key: string, extra: Partial<Parameters<typeof service.submitDemoOrder>[1]> = {}, options: Parameters<typeof service.submitDemoOrder>[2] = {}) =>
   service.submitDemoOrder(user, { key, contract: CONTRACT, side: "BUY", orderType: "MARKET", limitPaise: null, product: "INTRADAY", stopLossPaise: null, targetPaise: null, accountIds: ["demo-1", "demo-2", "demo-3"], source: { kind: "chain" }, ...extra }, { now: NOW, ...options });

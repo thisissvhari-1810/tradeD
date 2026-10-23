@@ -229,7 +229,7 @@ function CreateUserDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
 }
 
 function UserDrawer({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
-  const [tab, setTab] = useState<"profile" | "permissions" | "wallet" | "activity" | "audit">("profile");
+  const [tab, setTab] = useState<"profile" | "permissions" | "wallet" | "premium" | "activity" | "audit">("profile");
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState("");
   const [tick, setTick] = useState(0);
@@ -252,10 +252,11 @@ function UserDrawer({ id, onClose, onChanged }: { id: string; onClose: () => voi
             {user.features.multiAccount ? <Badge tone="demo">Multi-account</Badge> : null}
             <span className="num text-micro text-muted">ID {user.id}</span>
           </div>
-          <Tabs label="User sections" value={tab} onChange={setTab} items={[{ id: "profile", label: "Profile" }, { id: "permissions", label: "Permissions" }, { id: "wallet", label: "Wallet" }, { id: "activity", label: "Activity", count: detail.orders.length || undefined }, { id: "audit", label: "Audit" }]} />
+          <Tabs label="User sections" value={tab} onChange={setTab} items={[{ id: "profile", label: "Profile" }, { id: "permissions", label: "Permissions" }, { id: "wallet", label: "Wallet" }, { id: "premium", label: "Premium" }, { id: "activity", label: "Activity", count: detail.orders.length || undefined }, { id: "audit", label: "Audit" }]} />
           {tab === "profile" ? <ProfilePanel user={user} onChanged={changed} /> : null}
           {tab === "permissions" ? <PermissionsPanel user={user} onChanged={changed} /> : null}
           {tab === "wallet" ? <WalletPanel detail={detail} onChanged={changed} /> : null}
+          {tab === "premium" ? <PremiumPanel userId={user.id} role={user.role} onChanged={changed} /> : null}
           {tab === "activity" ? <ActivityPanel orders={detail.orders} /> : null}
           {tab === "audit" ? <ListPanel rows={detail.audit.map((item) => ({ id: item.id, title: item.action, meta: `${item.actor ?? "system"} · ${istStamp(item.at)}`, body: item.reason }))} empty="No audit entries yet." /> : null}
         </div>
@@ -411,6 +412,74 @@ function WalletPanel({ detail, onChanged }: { detail: Detail; onChanged: () => v
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+type PremiumRow = { id: string; plan: string; label: string; state: "Active" | "Scheduled" | "Expired" | "Cancelled"; startsAt: string; endsAt: string; source: string; note: string; createdAt: string };
+
+/** Premium for one user: grant a plan (stacks after current access), or revoke one. Audited on the server. */
+function PremiumPanel({ userId, role, onChanged }: { userId: string; role: string; onChanged: () => void }) {
+  const [rows, setRows] = useState<PremiumRow[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [plan, setPlan] = useState("YEARLY");
+  const [note, setNote] = useState("");
+  const [sure, setSure] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const [revokeNote, setRevokeNote] = useState("");
+  const { busy, message, run } = useAction();
+  const load = useCallback(() => {
+    api<{ subscriptions: PremiumRow[] }>(`/api/super-admin/users/${userId}/premium`).then((data) => { setRows(data.subscriptions); setLoadError(""); }).catch((caught: unknown) => setLoadError(caught instanceof Error ? caught.message : "Premium history could not be loaded."));
+  }, [userId]);
+  useEffect(() => { load(); }, [load]);
+  const current = rows?.find((row) => row.state === "Active");
+  const tone: Record<PremiumRow["state"], Tone> = { Active: "profit", Scheduled: "primary", Expired: "neutral", Cancelled: "loss" };
+  return (
+    <div className="flex flex-col gap-3">
+      <Notice tone="info">{role === "SUPER_ADMIN" ? "Super Admins always have Premium. " : ""}{current ? `Premium is active until ${istStamp(current.endsAt)}.` : "No active Premium."} Online payment is not connected yet, so Premium is granted here.</Notice>
+      <div className="grid gap-2 rounded-card border border-border-soft p-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
+        <label className={LABEL}>Plan
+          <select className={FIELD} value={plan} onChange={(event) => setPlan(event.target.value)}>
+            <option value="MONTHLY">Monthly (1 month)</option>
+            <option value="HALF_YEARLY">6 Months</option>
+            <option value="YEARLY">1 Year</option>
+          </select>
+        </label>
+        <label className={LABEL}>Reason<input className={FIELD} value={note} maxLength={200} placeholder="e.g. Paid by UPI on 23 Oct" onChange={(event) => setNote(event.target.value)} /></label>
+        <label className="flex items-center gap-2 text-data text-text-2 sm:col-span-2"><input type="checkbox" checked={sure} onChange={(event) => setSure(event.target.checked)} />Grant this plan. It starts now, or after the current Premium ends.</label>
+        <div className="sm:col-span-2">
+          <Button variant="primary" disabled={busy || !sure || note.trim().length < 3} onClick={() => void run(async () => {
+            await api(`/api/super-admin/users/${userId}/premium`, { action: "grant", plan, note: note.trim() });
+            setNote(""); setSure(false); load(); onChanged();
+            return "Premium granted.";
+          })}>Grant Premium</Button>
+        </div>
+      </div>
+      {message ? <Notice tone={message.tone}>{message.text}</Notice> : null}
+      {loadError ? <Notice tone="loss">{loadError}</Notice> : null}
+      {rows && rows.length === 0 ? <EmptyState icon={<ShieldCheck />} title="No Premium history" /> : null}
+      {rows?.map((row) => (
+        <div key={row.id} className="rounded-card border border-border-soft p-3 text-data">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-text">{row.label}</span>
+            <Badge tone={tone[row.state]}>{row.state}</Badge>
+            <span className="num text-muted">{istStamp(row.startsAt)} → {istStamp(row.endsAt)}</span>
+            {row.state === "Active" || row.state === "Scheduled" ? <Button size="sm" variant="ghost" className="ml-auto text-loss" onClick={() => { setRevoking(row.id); setRevokeNote(""); }}>Revoke</Button> : null}
+          </div>
+          {row.note ? <p className="mt-1 text-muted">{row.note}</p> : null}
+          {revoking === row.id ? (
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <label className={cx(LABEL, "min-w-0 flex-1")}>Reason for revoking<input className={FIELD} value={revokeNote} maxLength={200} onChange={(event) => setRevokeNote(event.target.value)} /></label>
+              <Button size="sm" onClick={() => setRevoking(null)}>Cancel</Button>
+              <Button size="sm" variant="danger" disabled={busy || revokeNote.trim().length < 3} onClick={() => void run(async () => {
+                await api(`/api/super-admin/users/${userId}/premium`, { action: "revoke", subscriptionId: row.id, note: revokeNote.trim() });
+                setRevoking(null); load(); onChanged();
+                return "Premium revoked.";
+              })}>Revoke Premium</Button>
+            </div>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
