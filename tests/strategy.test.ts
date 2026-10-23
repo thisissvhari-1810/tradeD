@@ -321,3 +321,13 @@ describe("chart side panel", () => {
     expect(desk).toContain('${railCollapsed ? "hidden" : sideRail === "positions"');
   });
 });
+
+describe("left sidebar", () => {
+  const shell = readFileSync(join(process.cwd(), "src/components/shell.tsx"), "utf8");
+  it("leaves out Positions, Orders, Markets and Alerts (pages stay reachable elsewhere)", () => {
+    for (const href of ["/positions", "/orders", "/markets", "/alerts"]) {
+      expect(shell).toMatch(new RegExp(`href: "${href}"[^}]*rail: false`));
+    }
+    expect(shell).toContain("links.filter((item) => item.rail !== false).map(");
+  });
+});

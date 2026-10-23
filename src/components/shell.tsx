@@ -49,19 +49,20 @@ export function useDesk() {
   return value;
 }
 
-type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; accent?: boolean; feature?: FeatureKey };
+type NavItem = { href: string; label: string; icon: LucideIcon; title?: string; accent?: boolean; feature?: FeatureKey; rail?: false };
 
 const NAV: NavItem[] = [
   { href: "/", label: "Home", icon: House },
   { href: "/chart", label: "Chart", icon: CandlestickChart },
   { href: "/options", label: "Options", icon: GitBranch },
   { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound, feature: "multiAccount" },
-  { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio" },
-  { href: "/orders", label: "Orders", icon: ClipboardList, feature: "orderHistory" },
+  // rail: false — left out of the desktop sidebar; still in the phone menu, search and the chart's side panel.
+  { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio", rail: false },
+  { href: "/orders", label: "Orders", icon: ClipboardList, feature: "orderHistory", rail: false },
   { href: "/holdings", label: "Portfolio", icon: PieChart, feature: "portfolio" },
   { href: "/funds", label: "Money", icon: Wallet, feature: "portfolio" },
-  { href: "/markets", label: "Markets", icon: LineChart },
-  { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/markets", label: "Markets", icon: LineChart, rail: false },
+  { href: "/alerts", label: "Alerts", icon: Bell, rail: false },
   { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
 ];
 
@@ -262,11 +263,11 @@ export function Shell({ children }: { children: ReactNode }) {
             <BrandMark />
           </div>
           <nav className="no-scrollbar flex min-h-0 flex-1 flex-col items-stretch gap-0.5 overflow-y-auto px-2 pb-3 pt-1" aria-label="Main">
-            {links.map(({ href, label, icon: Icon, title }) => {
+            {links.filter((item) => item.rail !== false).map(({ href, label, icon: Icon, title }) => {
               const current = active(href);
               return (
                 <Fragment key={href}>
-                  {href === "/positions" || href === "/markets" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
+                  {href === "/holdings" || href === "/prediction" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
                   <Link
                     href={href}
                     aria-current={current ? "page" : undefined}
