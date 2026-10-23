@@ -116,27 +116,40 @@ export function dailyEndDates(to: Date, now: Date): Date[] {
 
 async function dailyHistory(id: string, from: Date, to: Date, segment = "NSE_EQ", instrument = "EQUITY") {
   // The end date is exclusive, so callers pass tomorrow to include today. The provider has refused that
-  // before the open ("Missing required fields, bad values for parameters"), so an earlier end is tried
-  // next; sessions it leaves out are folded from intraday bars by withRecentSessions.
+  // before the open, and has refused a 2005 start ("Missing required fields, bad values for
+  // parameters", DH-905). So earlier ends are tried, and for each a start no older than 5 years, then
+  // 1 year. Sessions an earlier end leaves out are folded from intraday bars by withRecentSessions.
   let failure: unknown = null;
   for (const end of dailyEndDates(to, new Date())) {
-    try {
-      const series = (await dhanPost("/charts/historical", {
-        securityId: id,
-        exchangeSegment: segment,
-        instrument,
-        expiryCode: 0,
-        oi: false,
-        fromDate: istStamp(from).day,
-        toDate: istStamp(end).day,
-      })) as Series;
-      return candlesFromSeries(series).sort((a, b) => a.time - b.time);
-    } catch (error) {
-      failure = error;
-      if (!(error instanceof AppError)) throw error;
+    for (const start of dailyStartDates(from, end)) {
+      try {
+        const series = (await dhanPost("/charts/historical", {
+          securityId: id,
+          exchangeSegment: segment,
+          instrument,
+          expiryCode: 0,
+          oi: false,
+          fromDate: istStamp(start).day,
+          toDate: istStamp(end).day,
+        })) as Series;
+        return candlesFromSeries(series).sort((a, b) => a.time - b.time);
+      } catch (error) {
+        failure = error;
+        if (!(error instanceof AppError)) throw error;
+      }
     }
   }
   throw failure;
+}
+
+/** Start dates to try for a daily request: as asked, then 5 years and 1 year before the end (only if later). */
+export function dailyStartDates(from: Date, end: Date): Date[] {
+  const starts = [from];
+  for (const years of [5, 1]) {
+    const candidate = new Date(end.getTime() - years * 365 * 86_400_000);
+    if (candidate.getTime() > starts[starts.length - 1].getTime()) starts.push(candidate);
+  }
+  return starts;
 }
 
 const sessionCloseCache = new Map<string, { close: number; at: number }>();

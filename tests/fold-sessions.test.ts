@@ -67,6 +67,8 @@ describe("daily history request", () => {
   it("retries with today, then yesterday, as the end date when the provider refuses tomorrow", () => {
     expect(dhan).toContain("for (const candidate of [0, 1, 2, 3].map((days) => new Date(now.getTime() - days * 86_400_000))) {");
     expect(dhan).toContain("for (const end of dailyEndDates(to, new Date())) {");
+    expect(dhan).toContain("for (const start of dailyStartDates(from, end)) {");
+    expect(dhan).toContain("for (const years of [5, 1]) {");
     expect(dhan).toContain("if (!(error instanceof AppError)) throw error;");
   });
 });
