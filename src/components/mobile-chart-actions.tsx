@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { X } from "lucide-react";
 import { ChartIcon } from "@/components/chart-icons";
 import type { DrawTool } from "@/components/drawing-model";
@@ -10,16 +9,14 @@ import { cx } from "@/components/ui";
 
 /**
  * Phones and tablets: the controls over the bottom of the chart. Draw opens a quick toolbar with the
- * tools chosen in Mobile & compact mode (More opens every tool); Buy / Sell open the paper order ticket.
+ * tools chosen in Mobile & compact mode (More opens every tool).
  */
-export function MobileChartActions({ tool, onTool, quickOpen, onQuick, onMore, trade }: {
+export function MobileChartActions({ tool, onTool, quickOpen, onQuick, onMore }: {
   tool: DrawTool;
   onTool: (tool: DrawTool) => void;
   quickOpen: boolean;
   onQuick: (open: boolean) => void;
   onMore: () => void;
-  /** The stock Buy / Sell trade, or null when they do not apply (replay, an option contract, no paper trading). */
-  trade: string | null;
 }) {
   const prefs = useMobilePrefs();
   const drawing = tool !== "cursor";
@@ -57,13 +54,6 @@ export function MobileChartActions({ tool, onTool, quickOpen, onQuick, onMore, t
         <ChartIcon name={current?.icon ?? "trend"} />
         {current?.label ?? "Draw"}
       </button>
-      <span className="flex-1" />
-      {trade && prefs.chartTradeButtons && !drawing ? (
-        <span className="pointer-events-auto mr-14 flex gap-2">
-          <Link href={`/terminal?symbol=${encodeURIComponent(trade)}&side=BUY`} className="inline-flex h-11 min-w-[4.25rem] items-center justify-center rounded-pill bg-profit px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Buy</Link>
-          <Link href={`/terminal?symbol=${encodeURIComponent(trade)}&side=SELL`} className="inline-flex h-11 min-w-[4.25rem] items-center justify-center rounded-pill bg-loss px-4 text-data font-bold text-on-signal shadow-e3 active:brightness-95">Sell</Link>
-        </span>
-      ) : null}
     </div>
   );
 }

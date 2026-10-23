@@ -45,7 +45,6 @@ export function MobileSettingsPanel({ onClose }: { onClose: () => void }) {
           </Group>
           <Group title="Chart">
             <Toggle label="Price readout box" hint="The date, open, high, low, close and volume box at the top of the chart." checked={prefs.chartLegend} onChange={(chartLegend) => updateMobilePrefs({ chartLegend })} />
-            <Toggle label="Buy and Sell buttons on the chart" hint="They open the paper order ticket. Nothing is sent to a broker." checked={prefs.chartTradeButtons} onChange={(chartTradeButtons) => updateMobilePrefs({ chartTradeButtons })} />
           </Group>
           <Group title="Quick drawing toolbar">
             <p className="text-micro text-muted">Choose up to 8 tools shown after tapping Draw. Every tool stays under More.</p>

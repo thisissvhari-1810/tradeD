@@ -16,8 +16,6 @@ export type MobilePrefs = {
   quickTools: string[];
   /** Names under the quick toolbar's icons. */
   toolLabels: boolean;
-  /** Buy / Sell buttons over the chart on phones. */
-  chartTradeButtons: boolean;
   /** The OHLC / volume readout box at the top of the chart on phones. */
   chartLegend: boolean;
   /** Home on phones: market pulse, movers and shortcut cards (the account and watchlist always show). */
@@ -31,7 +29,6 @@ export const MOBILE_DEFAULTS: MobilePrefs = {
   navLabels: true,
   quickTools: ["trend", "hline", "hray", "rect", "fib", "eraser"],
   toolLabels: false,
-  chartTradeButtons: true,
   chartLegend: true,
   homeMarketCards: true,
 };
@@ -52,7 +49,6 @@ export function parseMobilePrefs(raw: string | null): MobilePrefs {
       navLabels: bool("navLabels"),
       quickTools,
       toolLabels: bool("toolLabels"),
-      chartTradeButtons: bool("chartTradeButtons"),
       chartLegend: bool("chartLegend"),
       homeMarketCards: bool("homeMarketCards"),
     };

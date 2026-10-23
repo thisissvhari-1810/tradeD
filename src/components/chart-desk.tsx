@@ -1294,7 +1294,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 quickOpen={drawBar}
                 onQuick={setDrawBar}
                 onMore={() => setDrawSheet(true)}
-                trade={!replay.active && !optionView && practises && canPaperTrade ? symbol : null}
               />
             ) : null}
             {strategyOpen ? (
