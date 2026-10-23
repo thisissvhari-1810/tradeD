@@ -11,7 +11,7 @@ import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
 import { MobileSettingsPanel } from "@/components/mobile-settings";
-import { PremiumUpgradeButton } from "@/components/premium/premium-upgrade-button";
+import { PremiumUpgradeButton, rememberPremiumOrigin } from "@/components/premium/premium-upgrade-button";
 import { useMobilePrefs } from "@/components/mobile-prefs";
 import { Badge, Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
 import { appearanceKey, applyAppearance, emptyAppearance, loadAppearance, presetAppearance, saveAppearance, type Appearance } from "@/lib/color/appearance";
@@ -405,7 +405,7 @@ export function Shell({ children }: { children: ReactNode }) {
                   <div className="my-1 h-px bg-border" />
                   <MenuItem icon={theme === "light" ? Moon : Sun} label={theme === "light" ? "Dark theme" : "Light theme"} onClick={() => { toggleTheme(); setOpenUser(false); }} />
                   <MenuItem icon={Palette} label="Chart colours" onClick={() => { setAppearanceOpen(true); setOpenUser(false); }} />
-                  <MenuItem icon={Crown} label={user?.premium?.status === "active" ? "Premium (active)" : "Go Premium"} onClick={() => { setOpenUser(false); router.push("/premium"); }} />
+                  <MenuItem icon={Crown} label={user?.premium?.status === "active" ? "Premium (active)" : "Go Premium"} onClick={() => { setOpenUser(false); rememberPremiumOrigin(); router.push("/premium"); }} />
                   <MenuItem icon={Smartphone} label="Mobile & compact mode" onClick={() => { setMobileSettingsOpen(true); setOpenUser(false); }} />
                   <div className="my-1 h-px bg-border" />
                   <MenuItem icon={LogOut} label="Sign out" onClick={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }} />
@@ -437,7 +437,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <button type="button" className="anim-fade absolute inset-0 bg-[var(--scrim)]" aria-label="Close menu" onClick={() => setMenu(false)} />
             <div className="surface-modal anim-sheet absolute inset-x-0 bottom-0 rounded-t-sheet p-4 pb-[max(1rem,env(safe-area-inset-bottom))]" role="dialog" aria-label="All pages">
               <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border-strong" aria-hidden />
-              <Link href="/premium" onClick={() => setMenu(false)} className="mb-3 flex items-center gap-3 rounded-card border border-gold/40 bg-gold-soft px-3 py-2.5 text-gold">
+              <Link href="/premium" onClick={() => { rememberPremiumOrigin(); setMenu(false); }} className="mb-3 flex items-center gap-3 rounded-card border border-gold/40 bg-gold-soft px-3 py-2.5 text-gold">
                 <Crown className="h-5 w-5 shrink-0" aria-hidden />
                 {user?.premium?.status === "active"
                   ? <span className="min-w-0 flex-1"><span className="block text-dense font-semibold">Premium</span><span className="block text-micro opacity-80">Active on this account · see plans and status</span></span>

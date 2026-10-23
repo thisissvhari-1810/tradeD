@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { Crown, X } from "lucide-react";
 import { PREMIUM_CAPABILITIES, type PremiumCapability } from "@/lib/premium/entitlements";
+import { rememberPremiumOrigin } from "@/components/premium/premium-upgrade-button";
 
 /** Shown when a free account opens a Premium feature: what it is, and the way to Premium. */
 export function PremiumUpgradeDialog({ capability, onClose }: { capability: PremiumCapability; onClose: () => void }) {
@@ -23,7 +24,7 @@ export function PremiumUpgradeDialog({ capability, onClose }: { capability: Prem
         <p className="mt-1.5 text-dense text-premium-muted">{feature.detail} It comes with TradeD Premium, from ₹83.25 a month on the yearly plan.</p>
         <div className="mt-5 flex gap-2">
           <button type="button" className="h-11 flex-1 rounded-input border border-premium-border text-dense font-medium text-premium-text hover:bg-premium-raised" onClick={onClose}>Not now</button>
-          <Link href={`/premium?feature=${capability}`} className="grid h-11 flex-1 place-items-center rounded-input bg-gold-strong text-dense font-semibold text-on-gold hover:brightness-105" onClick={onClose}>Explore Premium</Link>
+          <Link href={`/premium?feature=${capability}`} className="grid h-11 flex-1 place-items-center rounded-input bg-gold-strong text-dense font-semibold text-on-gold hover:brightness-105" onClick={() => { rememberPremiumOrigin(); onClose(); }}>Explore Premium</Link>
         </div>
       </div>
     </div>

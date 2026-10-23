@@ -76,3 +76,47 @@ describe("server gates", () => {
     expect(session).toMatch(/premiumFrom\(session\.user\.role, session\.user\.subscriptions/);
   });
 });
+
+describe("crown toggle: where closing Premium returns to", async () => {
+  const { premiumOrigin, rememberPremiumOrigin } = await import("@/components/premium/premium-upgrade-button");
+  const store = new Map<string, string>();
+  const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) };
+  const at = (pathname: string, search = "") => {
+    Object.assign(globalThis, { sessionStorage: storage, window: { location: { pathname, search } } });
+  };
+
+  it("returns to the page Premium was opened from, query included", () => {
+    store.clear();
+    at("/chart", "?symbol=TCS");
+    rememberPremiumOrigin();
+    expect(premiumOrigin()).toBe("/chart?symbol=TCS");
+    at("/holdings");
+    rememberPremiumOrigin();
+    expect(premiumOrigin()).toBe("/holdings");
+  });
+
+  it("never remembers the Premium page itself, and falls back to Home when opened directly", () => {
+    store.clear();
+    expect(premiumOrigin()).toBe("/");
+    at("/premium", "?feature=strategy");
+    rememberPremiumOrigin();
+    expect(premiumOrigin()).toBe("/");
+  });
+
+  it("never returns to an outside site", () => {
+    store.set("td-premium-from", "//evil.example/x");
+    expect(premiumOrigin()).toBe("/");
+    store.set("td-premium-from", "https://evil.example");
+    expect(premiumOrigin()).toBe("/");
+  });
+});
+
+describe("free vs premium comparison", async () => {
+  const { COMPARE_ROWS } = await import("@/lib/premium/compare");
+  const { PREMIUM_CAPABILITIES } = await import("@/lib/premium/entitlements");
+  it("marks exactly the Premium capabilities as not free, and everything else as free", () => {
+    const locked = COMPARE_ROWS.filter((row) => !row.free).map((row) => row.capability);
+    expect(locked.sort()).toEqual(Object.keys(PREMIUM_CAPABILITIES).sort());
+    expect(COMPARE_ROWS.filter((row) => row.free).every((row) => row.capability === undefined)).toBe(true);
+  });
+});
