@@ -39,19 +39,33 @@ describe("daily candles for sessions the daily history has not published", () =>
 });
 
 describe("Dhan intraday requests stay valid", () => {
-  const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
-  it("never asks for minutes after now, and falls back to the same-day range if the wider one is refused", () => {
-    expect(dhan).toContain("const until = to.getTime() > now.getTime() ? now : to;");
-    expect(dhan).toContain("const short = new Date(until.getTime() - 5 * 86_400_000);");
-    expect(dhan).toContain("console.error(\"[dhan] request refused\"");
-    expect(dhan).toContain('return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);');
+  it("before 09:15 steps back to the previous days' 15:30 close instead of ending in the pre-open gap", async () => {
+    const { intradayEnds } = await import("@/lib/market/dhan-ranges");
+    expect(intradayEnds("2026-10-23 09:13:20")).toEqual(["2026-10-23 09:13:20", "2026-10-22 15:30:00", "2026-10-21 15:30:00", "2026-10-20 15:30:00"]);
+  });
+
+  it("during the session tries now first, then today's close is skipped (it is later), then earlier closes", async () => {
+    const { intradayEnds } = await import("@/lib/market/dhan-ranges");
+    expect(intradayEnds("2026-10-23 14:34:06")[0]).toBe("2026-10-23 14:34:06");
+    expect(intradayEnds("2026-10-23 14:34:06")[1]).toBe("2026-10-22 15:30:00");
+  });
+
+  it("short fallback ranges are five calendar days before the end", async () => {
+    const { daysBefore } = await import("@/lib/market/dhan-ranges");
+    expect(daysBefore("2026-10-22 15:30:00", 5)).toBe("2026-10-17");
+  });
+
+  it("logs a refused request without the token", () => {
+    const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
+    expect(dhan).toContain('console.error("[dhan] request refused"');
+    expect(dhan).toContain("for (const end of intradayEnds(until)) {");
   });
 });
 
 describe("daily history request", () => {
   const dhan = readFileSync(join(process.cwd(), "src/server/dhan-market.ts"), "utf8");
   it("retries with today, then yesterday, as the end date when the provider refuses tomorrow", () => {
-    expect(dhan).toContain("for (const candidate of [now, new Date(now.getTime() - 86_400_000)]) {");
+    expect(dhan).toContain("for (const candidate of [0, 1, 2, 3].map((days) => new Date(now.getTime() - days * 86_400_000))) {");
     expect(dhan).toContain("for (const end of dailyEndDates(to, new Date())) {");
     expect(dhan).toContain("if (!(error instanceof AppError)) throw error;");
   });

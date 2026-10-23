@@ -3,6 +3,7 @@ import { applyAdverseSlippage, rupeesToPaise } from "@/lib/money";
 import { nseCashSession } from "@/lib/market/clock";
 import type { Candle, DemoQuote } from "@/lib/market/demo";
 import { foldSessions, istDateKey } from "@/lib/market/fold-sessions";
+import { daysBefore, intradayEnds } from "@/lib/market/dhan-ranges";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
@@ -107,7 +108,7 @@ function candlesFromSeries(series: Series): Candle[] {
 /** End dates to try for a daily request: as asked, then today, then yesterday (each only if earlier). */
 export function dailyEndDates(to: Date, now: Date): Date[] {
   const ends = [to];
-  for (const candidate of [now, new Date(now.getTime() - 86_400_000)]) {
+  for (const candidate of [0, 1, 2, 3].map((days) => new Date(now.getTime() - days * 86_400_000))) {
     if (istStamp(candidate).day < istStamp(ends[ends.length - 1]).day) ends.push(candidate);
   }
   return ends;
@@ -157,29 +158,33 @@ export async function sessionPreviousClose(id: string, now: Date): Promise<numbe
 }
 
 async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", from: Date, to: Date, segment = "NSE_EQ", instrument = "EQUITY") {
-  // Never ask for minutes that have not happened yet (before the open the session's range lies in the future).
   const now = new Date();
-  const until = to.getTime() > now.getTime() ? now : to;
-  const end = istStamp(until);
-  const request = (since: Date) => dhanPost("/charts/intraday", {
-    securityId: id,
-    exchangeSegment: segment,
-    instrument,
-    interval,
-    oi: false,
-    fromDate: `${istStamp(since).day} 09:15:00`,
-    toDate: end.stamp,
-  }) as Promise<Series>;
-  let series: Series;
-  try {
-    series = await request(from);
-  } catch (error) {
-    // If a long range is refused, a short one (the last 5 days) still gives a usable chart.
-    const short = new Date(until.getTime() - 5 * 86_400_000);
-    if (!(error instanceof AppError) || from.getTime() >= short.getTime()) throw error;
-    series = await request(short);
+  const until = istStamp(to.getTime() > now.getTime() ? now : to).stamp;
+  const first = `${istStamp(from).day} 09:15:00`;
+  let failure: unknown = null;
+  for (const end of intradayEnds(until)) {
+    // The full range first; if refused, the last 5 days before that end.
+    const short = `${daysBefore(end, 5)} 09:15:00`;
+    for (const start of short > first ? [first, short] : [first]) {
+      if (start >= end) continue;
+      try {
+        const series = (await dhanPost("/charts/intraday", {
+          securityId: id,
+          exchangeSegment: segment,
+          instrument,
+          interval,
+          oi: false,
+          fromDate: start,
+          toDate: end,
+        })) as Series;
+        return candlesFromSeries(series).sort((a, b) => a.time - b.time);
+      } catch (error) {
+        failure = error;
+        if (!(error instanceof AppError)) throw error;
+      }
+    }
   }
-  return candlesFromSeries(series).sort((a, b) => a.time - b.time);
+  throw failure ?? new AppError("No intraday range was available to request.", 502);
 }
 
 /**
