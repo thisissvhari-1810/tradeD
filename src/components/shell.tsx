@@ -127,7 +127,7 @@ export function Shell({ children }: { children: ReactNode }) {
     const recent = JSON.parse(localStorage.getItem("td-recent") || "[]") as string[];
     localStorage.setItem("td-recent", JSON.stringify([symbol, ...recent.filter((item) => item !== symbol)].slice(0, 8)));
     if (path.startsWith("/terminal") || path.startsWith("/chart") || path.startsWith("/positions") || path.startsWith("/prediction")) return;
-    router.push(`/terminal?symbol=${symbol}`);
+    router.push(`/chart?symbol=${encodeURIComponent(symbol)}`);
   }, [path, router]);
 
   const openChart = useCallback((next: string) => {

@@ -499,7 +499,7 @@ async function evaluateAlerts() {
         userId: alert.userId,
         title: `${alert.instrument.symbol} alert`,
         body: alert.condition === "PRICE_ABOVE" ? "The demo or provider reference price moved above your alert." : "The demo or provider reference price moved below your alert.",
-        href: `/terminal?symbol=${alert.instrument.symbol}`,
+        href: `/chart?symbol=${encodeURIComponent(alert.instrument.symbol)}`,
       },
     });
   }
