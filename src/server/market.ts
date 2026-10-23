@@ -359,21 +359,44 @@ export async function getCandles(symbol: string, timeframe: ChartSpan): Promise<
   return { candles, mode: "HISTORICAL", source: "alphavantage", message: "Daily historical candles from Alpha Vantage. Intraday charts require a provider plan that includes them; this adapter returns the daily series." };
 }
 
+/** Renamed or split companies: the old name still finds the current NSE symbols. */
+const SEARCH_ALIASES: Record<string, string[]> = {
+  zomato: ["ETERNAL"],
+  "tata motors": ["TMPV", "TMCV"],
+  tatamotors: ["TMPV", "TMCV"],
+};
+
 export async function searchInstruments(query: string, skip = 0) {
   const q = query.trim();
-  const rows = await prisma.instrument.findMany({
-    where: q
-      ? { isActive: true, OR: [{ symbol: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }] }
-      : { isActive: true, sector: "EQ" },
-    orderBy: { name: "asc" },
-    skip: Math.max(0, skip),
-    take: 50,
-    select: { symbol: true, name: true, exchange: true, sector: true, lotSize: true, tickPaise: true },
-  });
+  const select = { symbol: true, name: true, exchange: true, sector: true, lotSize: true, tickPaise: true } as const;
+  const rows = q
+    ? await (async () => {
+      // Symbols that start with the query come first (so "HDFC" lists HDFCBANK before names that only contain it), then any match.
+      const alias = SEARCH_ALIASES[q.toLowerCase()] ?? [];
+      const [aliased, leading, matching] = await Promise.all([
+        alias.length && skip === 0 ? prisma.instrument.findMany({ where: { isActive: true, symbol: { in: alias } }, select }) : Promise.resolve([]),
+        skip === 0 ? prisma.instrument.findMany({ where: { isActive: true, symbol: { startsWith: q, mode: "insensitive" } }, orderBy: { symbol: "asc" }, take: 30, select }) : Promise.resolve([]),
+        prisma.instrument.findMany({
+          where: { isActive: true, OR: [{ symbol: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }] },
+          orderBy: { name: "asc" },
+          skip: Math.max(0, skip),
+          take: 50,
+          select,
+        }),
+      ]);
+      const seen = new Set<string>();
+      return [...aliased, ...leading, ...matching].filter((row) => (seen.has(row.symbol) ? false : (seen.add(row.symbol), true)));
+    })()
+    : await prisma.instrument.findMany({ where: { isActive: true, sector: "EQ" }, orderBy: { name: "asc" }, skip: Math.max(0, skip), take: 50, select });
   const indices = skip === 0 ? searchIndices(q).map((item) => ({ symbol: item.symbol, name: item.name, exchange: "NSE", sector: "INDEX", lotSize: 1, tickPaise: 5 })) : [];
   const seen = new Set(indices.map((item) => item.symbol));
   const equities = rows.filter((row) => !seen.has(row.symbol));
-  return [...indices, ...equities].sort((a, b) => Number(a.sector !== "INDEX") - Number(b.sector !== "INDEX") || Number(/^\d/.test(a.symbol)) - Number(/^\d/.test(b.symbol)) || a.name.localeCompare(b.name)).slice(0, 60);
+  const upper = q.toUpperCase();
+  const rank = (row: { symbol: string; name: string; sector: string }) =>
+    row.symbol === upper ? 0 : row.sector === "INDEX" ? 1 : row.symbol.startsWith(upper) ? 2 : row.name.toUpperCase().startsWith(upper) ? 3 : 4;
+  return [...indices, ...equities]
+    .sort((a, b) => (q ? rank(a) - rank(b) : 0) || Number(a.sector !== "INDEX") - Number(b.sector !== "INDEX") || Number(/^\d/.test(a.symbol)) - Number(/^\d/.test(b.symbol)) || a.name.localeCompare(b.name))
+    .slice(0, 60);
 }
 
 const quoteMemo = new Map<string, { at: number; quote: DemoQuote }>();

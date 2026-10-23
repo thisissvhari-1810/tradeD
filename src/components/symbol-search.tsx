@@ -61,6 +61,7 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const requestId = useRef(0);
+  const [retry, setRetry] = useState(0);
 
   // Each opening starts empty, with the recent list, and focuses the field.
   const [openedFor, setOpenedFor] = useState(false);
@@ -110,7 +111,7 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
         .catch(() => { if (id === requestId.current) setResult({ q, rows: [], failed: true }); });
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [query, open]);
+  }, [query, open, retry]);
 
   const q = query.trim();
   const status: Status = !q ? "idle" : result.q !== q ? "loading" : result.failed ? "error" : result.rows.length ? "ready" : "empty";
@@ -209,8 +210,13 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
           {status === "idle" ? (recent.length ? "Recent" : "All stocks") : status === "loading" ? "Searching…" : status === "ready" ? `${rows.length} result${rows.length === 1 ? "" : "s"}` : ""}
         </p>
         <ul id="td-symbol-results" ref={listRef} role="listbox" aria-label="Stocks" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
-          {status === "empty" ? <li className="px-3 py-6 text-center text-data text-muted">No stock or index matches “{q}”.</li> : null}
-          {status === "error" ? <li className="px-3 py-6 text-center text-data text-loss" role="alert">Search is unavailable right now. Check the connection and try again.</li> : null}
+          {status === "empty" ? <li className="px-3 py-6 text-center text-data text-muted">No stocks found. Try another name or symbol.</li> : null}
+          {status === "error" ? (
+            <li className="flex flex-col items-center gap-2 px-3 py-6 text-center text-data text-loss" role="alert">
+              Search is unavailable right now. Check the connection and try again.
+              <button type="button" className="h-9 rounded-input border border-border px-4 font-medium text-text hover:bg-hover" onClick={() => { setResult({ q: "", rows: [], failed: false }); setRetry((value) => value + 1); }}>Retry</button>
+            </li>
+          ) : null}
           {rows.map((row, index) => {
             const heading = !q && recentCount > 0 && index === recentCount ? <p className="px-2 pb-1 pt-3 text-micro font-semibold uppercase tracking-wide text-muted">All stocks</p> : null;
             const selected = row.symbol === current.symbol && row.exchange === current.exchange;

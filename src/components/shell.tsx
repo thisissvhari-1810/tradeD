@@ -118,6 +118,8 @@ export function Shell({ children }: { children: ReactNode }) {
   // The phone Home page's stock search (the same picker the chart opens from its symbol).
   const [homeSearch, setHomeSearch] = useState(false);
   const closeHomeSearch = useCallback(() => setHomeSearch(false), []);
+  /** The bottom bar's five destinations show the stock search box in the phone header. */
+  const searchTab = path === "/" || ["/watchlist", "/chart", "/positions", "/holdings"].some((href) => path.startsWith(href));
   const mobilePrefs = useMobilePrefs();
   useEffect(() => {
     document.documentElement.dataset.density = mobilePrefs.density;
@@ -355,8 +357,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
             <div className="lg:hidden"><BrandMark /></div>
-            {/* Home on phones: a stock search box takes the ticker's place (the greeting's index strip shows the market). */}
-            {path === "/" ? (
+            {/* Phones, on Home, Watchlist, Trade, Positions and Portfolio: one stock search box takes the ticker's place. */}
+            {searchTab ? (
               <button
                 type="button"
                 className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-input border border-border bg-sunken px-3 text-left transition-colors hover:border-border-strong focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] md:hidden"
@@ -369,7 +371,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 <span className="truncate text-data text-muted"><span className="min-[340px]:hidden">Search</span><span className="max-[339px]:hidden min-[420px]:hidden">Search stocks</span><span className="max-[419px]:hidden">Search stocks, indices…</span></span>
               </button>
             ) : null}
-            <div className={cx("no-scrollbar relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto", path === "/" && "max-md:hidden")} aria-label="Index prices">
+            <div className={cx("no-scrollbar relative flex min-w-0 flex-1 items-center gap-2 overflow-x-auto", searchTab && "max-md:hidden")} aria-label="Index prices">
               {indices.length === 0 ? (
                 <span className="truncate text-data text-muted">{indexNote || "Loading index prices…"}</span>
               ) : (indices.some((item) => TICKER_LABEL[item.name]) ? indices.filter((item) => TICKER_LABEL[item.name]) : indices).map((item) => (
@@ -381,7 +383,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </span>
             </div>
 
-            <div className={cx("contents", path === "/" && "max-md:hidden")}><GlobalSearch pages={links} onSymbol={openChart} onPage={goTo} /></div>
+            <div className={cx("contents", searchTab && "max-md:hidden")}><GlobalSearch pages={links} onSymbol={openChart} onPage={goTo} /></div>
 
             <PremiumUpgradeButton />
 
