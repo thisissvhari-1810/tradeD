@@ -223,7 +223,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const closeTicket = useCallback(() => setOrderDraft(null), []);
   // The chart opens on the watchlist; Positions is one click away (and opens itself after a fill).
   const [sideRail, setSideRail] = useState<"watch" | "positions">("watch");
-  const [railCollapsed, setRailCollapsed] = useState(false);
+  // The chart opens with the side panel closed (the Watchlist button opens it); the Positions page needs it open.
+  const [railCollapsed, setRailCollapsed] = useState(variant !== "positions");
   const [closedTrades, setClosedTrades] = useState<BookTrade[]>([]);
   const refreshPractice = useRef<() => void>(() => undefined);
   const [optionView, setOptionView] = useState<OptionChartRequest | null>(null);
@@ -1065,6 +1066,17 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         >
           <button
             type="button"
+            aria-pressed={!railCollapsed}
+            aria-label="Watchlist"
+            title={railCollapsed ? "Show the watchlist and positions panel" : "Hide the watchlist and positions panel"}
+            className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", !railCollapsed ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
+            onClick={() => setRailCollapsed((value) => !value)}
+          >
+            <PanelRightOpen className="h-4 w-4" aria-hidden />
+            Watchlist
+          </button>
+          <button
+            type="button"
             aria-pressed={strategy.enabled}
             aria-expanded={strategyOpen}
             aria-label="Strategy"
@@ -1267,7 +1279,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             }}
           />
         ) : null}
-        <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "h-11 lg:w-11" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[clamp(17rem,24vw,21rem)]" : "h-64 lg:w-[clamp(16rem,20vw,18rem)]"}`}>
+        <aside className={`flex w-full shrink-0 flex-col overflow-hidden border-t border-border bg-panel lg:h-auto lg:border-l lg:border-t-0 ${ticketDraft ? "lg:hidden" : ""} ${railCollapsed ? "hidden" : sideRail === "positions" ? "h-[min(48vh,32rem)] lg:w-[clamp(17rem,24vw,21rem)]" : "h-64 lg:w-[clamp(16rem,20vw,18rem)]"}`}>
           <div className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border px-1.5" role="tablist" aria-label="Side panel">
             {railCollapsed ? null : (["watch", "positions"] as const).map((item) => {
               const count = item === "positions" && practice ? bookRows.filter((row) => row.quantity > 0).length : 0;
@@ -1277,7 +1289,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 </button>
               );
             })}
-            <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-label={railCollapsed ? "Expand side panel" : "Collapse side panel"} aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
+            <button type="button" className="ml-auto grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" title="Close side panel" aria-label="Close side panel" aria-expanded={!railCollapsed} onClick={() => setRailCollapsed((value) => !value)}>{railCollapsed ? <PanelRightOpen className="h-4 w-4" aria-hidden /> : <PanelRightClose className="h-4 w-4" aria-hidden />}</button>
           </div>
           {railCollapsed ? null : sideRail === "positions" ? (
             <OptionBook

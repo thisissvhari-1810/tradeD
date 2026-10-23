@@ -312,3 +312,12 @@ describe("latest session before the open; matching 9:15 colours", () => {
     expect(parseStrategySettings(JSON.stringify({ low: { color: "#123456" } })).low.color).toBe("#123456");
   });
 });
+
+describe("chart side panel", () => {
+  const desk = readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8");
+  it("starts closed on the chart (open on the Positions page) and a Watchlist button toggles it", () => {
+    expect(desk).toContain('const [railCollapsed, setRailCollapsed] = useState(variant !== "positions");');
+    expect(desk).toContain('aria-label="Watchlist"');
+    expect(desk).toContain('${railCollapsed ? "hidden" : sideRail === "positions"');
+  });
+});
