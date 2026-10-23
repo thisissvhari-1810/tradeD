@@ -99,6 +99,7 @@ export function ChartPanel({
   overlays,
   lockAll = false,
   cursorStyle = "cross",
+  pageScroll = false,
 }: {
   candles: Candle[];
   compare: Candle[];
@@ -136,6 +137,8 @@ export function ChartPanel({
   focusToken?: number;
   references?: ChartReference[];
   paint?: ChartPaint;
+  /** The chart sits in a scrolling page (Positions on phones): vertical swipes scroll the page, not the chart. */
+  pageScroll?: boolean;
 }) {
   const colors = paint ?? emptyAppearance(scheme === "light" ? "light" : "classic").chart;
   const paintRef = useLatest(colors);
@@ -426,6 +429,11 @@ export function ChartPanel({
     chart.subscribeCrosshairMove(onMove);
     return () => chart.unsubscribeCrosshairMove(onMove);
   }, [candles, chartType, compare, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators, onHoverRef]);
+
+  useEffect(() => {
+    // Side-to-side drag and pinch still move and zoom the chart; only vertical touch drags go to the page.
+    chartRef.current?.applyOptions({ handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: !pageScroll } });
+  });
 
   if (!candles.length) return <div className="grid h-full min-h-64 place-items-center text-sm text-muted">No candles for this symbol and timeframe.</div>;
   return (

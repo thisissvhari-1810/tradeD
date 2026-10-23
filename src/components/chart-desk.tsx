@@ -2,7 +2,7 @@
 
 import { useHydrated } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
 import { ChartHeaderTools } from "@/components/chart-header-tools";
@@ -220,6 +220,12 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [reload, setReload] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [full, setFull] = useState(false);
+  // Phones and tablets (below the lg breakpoint), for touch behaviour that differs from desktop.
+  const phoneLayout = useSyncExternalStore(
+    (notify) => { const query = window.matchMedia("(max-width: 1023px)"); query.addEventListener("change", notify); return () => query.removeEventListener("change", notify); },
+    () => window.matchMedia("(max-width: 1023px)").matches,
+    () => false,
+  );
   // Phones: the drawing tools open as a bottom sheet (the toolbar row is for larger screens).
   const [drawSheet, setDrawSheet] = useState(false);
   const premiumStrategy = usePremium("strategy");
@@ -1294,6 +1300,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 paint={desk.appearance.chart}
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
                 references={sessionLevels}
+                pageScroll={variant === "positions" && phoneLayout}
               />
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
@@ -1482,7 +1489,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             })}
           </div>
           {variant === "positions" ? (
-            <div className="max-h-64 overflow-auto border-t border-border p-3">
+            <div className="border-t border-border p-3 lg:max-h-64 lg:overflow-auto">
               <h2 className="text-sm font-semibold">Position</h2>
               <p className="mt-1 text-[0.6875rem] text-muted">{desk.mode === "live" ? "Live paper wallet. Not a broker position." : "Practice ledger. Long only. This is not a broker position."}</p>
               {practiceRow ? <PracticeDetail row={practiceRow} onExit={() => setExitSymbol(practiceRow)} /> : (

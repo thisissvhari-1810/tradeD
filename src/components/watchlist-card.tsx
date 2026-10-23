@@ -128,7 +128,9 @@ export function WatchlistCard({ full = false, className }: { full?: boolean; cla
         />
         {lists.length > 1 ? <div className="mt-2 flex justify-end"><Breadth up={breadth.up} down={breadth.down} /></div> : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto overscroll-contain border-t border-border-soft px-1.5 py-1">
+      {/* On Home on phones the rows are part of the page (no scroll box inside the page that traps swipes);
+          the full Watchlist page and wide screens scroll the rows in place. */}
+      <div className={cx("min-h-0 flex-1 border-t border-border-soft px-1.5 py-1", full ? "overflow-auto overscroll-contain" : "lg:overflow-auto lg:overscroll-contain")}>
         {listsState === "loading" ? <WatchlistSkeleton /> : null}
         {listsState === "error" ? <InlineState icon={<WifiOff className="h-5 w-5" />} title="Watchlist unavailable" body="The saved watchlists could not be loaded. Refresh the page to retry." /> : null}
         {listsState === "ready" && rows.length === 0 ? (

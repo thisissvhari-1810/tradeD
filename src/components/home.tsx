@@ -117,7 +117,7 @@ export function Home() {
         </div>
 
         <aside className="flex min-w-0 flex-col gap-4 max-lg:contents xl:sticky xl:top-5 xl:max-h-[calc(100dvh-var(--topbar)-40px)] xl:self-start">
-          <WatchlistCard className="max-lg:order-3 max-lg:max-h-[30rem] xl:min-h-[16.25rem] xl:flex-1" />
+          <WatchlistCard className="max-lg:order-3 xl:min-h-[16.25rem] xl:flex-1" />
 
           <div className="min-w-0 max-lg:order-6"><RecentActivity allowed={activityAllowed} historyHref={historyHref} /></div>
         </aside>

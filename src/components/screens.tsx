@@ -444,7 +444,7 @@ export function HoldingsScreen() {
 
       <Section title="Equity snapshots" description="Stored when the account is opened, at most once every 15 minutes." flush>
         {(portfolio?.equityCurve?.length ?? 0) > 0 ? (
-          <div className="max-h-56 overflow-auto">
+          <div className="sm:max-h-56 sm:overflow-auto">
             <table className="text-dense">
               <thead><tr><th>Captured</th><th className="num">Equity</th><th className="num">Realized</th><th className="num">Unrealized</th></tr></thead>
               <tbody>
@@ -506,7 +506,7 @@ function ClosedTrades() {
       }
     >
       {error ? <Notice tone="loss" className="m-4">{error}</Notice> : null}
-      <div className="max-h-[50vh] overflow-auto">
+      <div className="sm:max-h-[50vh] sm:overflow-auto">
         <table className="stack-sm text-dense">
           <thead><tr><th>Instrument</th><th>Entry</th><th>Exit</th><th className="num">Qty</th><th className="num">Gross</th><th className="num">Fees</th><th className="num">Net</th><th className="num">Return</th><th>Duration</th></tr></thead>
           <tbody>
