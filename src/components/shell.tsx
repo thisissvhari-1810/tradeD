@@ -362,14 +362,22 @@ export function Shell({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 className={cx(
-                  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-pill border px-2.5 text-micro font-semibold uppercase tracking-[0.05em] transition-colors",
-                  mode === "demo" ? "border-demo/35 bg-demo-soft text-demo hover:border-demo/60" : "border-warning/40 bg-warning-soft text-warning hover:border-warning/70",
+                  "inline-flex h-8 shrink-0 items-center gap-1.5 transition-opacity",
+                  mode === "demo"
+                    ? "rounded-pill border border-demo/35 bg-demo-soft px-2.5 text-micro font-semibold uppercase tracking-[0.05em] text-demo hover:border-demo/60"
+                    // Live: a broadcast-style status mark (pulsing dot + "Live"), not a button shape.
+                    : "px-1.5 text-dense font-bold tracking-[0.02em] hover:opacity-80",
                 )}
+                style={mode === "live" ? { color: "var(--loss)", fontWeight: 700, letterSpacing: "0.02em" } : undefined}
                 onClick={() => setPendingMode(mode === "demo" ? "live" : "demo")}
                 aria-label={mode === "demo" ? "Demo mode. Switch to live view" : "Live view. Switch to demo"}
               >
-                {mode === "demo" ? <FlaskConical className="h-3.5 w-3.5" aria-hidden /> : <Eye className="h-3.5 w-3.5" aria-hidden />}
-                <span className="hidden sm:inline">{mode === "demo" ? "Demo" : "Live view"}</span>
+                {mode === "demo" ? <FlaskConical className="h-3.5 w-3.5" aria-hidden /> : (
+                  <span className="relative grid h-2.5 w-2.5 place-items-center" aria-hidden>
+                    <span className="live-dot h-2.5 w-2.5 rounded-full bg-loss" />
+                  </span>
+                )}
+                {mode === "demo" ? <span className="hidden sm:inline">Demo</span> : <span>Live</span>}
               </button>
             </Tooltip>
 
