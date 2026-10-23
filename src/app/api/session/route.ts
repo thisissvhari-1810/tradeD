@@ -13,6 +13,7 @@ export const GET = query(async () => {
       tradingEnabled: user.tradingEnabled,
       features: user.features,
       premium: user.premium,
+      memberSince: user.createdAt?.toISOString() ?? null,
     },
   });
 });

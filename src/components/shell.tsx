@@ -6,17 +6,18 @@ import type { Premium } from "@/lib/premium/entitlements";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LogOut, LayoutGrid, Moon, Palette, PieChart, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
+import { AccountPanel } from "@/components/account-panel";
 import { MobileSettingsPanel } from "@/components/mobile-settings";
 import { PremiumUpgradeButton, rememberPremiumOrigin } from "@/components/premium/premium-upgrade-button";
 import { useMobilePrefs } from "@/components/mobile-prefs";
-import { Badge, Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
+import { Button, cx, PriceCell, Tooltip, ToastStack, type ToastItem, type ToastOptions } from "@/components/ui";
 import { appearanceKey, applyAppearance, emptyAppearance, loadAppearance, presetAppearance, saveAppearance, type Appearance } from "@/lib/color/appearance";
 
-type User = { name: string; email: string; role: string; status: string; tradingEnabled: boolean; features?: Features; premium?: Premium };
+type User = { name: string; email: string; role: string; status: string; tradingEnabled: boolean; features?: Features; premium?: Premium; memberSince?: string | null };
 type Health = {
   ok: boolean;
   database: string;
@@ -231,11 +232,13 @@ export function Shell({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const [notesLoaded, setNotesLoaded] = useState(false);
   useEffect(() => {
     api<{ notifications: Array<{ id: string; title: string; body: string; read: boolean }> }>("/api/alerts")
-      .then((data) => setNotes(data.notifications))
-      .catch(() => undefined);
-  }, [openNotes]);
+      .then((data) => { setNotes(data.notifications); setNotesLoaded(true); })
+      .catch(() => setNotesLoaded(true));
+  }, [openNotes, openUser]);
+  const closeUser = useCallback(() => setOpenUser(false), []);
 
   const [shownPath, setShownPath] = useState(path);
   if (shownPath !== path) {
@@ -375,7 +378,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
             <div className="flex shrink-0 items-center gap-0.5">
               <Tooltip content="Notifications">
-                <button type="button" className="relative grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text" aria-label={unread ? "Notifications, unread" : "Notifications"} aria-expanded={openNotes} onClick={() => { setOpenNotes((value) => !value); setOpenUser(false); }}>
+                <button type="button" className="relative grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text max-sm:hidden" aria-label={unread ? "Notifications, unread" : "Notifications"} aria-expanded={openNotes} onClick={() => { setOpenNotes((value) => !value); setOpenUser(false); }}>
                   <Bell className="h-[1.125rem] w-[1.125rem]" aria-hidden />
                   {unread ? <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-background bg-loss" /> : null}
                 </button>
@@ -392,25 +395,11 @@ export function Shell({ children }: { children: ReactNode }) {
             </button>
 
             <div className="relative shrink-0">
-              <button type="button" className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => { setOpenUser((value) => !value); setOpenNotes(false); }} title={user?.email || "Account"} aria-label="Account menu" aria-expanded={openUser}>
+              <button type="button" className="relative grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => { setOpenUser((value) => !value); setOpenNotes(false); }} title={user?.email || "Account"} aria-label={unread ? "Account and notifications, unread" : "Account and notifications"} aria-expanded={openUser}>
                 {(user?.name || "T").slice(0, 1).toUpperCase()}
+                {/* Phones have no bell in the header: unread notifications show on the avatar instead. */}
+                {unread ? <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-loss sm:hidden" aria-hidden /> : null}
               </button>
-              {openUser ? (
-                <div className="surface-overlay anim-rise absolute right-0 top-11 z-40 w-64 rounded-card p-1.5" role="menu">
-                  <div className="px-2.5 py-2">
-                    <p className="truncate text-[0.8125rem] font-semibold">{user?.name ?? "Signed in"}</p>
-                    <p className="truncate text-data text-muted">{user?.email}</p>
-                    {user?.role ? <Badge className="mt-1.5">{user.role.replace("_", " ")}</Badge> : null}
-                  </div>
-                  <div className="my-1 h-px bg-border" />
-                  <MenuItem icon={theme === "light" ? Moon : Sun} label={theme === "light" ? "Dark theme" : "Light theme"} onClick={() => { toggleTheme(); setOpenUser(false); }} />
-                  <MenuItem icon={Palette} label="Chart colours" onClick={() => { setAppearanceOpen(true); setOpenUser(false); }} />
-                  <MenuItem icon={Crown} label={user?.premium?.status === "active" ? "Premium (active)" : "Go Premium"} onClick={() => { setOpenUser(false); rememberPremiumOrigin(); router.push("/premium"); }} />
-                  <MenuItem icon={Smartphone} label="Mobile & compact mode" onClick={() => { setMobileSettingsOpen(true); setOpenUser(false); }} />
-                  <div className="my-1 h-px bg-border" />
-                  <MenuItem icon={LogOut} label="Sign out" onClick={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }} />
-                </div>
-              ) : null}
             </div>
           </header>
 
@@ -459,6 +448,22 @@ export function Shell({ children }: { children: ReactNode }) {
               </div>
             </div>
           </div>
+        ) : null}
+
+        {/* Rendered outside the header: its backdrop blur would trap a fixed panel inside the header bar. */}
+        {openUser ? (
+          <AccountPanel
+            user={user}
+            notes={notesLoaded ? notes : null}
+            onMarkRead={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onChartColours={() => { setAppearanceOpen(true); setOpenUser(false); }}
+            onMobileSettings={() => { setMobileSettingsOpen(true); setOpenUser(false); }}
+            onPremium={() => { setOpenUser(false); rememberPremiumOrigin(); router.push("/premium"); }}
+            onSignOut={() => { void api("/api/auth/logout", {}).then(() => { window.location.href = "/login"; }); }}
+            onClose={closeUser}
+          />
         ) : null}
 
         <ToastStack items={toasts} onDismiss={dismiss} />
@@ -546,14 +551,5 @@ function IndexChip({ label, last, previous, volatility }: { label: string; last:
         </span>
       ) : <span className="px-1.5 text-micro text-muted" title="Change not available yet">–</span>}
     </div>
-  );
-}
-
-function MenuItem({ icon: Icon, label, onClick }: { icon: typeof Bell; label: string; onClick: () => void }) {
-  return (
-    <button type="button" role="menuitem" className="flex w-full items-center gap-2.5 rounded-input px-2.5 py-2 text-left text-dense text-text-2 transition-colors hover:bg-hover hover:text-text" onClick={onClick}>
-      <Icon className="h-4 w-4 text-muted" aria-hidden />
-      <span className="flex-1">{label}</span>
-    </button>
   );
 }

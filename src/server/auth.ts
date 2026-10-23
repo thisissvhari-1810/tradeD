@@ -23,6 +23,8 @@ export type SessionUser = {
   features: Features;
   /** TradeD Premium, from the user's subscription rows (re-read on every request). */
   premium: Premium;
+  /** When the account was created (shown on the user's own profile). */
+  createdAt?: Date;
 };
 
 export function newToken(): string {
@@ -79,6 +81,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     mfaEnabled: session.user.mfaEnabled,
     features: featuresOf(session.user),
     premium: premiumFrom(session.user.role, session.user.subscriptions ?? []),
+    createdAt: session.user.createdAt,
   };
 }
 

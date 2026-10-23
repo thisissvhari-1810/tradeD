@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const guarded = ["/terminal", "/markets", "/watchlist", "/premium", "/orders", "/positions", "/holdings", "/funds", "/options", "/alerts", "/search", "/chart", "/prediction", "/admin", "/multi-account", "/super-admin"];
+const guarded = ["/terminal", "/markets", "/watchlist", "/premium", "/profile", "/orders", "/positions", "/holdings", "/funds", "/options", "/alerts", "/search", "/chart", "/prediction", "/admin", "/multi-account", "/super-admin"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
