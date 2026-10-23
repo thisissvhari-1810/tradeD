@@ -1,5 +1,6 @@
 "use client";
 
+import { useLatest } from "@/components/use-hydrated";
 import { useEffect, useRef } from "react";
 import {
   CandlestickSeries,
@@ -45,14 +46,8 @@ export function PredictionChart({
   const forecastRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const markersRef = useRef<{ setMarkers: (markers: SeriesMarker<Time>[]) => void } | null>(null);
   const fittedRef = useRef("");
-  const candlesRef = useRef(candles);
-  const pointsRef = useRef(points);
-  const marketOpenRef = useRef(marketOpen);
-  const fitKeyRef = useRef(fitKey);
-  candlesRef.current = candles;
-  pointsRef.current = points;
-  marketOpenRef.current = marketOpen;
-  fitKeyRef.current = fitKey;
+  const candlesRef = useLatest(candles);
+  const pointsRef = useLatest(points);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -122,7 +117,7 @@ export function PredictionChart({
       forecastRef.current = null;
       markersRef.current = null;
     };
-  }, [scheme]);
+  }, [scheme, candlesRef, pointsRef]);
 
   useEffect(() => {
     const chart = chartRef.current;

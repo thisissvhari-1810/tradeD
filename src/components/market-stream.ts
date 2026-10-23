@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useLatest } from "@/components/use-hydrated";
 import { intervalVolume } from "@/lib/market/feed";
 
 export type FeedState = "connecting" | "live" | "delayed" | "reconnecting" | "disconnected" | "historical";
@@ -22,13 +23,14 @@ export function segmentLabel(segment: string) {
   return segment;
 }
 
+type StreamState = { key: string; state: Exclude<FeedState, "delayed">; detail: string; updatedAt: number | null };
+
 export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick: FeedTick) => void) {
-  const [state, setState] = useState<Exclude<FeedState, "delayed">>(enabled ? "connecting" : "historical");
-  const [detail, setDetail] = useState("");
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  // State belongs to one stream (one symbol). A new symbol starts as "connecting"; disabled reads "historical".
+  const streamKey = enabled && symbol ? symbol : null;
+  const [stream, setStream] = useState<StreamState | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const onTickRef = useRef(onTick);
-  onTickRef.current = onTick;
+  const onTickRef = useLatest(onTick);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 5000);
@@ -36,12 +38,10 @@ export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick:
   }, []);
 
   useEffect(() => {
-    if (!enabled || !symbol) {
-      setState("historical");
-      setDetail("");
-      setUpdatedAt(null);
-      return;
-    }
+    if (!streamKey) return;
+    const key = streamKey;
+    const update = (patch: Partial<Omit<StreamState, "key">>) =>
+      setStream((current) => ({ ...(current?.key === key ? current : { key, state: "connecting", detail: "", updatedAt: null }), ...patch, key }));
     let source: EventSource | null = null;
     let timer = 0;
     let stop = false;
@@ -49,14 +49,13 @@ export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick:
     let baseline: number | null = null;
     const open = () => {
       if (stop) return;
-      setState(attempt ? "reconnecting" : "connecting");
-      source = new EventSource(`/api/market/stream?symbol=${encodeURIComponent(symbol)}`);
+      source = new EventSource(`/api/market/stream?symbol=${encodeURIComponent(key)}`);
       source.addEventListener("status", (event) => {
         const data = readEvent(event);
         if (!data || data.state !== "subscribed") return;
         const id = typeof data.securityId === "string" ? data.securityId : "";
         const segment = typeof data.segment === "string" ? segmentLabel(data.segment) : "";
-        setDetail([id ? `Security ${id}` : "", segment].filter(Boolean).join(" · "));
+        update({ detail: [id ? `Security ${id}` : "", segment].filter(Boolean).join(" · ") });
       });
       source.addEventListener("tick", (event) => {
         const data = readEvent(event);
@@ -70,14 +69,12 @@ export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick:
           baseline = next.baseline;
           volumeDelta = next.delta;
         }
-        setState("live");
-        setUpdatedAt(time);
+        update({ state: "live", updatedAt: time });
         onTickRef.current({ price, time, volumeDelta, dayVolume });
       });
       source.addEventListener("problem", (event) => {
         const data = readEvent(event);
-        setDetail(typeof data?.message === "string" ? data.message : "The market feed disconnected.");
-        setState("disconnected");
+        update({ detail: typeof data?.message === "string" ? data.message : "The market feed disconnected.", state: "disconnected" });
         if (data?.retry === false) {
           stop = true;
           source?.close();
@@ -88,7 +85,7 @@ export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick:
         if (stop) return;
         attempt += 1;
         const wait = Math.min(15000, 1000 * attempt);
-        setState("reconnecting");
+        update({ state: "reconnecting" });
         timer = window.setTimeout(open, wait);
       };
     };
@@ -98,8 +95,12 @@ export function useMarketStream(symbol: string, enabled: boolean, onTick: (tick:
       source?.close();
       window.clearTimeout(timer);
     };
-  }, [symbol, enabled]);
+  }, [streamKey, onTickRef]);
 
+  const current = !streamKey ? null : stream?.key === streamKey ? stream : { key: streamKey, state: "connecting" as const, detail: "", updatedAt: null };
+  const state = current?.state ?? "historical";
+  const detail = current?.detail ?? "";
+  const updatedAt = current?.updatedAt ?? null;
   const age = updatedAt == null ? null : now / 1000 - updatedAt;
   const status: FeedState = state === "live" && age != null && age > 20 ? "delayed" : state;
   return { status, detail, updatedAt };

@@ -139,6 +139,8 @@ export function DemoModeBadge({ children = "DEMO" }: { children?: string }) {
 
 type Hit = { symbol: string; name: string; exchange: string };
 
+const NO_QUOTES: Record<string, { last: number; previousClose: number }> = {};
+
 export function StockSearchField({
   id = "td-search",
   query,
@@ -162,13 +164,18 @@ export function StockSearchField({
 }) {
   const [cursor, setCursor] = useState(0);
   const [focused, setFocused] = useState(false);
-  const [quotes, setQuotes] = useState<Record<string, { last: number; previousClose: number }>>({});
+  const [fetched, setQuotes] = useState<Record<string, { last: number; previousClose: number }>>({});
   const symbols = hits.map((hit) => hit.symbol).join(",");
-
-  useEffect(() => { setCursor(0); }, [symbols]);
+  // A new result list starts at its first row, and an empty list shows no prices (adjusted during render).
+  const [cursorFor, setCursorFor] = useState(symbols);
+  if (cursorFor !== symbols) {
+    setCursorFor(symbols);
+    setCursor(0);
+  }
+  const quotes = symbols ? fetched : NO_QUOTES;
 
   useEffect(() => {
-    if (!symbols) { setQuotes({}); return; }
+    if (!symbols) return;
     let stop = false;
     api<{ quotes: Array<{ symbol: string; last?: number; previousClose?: number; error?: string }> }>(`/api/market/quotes?symbols=${symbols}`)
       .then((data) => {

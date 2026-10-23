@@ -4,6 +4,7 @@ import { nseCashSession } from "@/lib/market/clock";
 import type { Candle, DemoQuote } from "@/lib/market/demo";
 import { foldSessions, istDateKey } from "@/lib/market/fold-sessions";
 import { daysBefore, intradayEnds } from "@/lib/market/dhan-ranges";
+import { classifyProviderFailure, timeoutFailure, withRetries, type ProviderFailure } from "@/lib/market/provider-errors";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
@@ -61,22 +62,43 @@ async function dhanPost(path: string, body: unknown) {
   };
   const clientId = await getDhanClientId();
   if (clientId) headers["client-id"] = clientId;
-  const response = await fetch(`https://api.dhan.co/v2${path}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(12000),
-    cache: "no-store",
+  // Rate limits and server faults answer fast and are retried twice (0.4 s, 1.2 s). A timeout is not
+  // retried here: two more 10 s waits would outlast the route's time limit.
+  return withRetries(async () => {
+    let response: Response;
+    try {
+      response = await fetch(`https://api.dhan.co/v2${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
+        cache: "no-store",
+      });
+    } catch (error) {
+      console.error("[dhan] no response", { path, request: describeRequest(body), error: error instanceof Error ? error.name : "unknown" });
+      throw providerError(timeoutFailure());
+    }
+    const payload = (await response.json().catch(() => null)) as { errorMessage?: string; remarks?: string; errorCode?: string; errorType?: string } | null;
+    if (!response.ok) {
+      const failure = classifyProviderFailure(response.status, payload);
+      // The full detail (never the token) goes to the server log; the user gets a short, actionable message.
+      console.error("[dhan] request refused", { path, status: response.status, errorCode: payload?.errorCode, errorType: payload?.errorType, reason: payload?.errorMessage || payload?.remarks, request: describeRequest(body) });
+      throw providerError(failure);
+    }
+    return payload;
+  }, (error) => error instanceof AppError && error.details?.retryable === true && error.details?.provider !== "TIMEOUT");
+}
+
+/** An AppError carrying the classified provider failure (kind, code, retryable) in its details. */
+function providerError(failure: ProviderFailure) {
+  return new AppError(`${failure.userMessage} (${failure.code})`, failure.status, `PROVIDER_${failure.kind.toUpperCase().replace("-", "_")}`, {
+    details: { provider: failure.code, kind: failure.kind, retryable: failure.retryable },
   });
-  const payload = (await response.json().catch(() => null)) as { errorMessage?: string; remarks?: string; errorCode?: string; errorType?: string } | null;
-  if (!response.ok) {
-    // Name the request (never the token) so a rejected parameter can be traced from the message on screen.
-    const reason = payload?.errorMessage || payload?.remarks || `Market data returned ${response.status}.`;
-    const detail = `${payload?.errorCode ?? `HTTP ${response.status}`} on ${path}: ${describeRequest(body)}`;
-    console.error("[dhan] request refused", { path, status: response.status, errorCode: payload?.errorCode, errorType: payload?.errorType, reason, request: describeRequest(body) });
-    throw new AppError(`${reason} (${detail})`, 502);
-  }
-  return payload;
+}
+
+/** Only a refused request (bad parameters) is worth retrying with a different date range. */
+function rangeRefused(error: unknown) {
+  return error instanceof AppError && error.details?.kind === "bad-request";
 }
 
 /** The request's identifying fields for error messages: security, segment, interval and dates only. */
@@ -135,7 +157,7 @@ async function dailyHistory(id: string, from: Date, to: Date, segment = "NSE_EQ"
         return candlesFromSeries(series).sort((a, b) => a.time - b.time);
       } catch (error) {
         failure = error;
-        if (!(error instanceof AppError)) throw error;
+        if (!rangeRefused(error)) throw error;
       }
     }
   }
@@ -193,7 +215,7 @@ async function intradayHistory(id: string, interval: "1" | "5" | "15" | "60", fr
         return candlesFromSeries(series).sort((a, b) => a.time - b.time);
       } catch (error) {
         failure = error;
-        if (!(error instanceof AppError)) throw error;
+        if (!rangeRefused(error)) throw error;
       }
     }
   }
@@ -230,7 +252,8 @@ export async function dhanSessionTape(symbol: string, storedSecurityId: string, 
   // same-day request is used.
   try {
     return await intradayHistory(id, "1", new Date((open - 3 * 86_400) * 1000), to, segment, kind);
-  } catch {
+  } catch (error) {
+    if (!rangeRefused(error)) throw error;
     return intradayHistory(id, "1", new Date(open * 1000), to, segment, kind);
   }
 }

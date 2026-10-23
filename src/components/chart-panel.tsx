@@ -1,5 +1,6 @@
 "use client";
 
+import { useLatest } from "@/components/use-hydrated";
 import { useEffect, useRef, useState } from "react";
 import {
   AreaSeries,
@@ -136,8 +137,7 @@ export function ChartPanel({
   paint?: ChartPaint;
 }) {
   const colors = paint ?? emptyAppearance(scheme === "light" ? "light" : "classic").chart;
-  const paintRef = useRef(colors);
-  paintRef.current = colors;
+  const paintRef = useLatest(colors);
   const paintKey = JSON.stringify(colors);
   const priceRef = useRef<HTMLDivElement>(null);
   const oscRef = useRef<HTMLDivElement>(null);
@@ -148,21 +148,16 @@ export function ChartPanel({
   const overlaySeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
   const referenceLines = useRef<IPriceLine[]>([]);
   const oscSeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
-  const viewRef = useRef({ showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators });
-  viewRef.current = { showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators };
-  const candlesRef = useRef(candles);
+  const viewRef = useLatest({ showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators });
+  const candlesRef = useLatest(candles);
   const paintedBars = useRef<Candle[]>([]);
-  const schemeRef = useRef(scheme);
+  const schemeRef = useLatest(scheme);
   const [hover, setHover] = useState<Candle | null>(null);
-  const onHoverRef = useRef(onHover);
+  const onHoverRef = useLatest(onHover);
   const focusedToken = useRef(0);
-  onHoverRef.current = onHover;
   const [chartEpoch, setChartEpoch] = useState(0);
-  schemeRef.current = scheme;
-  candlesRef.current = candles;
   const loaded = candles.length > 0;
-  const compareRef = useRef(compare);
-  compareRef.current = compare;
+  const compareRef = useLatest(compare);
   const compareKey = compare.map((candle) => `${candle.time}:${candle.close}`).join("|");
   const referenceKey = references.map((item) => `${item.title}:${item.price}:${item.color}:${item.style ?? "dashed"}`).join("|");
 
@@ -265,7 +260,7 @@ export function ChartPanel({
       seriesRef.current = null;
       volumeRef.current = null;
     };
-  }, [streamKey, loaded, chartType, compareKey, handleRef, oscillator, showBands, showEma, showSma, showVwap, showSupertrend, indicators]);
+  }, [streamKey, loaded, chartType, compareKey, handleRef, oscillator, showBands, showEma, showSma, showVwap, showSupertrend, indicators, candlesRef, compareRef, paintRef, schemeRef]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -283,7 +278,7 @@ export function ChartPanel({
       volume.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     }
     volumeRef.current.setData(candlesRef.current.map((bar) => ({ time: bar.time as UTCTimestamp, value: bar.volume, color: volumeColor(bar, paintRef.current) })));
-  }, [showVolume, chartEpoch]);
+  }, [showVolume, chartEpoch, candlesRef, paintRef]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -338,7 +333,7 @@ export function ChartPanel({
       paintedBars.current = candles;
       paintStudies(candles);
     } catch { /* The chart was replaced while this tick arrived. */ }
-  }, [candles, chartEpoch, chartType]);
+  }, [candles, chartEpoch, chartType, paintRef, viewRef]);
 
   useEffect(() => {
     if (!follow) return;
@@ -385,7 +380,7 @@ export function ChartPanel({
     const osc = oscSeries.current;
     if (view.oscillator === "rsi") osc[0]?.applyOptions(ink(paintNow.rsi));
     if (view.oscillator === "macd") { osc[0]?.applyOptions(ink(paintNow.macd)); osc[1]?.applyOptions(ink(paintNow.macdSignal)); }
-  }, [scheme, paintKey, chartEpoch, chartType]);
+  }, [scheme, paintKey, chartEpoch, chartType, candlesRef, paintRef, viewRef]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -426,7 +421,7 @@ export function ChartPanel({
     };
     chart.subscribeCrosshairMove(onMove);
     return () => chart.unsubscribeCrosshairMove(onMove);
-  }, [candles, chartType, compare, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators]);
+  }, [candles, chartType, compare, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators, onHoverRef]);
 
   if (!candles.length) return <div className="grid h-full min-h-64 place-items-center text-sm text-muted">No candles for this symbol and timeframe.</div>;
   return (

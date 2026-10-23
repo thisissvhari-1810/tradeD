@@ -1,5 +1,6 @@
 "use client";
 
+import { useHydrated } from "@/components/use-hydrated";
 import type { FeatureKey, Features } from "@/lib/auth/features";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -43,6 +44,15 @@ type Desk = {
 };
 
 const DeskContext = createContext<Desk | null>(null);
+/** A localStorage value, or null when storage is unavailable. */
+function readStored(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 export function useDesk() {
   const value = useContext(DeskContext);
   if (!value) throw new Error("Desk is unavailable.");
@@ -119,12 +129,16 @@ export function Shell({ children }: { children: ReactNode }) {
     if (!path.startsWith("/chart")) router.push(`/chart?symbol=${encodeURIComponent(symbol)}`);
   }, [path, router]);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("td-symbol");
-    const savedMode = localStorage.getItem("td-mode");
+  // The saved symbol and view are restored once the page has hydrated (adjusted during render).
+  const hydrated = useHydrated();
+  const [restored, setRestored] = useState(false);
+  if (hydrated && !restored) {
+    setRestored(true);
+    const saved = readStored("td-symbol");
+    const savedMode = readStored("td-mode");
     if (saved) setSymbol(saved);
     if (savedMode === "live" || savedMode === "demo") setMode(savedMode);
-  }, []);
+  }
 
   useEffect(() => {
     api<{ user: User | null }>("/api/session").then((data) => setUser(data.user)).catch(() => setUser(null));
@@ -139,15 +153,22 @@ export function Shell({ children }: { children: ReactNode }) {
     setAppearanceState(saved);
   }, [appearanceUser]);
 
-  useEffect(() => {
-    const stored = localStorage.getItem(appearanceKey(appearanceUser));
-    const savedTheme = localStorage.getItem("td-theme");
+  // Each signed-in user's saved appearance is loaded when the user changes (adjusted during render);
+  // the effect below applies it to the page.
+  const [appearanceFor, setAppearanceFor] = useState<string | null>(null);
+  if (hydrated && appearanceFor !== appearanceUser) {
+    setAppearanceFor(appearanceUser);
+    const stored = readStored(appearanceKey(appearanceUser));
+    const savedTheme = readStored("td-theme");
     const current = savedTheme === "light" || savedTheme === "dark" ? savedTheme : document.documentElement.dataset.theme === "light" ? "light" : "dark";
     const next = stored ? loadAppearance(appearanceUser) : presetAppearance(current === "dark" ? "classic" : "light");
     setAppearanceState(next);
-    applyAppearance(next);
     setTheme(next.mode);
-  }, [appearanceUser]);
+  }
+  useEffect(() => {
+    // Not before the stored appearance is known, so the server-chosen theme does not flash.
+    if (appearanceFor !== null) applyAppearance(appearance);
+  }, [appearance, appearanceFor]);
 
   useEffect(() => {
     let stop = false;
@@ -251,7 +272,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const links = useMemo<NavItem[]>(() => {
     const allowed = NAV.filter((item) => !item.feature || !user?.features || user.features[item.feature]);
     return user?.role === "SUPER_ADMIN" ? [...allowed, { href: "/admin", label: "Admin", icon: Settings }, { href: "/super-admin", label: "Users", title: "Super Admin", icon: ShieldCheck }] : allowed;
-  }, [user?.role, user?.features]);
+  }, [user]);
   const goTo = useCallback((href: string) => router.push(href), [router]);
   const unread = notes.some((note) => !note.read);
 

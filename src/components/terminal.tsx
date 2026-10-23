@@ -1,5 +1,6 @@
 "use client";
 
+import { useHydrated, useLatest } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
@@ -36,6 +37,26 @@ const TOOLS: Array<[DrawTool, string]> = [
 
 const EMPTY_FLAGS: Flags = { sma: false, ema: false, bands: false, vwap: false, volume: false, supertrend: false, oscillator: "none" };
 
+/** A localStorage value, or null when storage is unavailable. */
+function readStorage(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** A parsed localStorage JSON value, or null when missing or unreadable. */
+function readJson<T>(key: string): T | null {
+  const raw = readStorage(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 export function Terminal() {
   const desk = useDesk();
   const params = useSearchParams();
@@ -56,7 +77,8 @@ export function Terminal() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [candleNote, setCandleNote] = useState("");
   const [chartError, setChartError] = useState("");
-  const [chartLoading, setChartLoading] = useState(true);
+  // The chart's candles answer one symbol | timeframe; until that answer arrives the chart is loading.
+  const [loadedChart, setLoadedChart] = useState<string | null>(null);
   const [side, setSide] = useState<"BUY" | "SELL">("BUY");
   const [orderType, setOrderType] = useState<"MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "TARGET">("MARKET");
   const [quantity, setQuantity] = useState("1");
@@ -78,11 +100,11 @@ export function Terminal() {
   const chartRequest = useRef(0);
   const symbol = desk.symbol;
   const list = lists.find((item) => item.id === listId) ?? lists[0];
-  const timeframeRef = useRef(timeframe);
+  const timeframeRef = useLatest(timeframe);
   const lastTradeRef = useRef(0);
-  const marketOpenRef = useRef(true);
-  timeframeRef.current = timeframe;
-  marketOpenRef.current = quotes[symbol] ? quotes[symbol].marketOpen : true;
+  const marketOpenRef = useLatest(quotes[symbol] ? quotes[symbol].marketOpen : true);
+  const symbolRef = useLatest(symbol);
+  const hydrated = useHydrated();
   const stream = useMarketStream(symbol, true, (tick) => {
     setCandles((current) => {
       const next = applyLiveTick(current, timeframeRef.current, tick.price, tick.time, marketOpenRef.current, tick.volumeDelta, lastTradeRef.current);
@@ -104,37 +126,45 @@ export function Terminal() {
     });
   });
 
-  const chooseSymbol = useRef(desk.chooseSymbol);
-  chooseSymbol.current = desk.chooseSymbol;
+  const chooseSymbol = useLatest(desk.chooseSymbol);
 
-  useEffect(() => {
-    const fromUrl = params.get("symbol");
+  // Order side / type from the link (?side=BUY&type=LIMIT) apply when the link changes (during render);
+  // the symbol goes through the desk.
+  const paramKey = params.toString();
+  const [paramsSeen, setParamsSeen] = useState<string | null>(null);
+  if (paramsSeen !== paramKey) {
+    setParamsSeen(paramKey);
     const fromSide = params.get("side");
-    if (fromUrl) chooseSymbol.current(fromUrl);
     if (fromSide === "BUY" || fromSide === "SELL") setSide(fromSide);
     const fromType = params.get("type");
     if (fromType === "MARKET" || fromType === "LIMIT" || fromType === "STOP" || fromType === "STOP_LIMIT" || fromType === "TARGET") setOrderType(fromType);
     if (fromSide === "SELL" || fromSide === "BUY") setMobile("order");
-  }, [params]);
-
+  }
   useEffect(() => {
-    const saved = localStorage.getItem("td-chart-prefs");
-    if (saved) {
-      const parsed = JSON.parse(saved) as { timeframe?: ChartSpan; chartType?: ChartType; flags?: Flags; indicators?: IndicatorSettings };
-      if (parsed.timeframe && CHART_SPANS.includes(parsed.timeframe)) setTimeframe(parsed.timeframe);
-      if (parsed.chartType) setChartType(parsed.chartType);
-      if (parsed.flags) setFlags({ ...EMPTY_FLAGS, ...parsed.flags });
-      if (parsed.indicators) setIndicators({ ...DEFAULT_INDICATORS, ...parsed.indicators });
-    }
-    const storedLayouts = localStorage.getItem("td-layouts");
-    if (storedLayouts) setLayouts(JSON.parse(storedLayouts) as Layout[]);
-    const savedList = localStorage.getItem("td-watchlist");
+    const fromUrl = params.get("symbol");
+    if (fromUrl) chooseSymbol.current(fromUrl);
+  }, [params, chooseSymbol]);
+
+  // Saved chart preferences, layouts and watchlist are restored once the page has hydrated.
+  const [restored, setRestored] = useState(false);
+  if (hydrated && !restored) {
+    setRestored(true);
+    const parsed = readJson<{ timeframe?: ChartSpan; chartType?: ChartType; flags?: Flags; indicators?: IndicatorSettings }>("td-chart-prefs");
+    if (parsed?.timeframe && CHART_SPANS.includes(parsed.timeframe)) setTimeframe(parsed.timeframe);
+    if (parsed?.chartType) setChartType(parsed.chartType);
+    if (parsed?.flags) setFlags({ ...EMPTY_FLAGS, ...parsed.flags });
+    if (parsed?.indicators) setIndicators({ ...DEFAULT_INDICATORS, ...parsed.indicators });
+    const storedLayouts = readJson<Layout[]>("td-layouts");
+    if (Array.isArray(storedLayouts)) setLayouts(storedLayouts);
+    const savedList = readStorage("td-watchlist");
     if (savedList) setListId(savedList);
-  }, []);
+  }
 
   useEffect(() => {
+    // Not before the restore, or the defaults would overwrite the saved preferences.
+    if (!restored) return;
     localStorage.setItem("td-chart-prefs", JSON.stringify({ timeframe, chartType, flags, indicators }));
-  }, [timeframe, chartType, flags, indicators]);
+  }, [restored, timeframe, chartType, flags, indicators]);
 
   const reloadLists = () => api<{ lists: List[] }>("/api/watchlists").then((data) => {
     setLists(data.lists);
@@ -144,33 +174,47 @@ export function Terminal() {
 
   useEffect(() => { void reloadLists(); }, []);
   useEffect(() => { if (listId) localStorage.setItem("td-watchlist", listId); }, [listId]);
-  useEffect(() => {
-    if (!list) return;
-    const saved = localStorage.getItem(`td-order:${list.id}`);
-    setOrder(saved ? JSON.parse(saved) as string[] : list.items.map((item) => item.symbol));
-  }, [list]);
+  // The watchlist's saved row order, read when the list (or its items) changes.
+  const listKey = list ? `${list.id}:${list.items.map((item) => item.symbol).join(",")}` : null;
+  const [orderFor, setOrderFor] = useState<string | null>(null);
+  if (hydrated && list && listKey && orderFor !== listKey) {
+    setOrderFor(listKey);
+    const saved = readJson<string[]>(`td-order:${list.id}`);
+    setOrder(Array.isArray(saved) ? saved : list.items.map((item) => item.symbol));
+  }
 
-  useEffect(() => {
+  // Each symbol has its own drawings; switching symbol returns to the cursor.
+  const [drawingsFor, setDrawingsFor] = useState<string | null>(null);
+  if (hydrated && drawingsFor !== symbol) {
+    setDrawingsFor(symbol);
     setDrawings(loadDrawings(symbol));
     setTool("cursor");
-  }, [symbol]);
+  }
+
+  // A new symbol | timeframe starts with an empty chart and no error.
+  const chartKey = `${symbol}|${timeframe}`;
+  const [chartFor, setChartFor] = useState<string | null>(null);
+  if (chartFor !== chartKey) {
+    setChartFor(chartKey);
+    setCandles([]);
+    setChartError("");
+  }
+  const chartLoading = loadedChart !== chartKey;
 
   useEffect(() => {
     const id = ++chartRequest.current;
-    setChartLoading(true);
-    setChartError("");
-    setCandles([]);
+    const key = `${symbol}|${timeframe}`;
     api<{ candles: Candle[]; mode: string; source: string; message: string }>(`/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}`)
       .then((data) => {
         if (id !== chartRequest.current) return;
         setCandles(data.candles);
         setCandleNote(`${data.source} · ${data.mode} · ${data.message}`);
-        setChartLoading(false);
+        setLoadedChart(key);
       })
       .catch((error: unknown) => {
         if (id !== chartRequest.current) return;
         setChartError(error instanceof Error ? error.message : "Candles failed.");
-        setChartLoading(false);
+        setLoadedChart(key);
       });
   }, [symbol, timeframe]);
 
@@ -182,6 +226,10 @@ export function Terminal() {
       api<{ quotes: Array<Quote | { symbol: string; error: string }> }>(`/api/market/quotes?symbols=${symbols.join(",")}`)
         .then((data) => {
           if (stop) return;
+          const own = data.quotes.find((row): row is Quote => "last" in row && row.symbol === symbolRef.current);
+          if (own && own.mode === "DEMO") {
+            setCandles((current) => applyLiveTick(current, timeframeRef.current, Number(own.last), Math.floor(Date.now() / 1000), own.marketOpen));
+          }
           setQuotes((current) => {
             const next = { ...current };
             for (const row of data.quotes) {
@@ -199,17 +247,12 @@ export function Terminal() {
     load();
     const timer = window.setInterval(load, 5000);
     return () => { stop = true; window.clearInterval(timer); };
-  }, [symbols]);
+  }, [symbols, symbolRef, timeframeRef]);
 
   const quote = quotes[symbol] ?? null;
   useEffect(() => {
     lastTradeRef.current = 0;
   }, [symbol]);
-  useEffect(() => {
-    if (!quote || quote.symbol !== symbol || quote.mode !== "DEMO") return;
-    const last = Number(quote.last);
-    setCandles((current) => applyLiveTick(current, timeframe, last, Math.floor(Date.now() / 1000), quote.marketOpen));
-  }, [quote, symbol, timeframe]);
 
   useEffect(() => {
     const load = () => {

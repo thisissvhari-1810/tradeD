@@ -197,7 +197,7 @@ function atIst(year: number, month: number, day: number, hour: number, minute: n
 function nextOpen(time: number, holidays: string[]) {
   const start = istParts(time);
   const minutes = start.hour * 60 + start.minute;
-  let cursor = Date.UTC(start.year, start.month - 1, start.day);
+  const cursor = Date.UTC(start.year, start.month - 1, start.day);
   if (!closedDay(time, holidays) && minutes < SESSION_OPEN) {
     return atIst(start.year, start.month, start.day, 9, 15);
   }

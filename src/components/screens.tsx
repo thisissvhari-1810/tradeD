@@ -1,7 +1,8 @@
 "use client";
 
+import { useHydrated } from "@/components/use-hydrated";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Landmark, Lock, PieChart, Receipt, Wallet } from "lucide-react";
 import { api, istStamp, istTime, money, type Instrument, type Quote } from "@/components/api";
 import { parseOptionLedgerSymbol } from "@/lib/options/contract";
@@ -67,9 +68,10 @@ export function MarketsScreen() {
   const [sector, setSector] = useState("All");
   const [quotes, setQuotes] = useState<Record<string, Quote>>({});
   const [error, setError] = useState("");
-  const [recent, setRecent] = useState<string[]>([]);
+  // Recently opened symbols live in this browser; read once the page has hydrated.
+  const hydrated = useHydrated();
+  const recent = useMemo(() => (hydrated ? readRecent() : []), [hydrated]);
   useEffect(() => {
-    setRecent(JSON.parse(localStorage.getItem("td-recent") || "[]") as string[]);
     api<Instrument[]>("/api/instruments").then(setRows).catch((caught) => setError(caught instanceof Error ? caught.message : "Could not load instruments."));
   }, []);
   useEffect(() => {
@@ -463,6 +465,15 @@ export function HoldingsScreen() {
       <div id="trade-history" className="scroll-mt-4"><ClosedTrades /></div>
     </Page>
   );
+}
+
+function readRecent(): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("td-recent") || "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function optionTradeLabel(symbol: string) {

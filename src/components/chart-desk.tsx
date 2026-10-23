@@ -1,5 +1,6 @@
 "use client";
 
+import { useHydrated } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -150,6 +151,37 @@ const LABEL_TOOLS = new Set<DrawTool>(["text", "note", "price", "callout", "mark
 
 const NO_OVERLAY: never[] = [];
 
+const NO_DRAWINGS: Drawing[] = [];
+
+/** The candle series a request belongs to: a stock and timeframe, or an option contract and timeframe. */
+function seriesKeyOf(symbol: string, timeframe: ChartSpan, contract: OptionChartRequest | null) {
+  return contract ? `opt:${contract.securityId}:${contract.underlying}:${contract.expiry}:${contract.strike}:${contract.right}:${timeframe}` : `${symbol}:${timeframe}`;
+}
+
+/** A localStorage value, or null when storage is unavailable. */
+function readStorage(key: string) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** The saved replay session (date, speed, whether it was running), cleaned; null when none. */
+function readReplaySession(): Partial<Replay> & { active: boolean } | null {
+  const raw = readStorage("td-replay-session");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Replay> & { day?: string; speed?: number };
+    const speed = typeof parsed.speed === "number" && isReplaySpeed(parsed.speed) ? parsed.speed : 1;
+    const date = typeof parsed.date === "string" ? parsed.date : typeof parsed.day === "string" ? parsed.day : "";
+    const active = Boolean(parsed.active);
+    return { active, date, cursor: null, speed, status: active ? "loading" : "idle", message: "", sessionOpen: null, sessionClose: null };
+  } catch {
+    return null;
+  }
+}
+
 export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const desk = useDesk();
   const notify = desk.toast;
@@ -166,7 +198,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [flags, setFlags] = useState<Flags>(EMPTY_FLAGS);
   const [indicators] = useState<IndicatorSettings>(DEFAULT_INDICATORS);
   const [tool, setTool] = useState<DrawTool>("cursor");
-  const [drawings, setDrawings] = useState<Drawing[]>([]);
+  // Drawings of the charted stock / option contract (keyed by drawingStore, set below).
+  const [drawingState, setDrawingState] = useState<{ key: string | null; list: Drawing[] }>({ key: null, list: [] });
   const drawPrefs = useDrawingPrefs();
   const [drawingsHidden, setDrawingsHidden] = useState(false);
   const [indicatorsHidden, setIndicatorsHidden] = useState(false);
@@ -175,10 +208,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [selectedDrawing, setSelectedDrawing] = useState<string | null>(null);
   const [annotation, setAnnotation] = useState("");
   const [historyTick, setHistoryTick] = useState(0);
-  const drawingsRef = useRef(drawings);
+  const drawingsRef = useRef<Drawing[]>([]);
   const pastRef = useRef<Drawing[][]>([]);
   const futureRef = useRef<Drawing[][]>([]);
-  drawingsRef.current = drawings;
   const [settings, setSettings] = useState(false);
   const [reload, setReload] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -186,7 +218,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [candleMeta, setCandleMeta] = useState({ mode: "", source: "", message: "" });
   const [chartError, setChartError] = useState("");
-  const [loading, setLoading] = useState(true);
+  // The request the chart's candles answer (stock or contract | timeframe | refresh count).
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [quoteError, setQuoteError] = useState("");
   const [lists, setLists] = useState<Array<{ id: string; name: string; items: Array<{ symbol: string; name: string; exchange: string }> }>>([]);
@@ -204,10 +237,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const tapeRef = useRef<Candle[]>([]);
   const priorRef = useRef<Candle[]>([]);
   const contextRef = useRef<Candle[]>([]);
-  const [priorSession, setPriorSession] = useState<PreviousSession | null>(null);
+  const [prior, setPrior] = useState<{ date: string; session: PreviousSession | null } | null>(null);
   const replayFetch = useRef(0);
   const settledThrough = useRef(0);
-  const bookEmail = useRef("");
   replayRef.current = replay;
   const [book, setBook] = useState<DemoBook>(emptyDemoBook());
   const [chainOpen, setChainOpen] = useState(false);
@@ -238,12 +270,21 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const drawingStore = optionView ? `${optionView.underlying}|${optionView.expiry}|${optionView.strike}|${optionView.right}` : desk.symbol;
   const saveTimer = useRef<number | null>(null);
   const pendingSave = useRef<{ key: string; drawings: Drawing[] } | null>(null);
+  const hydrated = useHydrated();
+  if (hydrated && drawingState.key !== drawingStore) setDrawingState({ key: drawingStore, list: loadDrawings(drawingStore) });
+  const drawings = drawingState.key === drawingStore ? drawingState.list : NO_DRAWINGS;
+  function setDrawings(next: Drawing[]) {
+    drawingsRef.current = next;
+    setDrawingState({ key: drawingStore, list: next });
+  }
+  useEffect(() => {
+    drawingsRef.current = drawings;
+  }, [drawings]);
+  // Undo history belongs to one chart: a new stock / contract starts with none.
   useEffect(() => {
     flushDrawings();
     pastRef.current = [];
     futureRef.current = [];
-    setHistoryTick((value) => value + 1);
-    setDrawings(loadDrawings(drawingStore));
   }, [drawingStore]);
   useEffect(() => () => flushDrawings(), []);
   const optionViewRef = useRef<OptionChartRequest | null>(null);
@@ -294,55 +335,47 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     lastTradeRef.current = 0;
   }, [symbol]);
 
+  // The symbol from the link goes through the desk (once, at start).
   useEffect(() => {
-    setStrategy(loadStrategySettings());
     const fromUrl = params.get("symbol");
     if (fromUrl) desk.chooseSymbol(fromUrl);
-    const saved = localStorage.getItem("td-replay-session");
-    const storedBook = localStorage.getItem(bookStorageKey(desk.user?.email ?? ""));
-    if (saved) {
-      const parsed = JSON.parse(saved) as Partial<Replay> & { day?: string; speed?: number };
-      const speed = typeof parsed.speed === "number" && isReplaySpeed(parsed.speed) ? parsed.speed : 1;
-      const date = typeof parsed.date === "string" ? parsed.date : typeof parsed.day === "string" ? parsed.day : "";
-      setReplay((current) => ({
-        ...current,
-        active: Boolean(parsed.active) && localStorage.getItem("td-mode") !== "live",
-        date,
-        cursor: null,
-        speed,
-        status: parsed.active ? "loading" : "idle",
-        message: "",
-        sessionOpen: null,
-        sessionClose: null,
-      }));
-    }
-    // Home's "Practice replay" links here with ?replay=1. Live view and accounts without the Replay
-    // permission never start it (the canReplay guard above switches it off again).
-    if (params.get("replay") === "1" && localStorage.getItem("td-mode") !== "live") {
-      setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) }));
-    }
-    setBook(loadDemoBook(storedBook));
-    // The saved session is read once. Later symbol changes come from the desk.
+    // The link is read once. Later symbol changes come from the desk.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem("td-replay-session", JSON.stringify({ active: replay.active, date: replay.date, speed: replay.speed }));
-  }, [replay.active, replay.date, replay.speed]);
+  // Saved strategy settings and replay session are restored once the page has hydrated (during render).
+  const [restored, setRestored] = useState(false);
+  if (hydrated && !restored) {
+    setRestored(true);
+    setStrategy(loadStrategySettings());
+    const saved = readReplaySession();
+    const live = readStorage("td-mode") === "live";
+    if (saved) setReplay((current) => ({ ...current, ...saved, active: saved.active && !live }));
+    // Home's "Practice replay" links here with ?replay=1. Live view and accounts without the Replay
+    // permission never start it (the canReplay guard above switches it off again).
+    if (params.get("replay") === "1" && !live) {
+      setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) }));
+    }
+  }
 
   useEffect(() => {
-    const email = desk.user?.email ?? "";
-    if (bookEmail.current !== email) {
-      bookEmail.current = email;
-      setOptionSessions(readOptionSessions(email));
-      const key = bookStorageKey(email);
-      const saved = localStorage.getItem(key) ?? (email ? localStorage.getItem("td-replay-book") : null);
-      if (saved) setBook(loadDemoBook(saved));
-      if (email && saved && !localStorage.getItem(key)) localStorage.setItem(key, saved);
-      return;
-    }
-    localStorage.setItem(bookStorageKey(email), JSON.stringify(book));
-  }, [book, desk.user?.email]);
+    if (!restored) return;
+    localStorage.setItem("td-replay-session", JSON.stringify({ active: replay.active, date: replay.date, speed: replay.speed }));
+  }, [restored, replay.active, replay.date, replay.speed]);
+
+  // The replay practice book and option sessions belong to the signed-in user.
+  const bookUser = desk.user?.email ?? "";
+  const [bookOwner, setBookOwner] = useState<string | null>(null);
+  if (hydrated && bookOwner !== bookUser) {
+    setBookOwner(bookUser);
+    setOptionSessions(readOptionSessions(bookUser));
+    const saved = readStorage(bookStorageKey(bookUser)) ?? (bookUser ? readStorage("td-replay-book") : null);
+    setBook(loadDemoBook(saved));
+  }
+  useEffect(() => {
+    if (bookOwner !== bookUser) return;
+    localStorage.setItem(bookStorageKey(bookUser), JSON.stringify(book));
+  }, [book, bookOwner, bookUser]);
 
   useEffect(() => {
     if (replay.active) return;
@@ -371,10 +404,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [symbol, replay.active]);
 
   useEffect(() => {
-    if (query.trim().length < 1) {
-      setHits([]);
-      return;
-    }
+    if (query.trim().length < 1) return;
     const handle = window.setTimeout(() => {
       api<Hit[]>(`/api/instruments?q=${encodeURIComponent(query)}&skip=${skip}`).then(setHits).catch(() => setHits([]));
     }, 160);
@@ -409,25 +439,27 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     const ledger = `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}`;
     return `/api/options/candles?symbol=${encodeURIComponent(ledger)}&timeframe=${span}`;
   }
+  const candleRequest = `${seriesKeyOf(symbol, timeframe, optionView)}|${reload}`;
+  const loading = loadedFor !== candleRequest;
   useEffect(() => {
     const id = ++requestId.current;
     const contract = optionView;
-    const key = contract ? `opt:${contract.securityId}:${contract.underlying}:${contract.expiry}:${contract.strike}:${contract.right}:${timeframe}` : `${symbol}:${timeframe}`;
+    const key = seriesKeyOf(symbol, timeframe, contract);
+    const request = `${key}|${reload}`;
     const merge = seriesKey.current === key;
     seriesKey.current = key;
-    setLoading(true);
     api<{ candles: Candle[]; mode: string; source: string; message: string }>(candlePath(timeframe, contract))
       .then((data) => {
         if (id !== requestId.current) return;
         setCandles((current) => merge ? mergeLiveHistory(current, data.candles) : data.candles);
         setCandleMeta({ mode: data.mode, source: data.source, message: data.message });
         setChartError("");
-        setLoading(false);
+        setLoadedFor(request);
         setRefreshing(false);
       })
       .catch((error: unknown) => {
         if (id !== requestId.current) return;
-        setLoading(false);
+        setLoadedFor(request);
         setRefreshing(false);
         if (replayRef.current.active && !optionViewRef.current) return;
         setCandles([]);
@@ -602,8 +634,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     tapeRef.current = [];
     priorRef.current = [];
     contextRef.current = [];
-    setPriorSession(null);
-    setReplay((current) => ({ ...current, status: "loading", message: "Loading the session…", cursor: null }));
+    const setPriorSession = (session: PreviousSession | null) => setPrior({ date: requested, session });
     api<ReplayPayload>(`/api/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=1m&date=${encodeURIComponent(requested)}`)
       .then((data) => {
         if (id !== replayFetch.current) return;
@@ -949,7 +980,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const strategyResult = useMemo(
     // The replay clock limits only the replayed session; another chosen day shows everything it has.
     () => (strategyOn && s1Current?.data ? strategyView(s1Current.data, replay.active && s1Current.data.date === replay.date ? (replay.cursor ?? 0) : null, strategy) : null),
-    [strategyOn, s1Current, replay.active, replay.cursor, strategy],
+    [strategyOn, s1Current, replay.active, replay.cursor, replay.date, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
   // Strategy drawings are derived, not stored: each refresh reconciles to the same ids. The log below
@@ -1013,7 +1044,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       stop = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [strategyOn, symbol, replay.active, replay.date, strategyDates.current, strategyDates.previous]);
+  }, [strategyOn, symbol, replay.active, replay.date, strategyDates]);
 
   function changeStrategy(next: StrategySettings) {
     setStrategy(next);
@@ -1087,7 +1118,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             Strategy
             {strategyOn ? <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", strategyDot)} /> : null}
           </button>
-          {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
+          {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
           {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
           <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>
         </ChartHeaderTools>
@@ -1127,13 +1158,19 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           </aside>
         ) : null}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={priorSession} /> : null}
+      {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={prior?.date === replay.date ? prior.session : null} /> : null}
       {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[11px] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="relative flex min-h-0 flex-1 flex-col">
             {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
             {replay.active && replay.status === "loading" ? <p className="p-4 text-sm text-info">Loading the selected session…</p> : null}
-            {(!replay.active || optionView) && chartError ? <p className="p-4 text-sm text-loss">{chartError}</p> : null}
+            {(!replay.active || optionView) && chartError ? (
+              <div className="m-4 max-w-xl rounded-md border border-loss/30 bg-loss-soft p-3 text-sm" role="alert">
+                <p className="font-semibold text-loss">Chart data is unavailable</p>
+                <p className="mt-1 text-text-2">{chartError}</p>
+                <button type="button" className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-input bg-primary px-3 text-data font-semibold text-on-primary hover:bg-primary-hover" onClick={() => { setRefreshing(true); setReload((value) => value + 1); }}>Retry</button>
+              </div>
+            ) : null}
             {((!optionView && replay.active && replay.status !== "loading") || ((!replay.active || optionView) && !loading && !chartError)) && shown.length === 0 ? <p className="p-4 text-sm text-muted">{optionView ? "Historical candles were not returned for this option contract." : replay.active ? replay.message || "No candle is visible at this replay time." : "No candles were returned for this symbol and interval."}</p> : null}
             {shown.length > 0 ? (
               <ChartPanel
@@ -1210,7 +1247,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           status={replay.status}
           speed={replay.speed}
           timeframe={timeframe}
-          message={replay.message}
+          message={replay.status === "loading" ? "Loading the session…" : replay.message}
           onDate={(date) => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date === replay.date) return;
             const dirty = sessionOpenCount > 0 || book.positions.length > 0 || book.fills.length > 0 || book.trades.length > 0 || book.orders.some((order) => order.status === "OPEN");
@@ -1324,7 +1361,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               onSelect={(hit) => selectSymbol(hit.symbol)}
               onToggleWatch={(hit) => toggleSymbol(hit.symbol, hit.name, hit.exchange)}
             />
-            {searching && hits.length >= 50 ? <button className="mt-1 w-full px-3 py-1 text-left text-xs text-primary" onClick={() => setSkip((value) => value + 50)}>Load more</button> : null}
+            {searching && query.trim() && hits.length >= 50 ? <button className="mt-1 w-full px-3 py-1 text-left text-xs text-primary" onClick={() => setSkip((value) => value + 50)}>Load more</button> : null}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {(rail?.items.length ?? 0) === 0 ? <p className="p-3 text-xs text-muted">This watchlist has no symbols. Search above and use the star to add one.</p> : rail?.items.map((item) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { formatInr, rupeesToPaise } from "@/lib/money";
 import {
   buyingPower,
@@ -13,7 +13,6 @@ import {
   practiceStats,
   type DemoBook,
   type DemoOrderType,
-  type DemoPosition,
 } from "@/lib/trading/demo-replay";
 import { REPLAY_STATUS_LABEL, type ReplayStatus } from "@/lib/trading/replay-engine";
 
@@ -106,11 +105,14 @@ export function PaperPanel({
   const affordable = price != null ? maxBuyQuantity(book, price, marks) : 0;
   const unrealized = book.positions.reduce((sum, item) => sum + (positionResult(item, item.symbol === symbol ? markPaise : null)?.pnlPaise ?? 0), 0);
 
-  useEffect(() => {
+  // A new symbol starts with no pending confirmation or message (adjusted during render, not in an effect).
+  const [messagesFor, setMessagesFor] = useState(symbol);
+  if (messagesFor !== symbol) {
+    setMessagesFor(symbol);
     setConfirm(null);
     setError("");
     setNotice("");
-  }, [symbol]);
+  }
 
   function prepare(nextSide: "BUY" | "SELL") {
     setSide(nextSide);

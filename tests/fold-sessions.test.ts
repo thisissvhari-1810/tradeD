@@ -69,6 +69,6 @@ describe("daily history request", () => {
     expect(dhan).toContain("for (const end of dailyEndDates(to, new Date())) {");
     expect(dhan).toContain("for (const start of dailyStartDates(from, end)) {");
     expect(dhan).toContain("for (const years of [5, 1]) {");
-    expect(dhan).toContain("if (!(error instanceof AppError)) throw error;");
+    expect(dhan).toContain("if (!rangeRefused(error)) throw error;");
   });
 });

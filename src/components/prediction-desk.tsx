@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useHydrated } from "@/components/use-hydrated";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, RotateCcw } from "lucide-react";
 import { api, freshness, istTime, money, moveOf, tone, type Quote } from "@/components/api";
 import { useDesk } from "@/components/shell";
@@ -63,6 +64,9 @@ function loadHistory(): HistoryRow[] {
   }
 }
 
+const NO_HITS: SearchHit[] = [];
+const NO_CANDLES: Candle[] = [];
+
 export function PredictionDesk() {
   const desk = useDesk();
   const symbol = desk.symbol;
@@ -70,41 +74,45 @@ export function PredictionDesk() {
   const [horizon, setHorizon] = useState<HorizonId>("5d");
   const [quote, setQuote] = useState<Quote | null>(null);
   const [name, setName] = useState("");
-  const [forecast, setForecast] = useState<ForecastResult | null>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [status, setStatus] = useState<string>("idle");
-  const [error, setError] = useState("");
-  const [history, setHistory] = useState<HistoryRow[]>([]);
+  // The latest forecast answer, tagged with the request it answers (symbol | timeframe | horizon | refresh).
+  const [result, setResult] = useState<{ key: string; book: string; forecast: ForecastResult | null; candles: Candle[]; status: string; error: string } | null>(null);
+  const hydrated = useHydrated();
+  const [savedHistory, setHistory] = useState<HistoryRow[] | null>(null);
+  const storedHistory = useMemo(() => (hydrated ? loadHistory() : []), [hydrated]);
+  const history = savedHistory ?? storedHistory;
+  const [now, setNow] = useState(() => Date.now());
   const [full, setFull] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [viewToken, setViewToken] = useState(0);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [query, setQuery] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [found, setFound] = useState<{ query: string; hits: SearchHit[] } | null>(null);
   const [lists, setLists] = useState<Array<{ id: string; items: Array<{ symbol: string; name: string; exchange: string }> }>>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   const requestId = useRef(0);
-  const bookKey = useRef("");
 
   useEffect(() => {
-    setHistory(loadHistory());
-    api<{ lists: Array<{ id: string; items: Array<{ symbol: string; name: string; exchange: string }> }> }>("/api/watchlists").then((data) => setLists(data.lists)).catch(() => undefined);
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    if (!query.trim()) {
-      setHits([]);
-      setSearching(false);
-      return;
-    }
-    setSearching(true);
+    api<{ lists: Array<{ id: string; items: Array<{ symbol: string; name: string; exchange: string }> }> }>("/api/watchlists").then((data) => setLists(data.lists)).catch(() => undefined);
+  }, []);
+
+  // Search results belong to the text they answer; anything else reads as loading (or idle when empty).
+  useEffect(() => {
+    if (!query.trim()) return;
     let stop = false;
     const handle = window.setTimeout(() => {
-      api<SearchHit[]>(`/api/instruments?q=${encodeURIComponent(query)}`).then((rows) => { if (!stop) setHits(rows); }).catch(() => { if (!stop) setHits([]); }).finally(() => { if (!stop) setSearching(false); });
+      api<SearchHit[]>(`/api/instruments?q=${encodeURIComponent(query)}`)
+        .then((rows) => { if (!stop) setFound({ query, hits: rows }); })
+        .catch(() => { if (!stop) setFound({ query, hits: [] }); });
     }, 160);
     return () => { stop = true; window.clearTimeout(handle); };
   }, [query]);
+  const hits = query.trim() && found?.query === query ? found.hits : NO_HITS;
+  const searching = Boolean(query.trim()) && found?.query !== query;
 
   useEffect(() => {
     let stop = false;
@@ -121,26 +129,17 @@ export function PredictionDesk() {
     return () => window.clearInterval(timer);
   }, [autoRefresh]);
 
+  const requestKey = `${symbol}|${timeframe}|${horizon}|${nonce}`;
   useEffect(() => {
     const id = ++requestId.current;
-    const nextKey = `${symbol}|${timeframe}`;
-    if (bookKey.current !== nextKey) {
-      bookKey.current = "";
-      setCandles([]);
-    }
-    setForecast(null);
-    setStatus(symbol ? "loading" : "idle");
-    setError(symbol ? "" : "Select a stock before generating a prediction.");
+    const key = `${symbol}|${timeframe}|${horizon}|${nonce}`;
+    const book = `${symbol}|${timeframe}`;
     if (!symbol) return;
     const timer = window.setTimeout(() => {
       api<ForecastResult & { candles?: Candle[] }>(`/api/market/forecast?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&horizon=${horizon}`)
         .then((result) => {
           if (id !== requestId.current || result.symbol !== symbol || result.timeframe !== timeframe || result.horizon !== horizon) return;
-          bookKey.current = nextKey;
-          setForecast(result);
-          setCandles(result.candles ?? []);
-          setStatus(result.status === "ready" ? "ready" : result.status);
-          setError(result.status === "ready" ? "" : result.message);
+          setResult({ key, book, forecast: result, candles: result.candles ?? [], status: result.status === "ready" ? "ready" : result.status, error: result.status === "ready" ? "" : result.message });
           if (result.status === "ready" && result.endpoint != null && result.referencePrice != null && result.endTime != null) {
             const row: HistoryRow = {
               id: `${symbol}-${result.generatedAt}`,
@@ -154,7 +153,7 @@ export function PredictionDesk() {
               model: `${result.model} ${result.modelVersion}`,
             };
             setHistory((current) => {
-              const next = [row, ...current.filter((item) => item.id !== row.id)].slice(0, 30);
+              const next = [row, ...(current ?? loadHistory()).filter((item) => item.id !== row.id)].slice(0, 30);
               localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
               return next;
             });
@@ -162,15 +161,18 @@ export function PredictionDesk() {
         })
         .catch((caught: unknown) => {
           if (id !== requestId.current) return;
-          bookKey.current = "";
-          setForecast(null);
-          setCandles([]);
-          setStatus("failed");
-          setError(caught instanceof Error ? caught.message : "Prediction generation failed.");
+          setResult({ key, book: "", forecast: null, candles: [], status: "failed", error: caught instanceof Error ? caught.message : "Prediction generation failed." });
         });
     }, 350);
     return () => window.clearTimeout(timer);
   }, [symbol, timeframe, horizon, nonce]);
+  // Derived view of the forecast: idle with no stock, loading until this request answers (keeping the
+  // candles while the same stock and timeframe reload), else the answer.
+  const answered = result?.key === requestKey ? result : null;
+  const forecast = symbol ? answered?.forecast ?? null : null;
+  const candles = !symbol ? NO_CANDLES : answered ? answered.candles : result?.book === `${symbol}|${timeframe}` ? result.candles : NO_CANDLES;
+  const status = !symbol ? "idle" : answered ? answered.status : "loading";
+  const error = !symbol ? "Select a stock before generating a prediction." : answered?.error ?? "";
 
   const move = moveOf(quote?.last, quote?.previousClose);
   const endLabel = forecast?.endTime ? istTime(new Date(forecast.endTime * 1000).toISOString()) : "—";
@@ -179,7 +181,7 @@ export function PredictionDesk() {
 
   function selectSymbol(hit: SearchHit) {
     setQuery("");
-    setHits([]);
+    setFound(null);
     setName(hit.name);
     desk.chooseSymbol(hit.symbol);
   }
@@ -322,7 +324,7 @@ export function PredictionDesk() {
               {history.length === 0 ? <li className="text-muted">No forecast has been saved in this browser yet.</li> : history.map((row) => {
                 const comparable = row.symbol === symbol && row.timeframe === timeframe;
                 const actual = comparable ? candles.find((candle) => candle.time >= row.endpointTime) : undefined;
-                const scored = Boolean(actual) && Date.now() / 1000 >= row.endpointTime;
+                const scored = Boolean(actual) && now / 1000 >= row.endpointTime;
                 const errorValue = scored && actual ? actual.close - row.endpoint : null;
                 return (
                   <li key={row.id} className="border-b border-border pb-2">
