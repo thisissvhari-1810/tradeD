@@ -112,6 +112,28 @@ input.stepper-input {
 }
 input.stepper-input:focus { box-shadow: none; background: var(--elevated); }
 
+/* Compact panel controls (Strategy panel): fixed 28px height with the text centred. */
+input.compact-field, select.compact-field {
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 26px;
+  padding: 0 8px;
+}
+select.compact-field { padding-right: 24px; }
+input[type="color"].color-swatch {
+  width: 32px;
+  height: 24px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  cursor: pointer;
+}
+input[type="color"].color-swatch::-webkit-color-swatch-wrapper { padding: 0; }
+input[type="color"].color-swatch::-webkit-color-swatch { border: 0; border-radius: 3px; }
+
 input.oc-search, select.oc-select {
   height: 28px;
   border-radius: var(--radius-sm);

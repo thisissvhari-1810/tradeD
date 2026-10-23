@@ -41,7 +41,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
 
   return (
     <section
-      className="surface-overlay absolute right-2 top-2 z-40 flex max-h-[calc(100%-1rem)] w-[300px] flex-col overflow-hidden rounded-lg text-data"
+      className="surface-overlay absolute right-2 top-2 z-40 flex max-h-[calc(100%-1rem)] w-[min(340px,calc(100%-1rem))] flex-col overflow-hidden rounded-lg text-data"
       aria-label="Strategy"
       onPointerDown={(event) => event.stopPropagation()}
       onWheel={(event) => event.stopPropagation()}
@@ -52,7 +52,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
         <button type="button" aria-label="Close strategy panel" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-hover hover:text-text" onClick={onClose}><X className="h-4 w-4" aria-hidden /></button>
       </header>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2.5">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-2.5">
         {status ? <p className={cx("text-micro leading-snug", settings.enabled || disabledReason ? tone : "text-muted")} role="status">{status}</p> : null}
         {settings.enabled && manualRectangles > 0 ? (
           <p className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro leading-snug text-warning">
@@ -125,19 +125,19 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
 
         <div>
           <p className="eyebrow mb-1">Drawing settings</p>
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="text-muted">Box width</span>
-            <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label="Box width" value={settings.boxSpan} onChange={(event) => set({ boxSpan: event.target.value === "session" ? "session" : "candles" })}>
-              <option value="candles">Around the daily candles</option>
-              <option value="session">Today&apos;s session only</option>
+          <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-muted">Box width</span>
+            <select className="compact-field w-[9.5rem] shrink-0" aria-label="Box width" value={settings.boxSpan} onChange={(event) => set({ boxSpan: event.target.value === "session" ? "session" : "candles" })}>
+              <option value="candles">Daily candles</option>
+              <option value="session">Today&apos;s session</option>
             </select>
           </div>
           {settings.boxSpan === "candles" ? (
-            <div className="mb-1.5 flex items-center justify-between gap-2">
-              <span className="text-muted">Box B position</span>
-              <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label="Box B position" value={settings.cloneShift} onChange={(event) => set({ cloneShift: event.target.value === "session" ? "session" : "none" })}>
-                <option value="none">Same as box A</option>
-                <option value="session">One session right</option>
+            <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-muted">Box B position</span>
+              <select className="compact-field w-[9.5rem] shrink-0" aria-label="Box B position" value={settings.cloneShift} onChange={(event) => set({ cloneShift: event.target.value === "session" ? "session" : "none" })}>
+                <option value="none">Same as A</option>
+                <option value="session">Next session</option>
               </select>
             </div>
           ) : null}
@@ -175,7 +175,7 @@ function DateRow({ label, hint, value, auto, max, onChange }: { label: string; h
       <input
         type="date"
         aria-label={label}
-        className="h-7 w-[8.5rem] px-1.5 py-0 text-data"
+        className="compact-field w-[8.75rem] shrink-0"
         value={value || auto}
         max={max}
         onChange={(event) => onChange(event.target.value && event.target.value <= max ? event.target.value : "")}
@@ -213,7 +213,7 @@ function BoxSection({ title, value, onChange }: { title: string; value: Strategy
         <Row label="Border"><Color label={`${title} border colour`} value={value.border} onChange={(border) => set({ border })} /></Row>
         <Row label="Fill"><Color label={`${title} fill colour`} value={value.fill} onChange={(fill) => set({ fill })} /></Row>
         <Row label={`Fill opacity ${Math.round(value.opacity * 100)}%`}>
-          <input type="range" min={0} max={50} value={Math.round(value.opacity * 100)} aria-label={`${title} fill opacity`} className="w-28" onChange={(event) => set({ opacity: Number(event.target.value) / 100 })} />
+          <input type="range" min={0} max={50} value={Math.round(value.opacity * 100)} aria-label={`${title} fill opacity`} className="w-[9.5rem] shrink-0" onChange={(event) => set({ opacity: Number(event.target.value) / 100 })} />
         </Row>
         <Row label="Border width"><Width label={`${title} border width`} value={value.width} onChange={(width) => set({ width })} /></Row>
         <Row label="Border style"><Dash label={`${title} border style`} value={value.dash} onChange={(dash) => set({ dash })} /></Row>
@@ -235,7 +235,7 @@ function LevelSection({ title, value, onChange }: { title: string; value: Strate
         <LineRows title={title} value={value} onChange={(line) => onChange({ ...value, ...line })} />
         <Row label="Price label"><Switch label={`${title} price label`} checked={value.label} onChange={(label) => onChange({ ...value, label })} /></Row>
         <Row label="Extend">
-          <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label={`${title} extension`} value={value.extend} onChange={(event) => onChange({ ...value, extend: event.target.value === "session" ? "session" : "right" })}>
+          <select className="compact-field w-[9.5rem] shrink-0" aria-label={`${title} extension`} value={value.extend} onChange={(event) => onChange({ ...value, extend: event.target.value === "session" ? "session" : "right" })}>
             <option value="right">Extend right</option>
             <option value="session">Current session</option>
           </select>
@@ -258,21 +258,21 @@ function LineRows({ title, value, onChange }: { title: string; value: StrategyLi
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="flex items-center justify-between gap-2"><span className="text-muted">{label}</span>{children}</div>;
+  return <div className="flex min-h-7 items-center justify-between gap-2"><span className="min-w-0 truncate text-muted" title={label}>{label}</span>{children}</div>;
 }
 
 function Color({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <span className="flex items-center gap-1.5">
       <span className="num text-micro text-muted">{value.toUpperCase()}</span>
-      <input type="color" aria-label={label} value={value} className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0" onChange={(event) => onChange(event.target.value)} />
+      <input type="color" aria-label={label} value={value} className="color-swatch shrink-0 border border-border" onChange={(event) => onChange(event.target.value)} />
     </span>
   );
 }
 
 function Width({ label, value, onChange }: { label: string; value: StrategyLine["width"]; onChange: (value: StrategyLine["width"]) => void }) {
   return (
-    <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value) as StrategyLine["width"])}>
+    <select className="compact-field w-[9.5rem] shrink-0" aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value) as StrategyLine["width"])}>
       {WIDTHS.map((width) => <option key={width} value={width}>{width} px</option>)}
     </select>
   );
@@ -280,7 +280,7 @@ function Width({ label, value, onChange }: { label: string; value: StrategyLine[
 
 function Dash({ label, value, onChange }: { label: string; value: LineDash; onChange: (value: LineDash) => void }) {
   return (
-    <select className="h-7 py-0 pl-2 pr-6 text-data" aria-label={label} value={value} onChange={(event) => onChange(event.target.value as LineDash)}>
+    <select className="compact-field w-[9.5rem] shrink-0" aria-label={label} value={value} onChange={(event) => onChange(event.target.value as LineDash)}>
       {DASHES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
     </select>
   );

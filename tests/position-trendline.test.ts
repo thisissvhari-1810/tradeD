@@ -164,3 +164,32 @@ describe("+ Add text on a selected line", () => {
     expect(layer).toContain("if (!id || inlineCancelled.current) return;");
   });
 });
+
+describe("trend line with the mouse, like TradingView", () => {
+  it("the press places the first anchor; releasing elsewhere finishes the line in one drag", () => {
+    expect(layer).toContain("if (pointsNeeded(toolRef.current) === 2 && draftRef.current.length === 0) {");
+    expect(layer).toContain("const dragged = Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 6;");
+    expect(layer).toContain("commit([draftRef.current[0], point], active as Drawing[\"kind\"]);");
+  });
+
+  it("a click instead waits for a second click, and the finished line is selected", () => {
+    expect(layer).toContain("// A click: the first anchor stays; the next click places the second.");
+    expect(layer).toContain("setSelected(drawing.id);");
+  });
+});
+
+describe("strategy panel controls fit", () => {
+  const panel = readFileSync(join(process.cwd(), "src/components/strategy-panel.tsx"), "utf8");
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+
+  it("uses compact fields that override the global 8px input padding", () => {
+    expect(css).toContain("input.compact-field, select.compact-field {");
+    expect(css).toContain('input[type="color"].color-swatch {');
+    expect(panel).not.toContain("h-7 py-0 pl-2 pr-6");
+    expect(panel).toContain("color-swatch");
+  });
+
+  it("never scrolls sideways", () => {
+    expect(panel).toContain("overflow-y-auto overflow-x-hidden");
+  });
+});

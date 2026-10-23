@@ -106,6 +106,8 @@ export function DrawingLayer({
   const candlesRef = useRef(candles);
   /** Set when a press grabbed an existing drawing while a drawing tool was active, so its pointerup adds no point. */
   const grabbed = useRef(false);
+  /** Where a two-point tool's first anchor was pressed: release far from it finishes the line (press-drag-release). */
+  const press = useRef<{ x: number; y: number } | null>(null);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [selected, setSelected] = useState<string | null>(focusId ?? null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
@@ -458,6 +460,7 @@ export function DrawingLayer({
         measureDrag.current = null;
         shapeDrag.current = null;
         brushing.current = null;
+        press.current = null;
         draftRef.current = [];
         previewRef.current = null;
         setSelected(null);
@@ -503,6 +506,11 @@ export function DrawingLayer({
     previewRef.current = null;
     brushing.current = null;
     measureDrag.current = null;
+    press.current = null;
+    if (!stayRef.current) {
+      setSelected(drawing.id);
+      onSelectRef.current?.(drawing.id);
+    }
     project();
     if (!stayRef.current) onToolRef.current("cursor");
   }
@@ -559,6 +567,16 @@ export function DrawingLayer({
     if (toolRef.current === "zoom") {
       brushing.current = [point];
       event.currentTarget.setPointerCapture(event.pointerId);
+      return;
+    }
+    // Two-point tools (trend line, ray, fib, ...): the press itself places the first anchor, like TradingView.
+    // Releasing elsewhere finishes the line in one drag; releasing on the spot waits for a second click.
+    if (pointsNeeded(toolRef.current) === 2 && draftRef.current.length === 0) {
+      draftRef.current = [point];
+      previewRef.current = point;
+      press.current = { x: event.clientX, y: event.clientY };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* The pointer already ended. */ }
+      project();
     }
   }
 
@@ -604,6 +622,7 @@ export function DrawingLayer({
   }
 
   function onPointerCancel() {
+    press.current = null;
     if (shapeDrag.current) {
       shapeDrag.current = null;
       draftRef.current = [];
@@ -636,6 +655,18 @@ export function DrawingLayer({
     }
     if (finishMeasure(point)) return;
     const active = toolRef.current;
+    if (press.current && pointsNeeded(active) === 2 && draftRef.current.length === 1) {
+      const dragged = Math.hypot(event.clientX - press.current.x, event.clientY - press.current.y) > 6;
+      press.current = null;
+      if (dragged && point) {
+        commit([draftRef.current[0], point], active as Drawing["kind"]);
+        return;
+      }
+      // A click: the first anchor stays; the next click places the second.
+      previewRef.current = point ?? previewRef.current;
+      project();
+      return;
+    }
     if ((active === "brush" || active === "highlighter") && brushing.current && brushing.current.length > 1) {
       commit(brushing.current, active);
       return;
