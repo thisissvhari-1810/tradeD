@@ -50,6 +50,18 @@ type Desk = {
 };
 
 const DeskContext = createContext<Desk | null>(null);
+/** Saves the current symbol and puts it first in the recent list (no duplicates, at most 8). */
+function rememberRecent(symbol: string) {
+  try {
+    localStorage.setItem("td-symbol", symbol);
+    const saved = JSON.parse(localStorage.getItem("td-recent") || "[]") as unknown;
+    const recent = Array.isArray(saved) ? saved.filter((item): item is string => typeof item === "string") : [];
+    localStorage.setItem("td-recent", JSON.stringify([symbol, ...recent.filter((item) => item !== symbol)].slice(0, 8)));
+  } catch {
+    /* storage unavailable: nothing to remember */
+  }
+}
+
 /** A localStorage value, or null when storage is unavailable. */
 function readStored(key: string) {
   try {
@@ -139,9 +151,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const chooseSymbol = useCallback((next: string) => {
     const symbol = next.toUpperCase();
     setSymbol(symbol);
-    localStorage.setItem("td-symbol", symbol);
-    const recent = JSON.parse(localStorage.getItem("td-recent") || "[]") as string[];
-    localStorage.setItem("td-recent", JSON.stringify([symbol, ...recent.filter((item) => item !== symbol)].slice(0, 8)));
+    rememberRecent(symbol);
     if (path.startsWith("/terminal") || path.startsWith("/chart") || path.startsWith("/positions") || path.startsWith("/prediction")) return;
     router.push(`/chart?symbol=${encodeURIComponent(symbol)}`);
   }, [path, router]);
@@ -149,7 +159,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const openChart = useCallback((next: string) => {
     const symbol = next.toUpperCase();
     setSymbol(symbol);
-    localStorage.setItem("td-symbol", symbol);
+    // Search results open charts through here: record the pick so it leads the Recent list next time.
+    rememberRecent(symbol);
     if (!path.startsWith("/chart")) router.push(`/chart?symbol=${encodeURIComponent(symbol)}`);
   }, [path, router]);
 

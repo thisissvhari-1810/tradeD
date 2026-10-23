@@ -114,20 +114,26 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
   }, [query, open, retry]);
 
   const q = query.trim();
+  // A new query starts the list at its first row (never keeps the previous list's scroll position).
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, [q, open]);
   const status: Status = !q ? "idle" : result.q !== q ? "loading" : result.failed ? "error" : result.rows.length ? "ready" : "empty";
   const toRow = (row: Instrument) => ({ symbol: row.symbol, name: row.name, exchange: row.exchange, type: TYPE_LABEL[row.sector] ?? row.sector });
-  const recentRows = useMemo(() => recent.map((symbol) => {
+  // Before typing: the current stock first, then the other recent picks (newest first), then A–Z.
+  const pinned = useMemo(() => [...new Set([current.symbol, ...recent].filter(Boolean))], [current.symbol, recent]);
+  const recentRows = useMemo(() => pinned.map((symbol) => {
     const known = browse.rows.find((row) => row.symbol === symbol);
     return known ? toRow(known) : { symbol, name: "", exchange: "NSE", type: "" };
-  }), [recent, browse.rows]);
+  }), [pinned, browse.rows]);
   const rows = useMemo<Array<{ symbol: string; name: string; exchange: string; type: string }>>(() => {
     if (!q) {
-      const recentSet = new Set(recent);
+      const recentSet = new Set(pinned);
       return [...recentRows, ...browse.rows.filter((row) => !recentSet.has(row.symbol)).map(toRow)];
     }
     if (status !== "ready") return [];
     return result.rows.map(toRow);
-  }, [q, recent, recentRows, browse.rows, status, result.rows]);
+  }, [q, pinned, recentRows, browse.rows, status, result.rows]);
   const recentCount = q ? 0 : recentRows.length;
 
   // Live price and change for the visible rows, when the feed has them.
@@ -180,9 +186,8 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
         role="dialog"
         aria-modal="true"
         aria-label="Search stocks"
-        className="surface-modal anim-sheet absolute inset-x-0 bottom-0 flex max-h-[min(85dvh,40rem)] flex-col rounded-t-sheet pb-[env(safe-area-inset-bottom)] lg:relative lg:inset-auto lg:max-h-[min(70vh,34rem)] lg:w-[26rem] lg:rounded-card lg:pb-0"
+        className="surface-modal anim-fade absolute inset-x-0 top-0 flex max-h-[min(88dvh,42rem)] flex-col rounded-b-sheet pt-[env(safe-area-inset-top)] lg:relative lg:inset-auto lg:max-h-[min(70vh,34rem)] lg:w-[26rem] lg:rounded-card lg:pt-0"
       >
-        <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-border-strong lg:hidden" aria-hidden />
         <div className="flex items-center justify-between px-4 pb-1 pt-2 lg:px-3">
           <h2 className="text-title font-semibold lg:text-dense">Search stocks</h2>
           <button type="button" className="grid h-10 w-10 place-items-center rounded-input text-muted hover:bg-hover lg:h-8 lg:w-8" aria-label="Close" onClick={onClose}><X className="h-5 w-5 lg:h-4 lg:w-4" aria-hidden /></button>
@@ -207,7 +212,7 @@ export function SymbolSearch({ open, current, onSelect, onClose }: {
           {query ? <button type="button" className="absolute right-6 top-[calc(50%-0.25rem)] grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-muted hover:text-text lg:right-5" aria-label="Clear search" onClick={() => { setQuery(""); inputRef.current?.focus(); }}><X className="h-4 w-4" aria-hidden /></button> : null}
         </div>
         <p className="px-4 pb-1 text-micro font-semibold uppercase tracking-wide text-muted lg:px-3">
-          {status === "idle" ? (recent.length ? "Recent" : "All stocks") : status === "loading" ? "Searching…" : status === "ready" ? `${rows.length} result${rows.length === 1 ? "" : "s"}` : ""}
+          {status === "idle" ? (pinned.length ? "Recent" : "All stocks") : status === "loading" ? "Searching…" : status === "ready" ? `${rows.length} result${rows.length === 1 ? "" : "s"}` : ""}
         </p>
         <ul id="td-symbol-results" ref={listRef} role="listbox" aria-label="Stocks" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
           {status === "empty" ? <li className="px-3 py-6 text-center text-data text-muted">No stocks found. Try another name or symbol.</li> : null}
