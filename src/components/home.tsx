@@ -104,11 +104,11 @@ export function Home() {
           shortcuts); the column wrappers dissolve (contents) so each card can take its place. */}
       <div className="mx-auto grid max-w-[102.5rem] gap-3 p-3 sm:gap-4 sm:p-4 lg:p-5 xl:grid-cols-[minmax(0,1fr)_minmax(17.5rem,19.75rem)]">
         <div className="flex min-w-0 flex-col gap-4 max-lg:contents">
-          <div className="max-lg:order-1"><WelcomeHero name={user?.name?.split(" ")[0]} live={live} /></div>
+          <div className="min-w-0 max-lg:order-1"><WelcomeHero name={user?.name?.split(" ")[0]} live={live} indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
 
           <div className="grid min-w-0 gap-4 max-lg:contents lg:grid-cols-[minmax(0,1.65fr)_minmax(16.875rem,1fr)]">
             <div className="min-w-0 max-lg:order-2 lg:contents"><AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} /></div>
-            <div className={cx("min-w-0 max-lg:order-4 lg:contents", !mobile.homeMarketCards && "max-lg:hidden")}><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
+            <div className="min-w-0 max-lg:hidden lg:contents"><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
           </div>
 
           <div className={cx("min-w-0 max-lg:order-7", !mobile.homeMarketCards && "max-lg:hidden")}><QuickActions live={live} replayAllowed={replayAllowed} /></div>
@@ -126,11 +126,14 @@ export function Home() {
   );
 }
 
-function WelcomeHero({ name, live }: { name?: string; live: boolean }) {
+function WelcomeHero({ name, live, indices, note, onOpen }: { name?: string; live: boolean; indices: IndexQuote[]; note: string; onOpen: (symbol: string) => void }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-3">
-      <div className="min-w-0">
-        <p className="eyebrow" suppressHydrationWarning>
+    <header className="flex flex-wrap items-end justify-between gap-x-3 gap-y-1.5">
+      <div className="min-w-0 max-lg:w-full">
+        {/* Phones and tablets: a compact greeting with the inline index strip right under it. */}
+        <p className="text-title font-semibold text-text lg:hidden" suppressHydrationWarning>{greeting()}{name ? `, ${name}` : ""}</p>
+        <div className="lg:hidden"><IndexStrip indices={indices} note={note} onOpen={onOpen} /></div>
+        <p className="eyebrow max-lg:hidden" suppressHydrationWarning>
           {greeting()}{name ? `, ${name}` : ""} · {live ? "Live prices · paper wallet" : "Practice account"}
         </p>
         <h1 className="mt-1 hidden text-[clamp(1.375rem,2.1vw,1.75rem)] sm:block font-semibold leading-tight tracking-[-0.03em] text-text">
@@ -138,8 +141,51 @@ function WelcomeHero({ name, live }: { name?: string; live: boolean }) {
         </h1>
         <p className="mt-0.5 hidden text-data text-muted sm:block">A smarter view of your trading day.</p>
       </div>
-      <MarketStatus />
+      <div className="max-lg:hidden"><MarketStatus /></div>
     </header>
+  );
+}
+
+const STRIP_LABEL: Record<string, string> = { "Nifty 50": "NIFTY 50", "Nifty Bank": "BANKNIFTY", "India VIX": "INDIA VIX" };
+const STRIP_ORDER = ["Nifty 50", "Nifty Bank"];
+
+/**
+ * Dhan-style inline indices: name, price and change on one line per index, all in one row that
+ * scrolls sideways inside itself when it does not fit. Prices come from the shell's index feed.
+ */
+function IndexStrip({ indices, note, onOpen }: { indices: IndexQuote[]; note: string; onOpen: (symbol: string) => void }) {
+  const rows = [...indices].sort((a, b) => {
+    const rank = (name: string) => { const at = STRIP_ORDER.indexOf(name); return at < 0 ? STRIP_ORDER.length : at; };
+    return rank(a.name) - rank(b.name);
+  });
+  if (!rows.length) return <p className="mt-1 truncate text-data text-muted">{note || "Loading index prices…"}</p>;
+  return (
+    <div className="no-scrollbar relative -mx-3 mt-1 flex overflow-x-auto px-3 sm:-mx-4 sm:px-4" role="list" aria-label="Market indices">
+      {rows.map((item) => {
+        const change = item.previous == null ? null : item.last - item.previous;
+        const pct = item.previous ? (change! / item.previous) * 100 : null;
+        const tone = change == null || change === 0 ? "text-muted" : change > 0 ? "text-profit" : "text-loss";
+        const Arrow = change == null || change === 0 ? null : change > 0 ? ArrowUpRight : ArrowDownRight;
+        const card = INDEX_CARDS.find((entry) => entry.name === item.name);
+        return (
+          <button
+            key={item.name}
+            type="button"
+            role="listitem"
+            className="flex shrink-0 items-baseline gap-1.5 whitespace-nowrap border-r border-border-soft py-1 pr-3 last:border-r-0 [&+&]:pl-3"
+            onClick={() => card && onOpen(card.symbol)}
+            aria-label={`${STRIP_LABEL[item.name] ?? item.name} ${item.last.toLocaleString("en-IN", { minimumFractionDigits: 2 })}${pct != null ? `, ${pct >= 0 ? "up" : "down"} ${Math.abs(pct).toFixed(2)} percent` : ""}`}
+          >
+            <span className="text-micro font-semibold tracking-[0.02em] text-text-2">{STRIP_LABEL[item.name] ?? item.name}</span>
+            <span className="num text-data font-semibold text-text">{item.last.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+            <span className={cx("num inline-flex items-center gap-0.5 text-micro font-semibold", tone)}>
+              {Arrow ? <Arrow className="h-3 w-3 self-center" aria-hidden /> : null}
+              {pct == null ? "–" : `${pct > 0 ? "+" : pct < 0 ? "−" : ""}${Math.abs(pct).toFixed(2)}%`}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

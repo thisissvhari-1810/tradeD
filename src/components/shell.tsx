@@ -107,7 +107,6 @@ export function Shell({ children }: { children: ReactNode }) {
   const [pendingMode, setPendingMode] = useState<"demo" | "live" | null>(null);
   const [symbol, setSymbol] = useState("RELIANCE");
   const [notes, setNotes] = useState<Array<{ id: string; title: string; body: string; read: boolean }>>([]);
-  const [openNotes, setOpenNotes] = useState(false);
   const [openUser, setOpenUser] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [menu, setMenu] = useState(false);
@@ -232,12 +231,19 @@ export function Shell({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const [notesLoaded, setNotesLoaded] = useState(false);
+  // Unread count for the bell and the profile menu: on each page change, when the menu opens, and
+  // when the Notifications page marks items read ("td-notes").
+  const [notesTick, setNotesTick] = useState(0);
+  useEffect(() => {
+    const again = () => setNotesTick((value) => value + 1);
+    window.addEventListener("td-notes", again);
+    return () => window.removeEventListener("td-notes", again);
+  }, []);
   useEffect(() => {
     api<{ notifications: Array<{ id: string; title: string; body: string; read: boolean }> }>("/api/alerts")
-      .then((data) => { setNotes(data.notifications); setNotesLoaded(true); })
-      .catch(() => setNotesLoaded(true));
-  }, [openNotes, openUser]);
+      .then((data) => setNotes(data.notifications))
+      .catch(() => undefined);
+  }, [path, openUser, notesTick]);
   const closeUser = useCallback(() => setOpenUser(false), []);
 
   const [shownPath, setShownPath] = useState(path);
@@ -245,15 +251,13 @@ export function Shell({ children }: { children: ReactNode }) {
     setShownPath(path);
     setMenu(false);
     setOpenUser(false);
-    setOpenNotes(false);
   }
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpenUser(false);
-      setOpenNotes(false);
-      setAppearanceOpen(false);
+        setAppearanceOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -295,7 +299,8 @@ export function Shell({ children }: { children: ReactNode }) {
     return user?.role === "SUPER_ADMIN" ? [...allowed, { href: "/admin", label: "Admin", icon: Settings }, { href: "/super-admin", label: "Users", title: "Super Admin", icon: ShieldCheck }] : allowed;
   }, [user]);
   const goTo = useCallback((href: string) => router.push(href), [router]);
-  const unread = notes.some((note) => !note.read);
+  const unreadCount = notes.filter((note) => !note.read).length;
+  const unread = unreadCount > 0;
 
   return (
     <DeskContext.Provider value={value}>
@@ -377,11 +382,11 @@ export function Shell({ children }: { children: ReactNode }) {
             </Tooltip>
 
             <div className="flex shrink-0 items-center gap-0.5">
-              <Tooltip content="Notifications">
-                <button type="button" className="relative grid h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text max-sm:hidden" aria-label={unread ? "Notifications, unread" : "Notifications"} aria-expanded={openNotes} onClick={() => { setOpenNotes((value) => !value); setOpenUser(false); }}>
+              <Tooltip content={unreadCount ? `Notifications (${unreadCount} unread)` : "Notifications"}>
+                <Link href="/notifications" aria-current={path.startsWith("/notifications") ? "page" : undefined} className={cx("relative grid h-9 w-9 place-items-center rounded-input transition-colors hover:bg-hover hover:text-text max-sm:hidden", path.startsWith("/notifications") ? "bg-primary-soft text-primary" : "text-muted")} aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"}>
                   <Bell className="h-[1.125rem] w-[1.125rem]" aria-hidden />
-                  {unread ? <span className="absolute right-2 top-2 h-2 w-2 rounded-full border-2 border-background bg-loss" /> : null}
-                </button>
+                  {unreadCount ? <span className="num absolute -right-0.5 -top-0.5 min-w-4 rounded-pill border-2 border-background bg-loss px-1 text-[0.625rem] font-bold leading-3 text-on-signal">{unreadCount > 9 ? "9+" : unreadCount}</span> : null}
+                </Link>
               </Tooltip>
               <Tooltip content={theme === "light" ? "Dark theme" : "Light theme"}>
                 <button type="button" className="hidden h-9 w-9 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text sm:grid lg:hidden" aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"} onClick={toggleTheme}>
@@ -390,12 +395,12 @@ export function Shell({ children }: { children: ReactNode }) {
               </Tooltip>
             </div>
 
-            <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text lg:hidden" aria-label="All pages" aria-expanded={menu} onClick={() => { setMenu(true); setOpenUser(false); setOpenNotes(false); }}>
+            <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-input text-muted transition-colors hover:bg-hover hover:text-text lg:hidden" aria-label="All pages" aria-expanded={menu} onClick={() => { setMenu(true); setOpenUser(false); }}>
               <LayoutGrid className="h-[1.125rem] w-[1.125rem]" aria-hidden />
             </button>
 
             <div className="relative shrink-0">
-              <button type="button" className="relative grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => { setOpenUser((value) => !value); setOpenNotes(false); }} title={user?.email || "Account"} aria-label={unread ? "Account and notifications, unread" : "Account and notifications"} aria-expanded={openUser}>
+              <button type="button" className="relative grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-dense font-semibold text-primary ring-1 ring-primary/25 transition-shadow hover:ring-primary/50" onClick={() => setOpenUser((value) => !value)} title={user?.email || "Account"} aria-label={unread ? "Account and notifications, unread" : "Account and notifications"} aria-expanded={openUser}>
                 {(user?.name || "T").slice(0, 1).toUpperCase()}
                 {/* Phones have no bell in the header: unread notifications show on the avatar instead. */}
                 {unread ? <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-loss sm:hidden" aria-hidden /> : null}
@@ -454,8 +459,7 @@ export function Shell({ children }: { children: ReactNode }) {
         {openUser ? (
           <AccountPanel
             user={user}
-            notes={notesLoaded ? notes : null}
-            onMarkRead={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}
+            unreadCount={unreadCount}
             theme={theme}
             onToggleTheme={toggleTheme}
             onChartColours={() => { setAppearanceOpen(true); setOpenUser(false); }}
@@ -468,34 +472,6 @@ export function Shell({ children }: { children: ReactNode }) {
 
         <ToastStack items={toasts} onDismiss={dismiss} />
 
-        {openNotes ? (
-          <div className="surface-overlay anim-rise fixed right-3 top-[calc(var(--topbar)+0.25rem)] z-40 w-[min(22.5rem,calc(100vw-1.5rem))] overflow-hidden rounded-card" role="dialog" aria-label="Notifications">
-            <div className="flex items-center justify-between border-b border-border-soft px-3.5 py-2.5">
-              <span className="text-[0.8125rem] font-semibold">Notifications</span>
-              <span className="flex items-center gap-1">
-                <Button size="sm" variant="ghost" disabled={!unread} onClick={() => { void api("/api/alerts", { action: "notification-read" }).then(() => setNotes((current) => current.map((note) => ({ ...note, read: true })))); }}>Mark all read</Button>
-                <button type="button" className="grid h-7 w-7 place-items-center rounded-input text-muted hover:bg-elevated" aria-label="Close notifications" onClick={() => setOpenNotes(false)}><X className="h-4 w-4" aria-hidden /></button>
-              </span>
-            </div>
-            <div className="max-h-[60vh] overflow-y-auto">
-              {notes.length === 0 ? (
-                <div className="px-4 py-8 text-center">
-                  <Bell className="mx-auto h-5 w-5 text-muted" aria-hidden />
-                  <p className="mt-2 text-[0.8125rem] font-medium">You’re all caught up</p>
-                  <p className="mt-0.5 text-data text-muted">Price alerts and order updates appear here.</p>
-                </div>
-              ) : notes.slice(0, 8).map((note) => (
-                <div key={note.id} className="flex gap-2 border-b border-border px-3 py-2.5 last:border-b-0">
-                  <span className={cx("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", note.read ? "bg-transparent" : "bg-primary")} aria-hidden />
-                  <div className="min-w-0">
-                    <p className="text-[0.8125rem] font-medium">{note.title}</p>
-                    <p className="text-data text-muted">{note.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
 
         {mobileSettingsOpen ? <MobileSettingsPanel onClose={() => setMobileSettingsOpen(false)} /> : null}
         {appearanceOpen ? <AppearancePanel appearance={appearance} onChange={setAppearance} onClose={() => setAppearanceOpen(false)} /> : null}

@@ -10,7 +10,7 @@ export const GET = query(async () => {
   const user = await requireUser();
   const [alerts, notifications] = await Promise.all([
     prisma.priceAlert.findMany({ where: { userId: user.id }, include: { instrument: true }, orderBy: { createdAt: "desc" }, take: 40 }),
-    prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 30 }),
+    prisma.notification.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" }, take: 100 }),
   ]);
   return Response.json({
     alerts: alerts.map((alert) => ({
@@ -27,6 +27,8 @@ export const GET = query(async () => {
       body: note.body,
       read: Boolean(note.readAt),
       createdAt: note.createdAt.toISOString(),
+      // Only in-app links are passed on (never an outside URL).
+      href: note.href.startsWith("/") && !note.href.startsWith("//") ? note.href : null,
     })),
   });
 });
