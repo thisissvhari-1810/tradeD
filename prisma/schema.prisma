@@ -145,6 +145,65 @@ model User {
   optionPaper          OptionPaperAccount?
   brokerAccounts       BrokerAccount[]
   subscriptions        Subscription[]
+  academyProgress      AcademyProgress[]
+  academyAnswers       AcademyAnswer[]
+  xpEvents             XpEvent[]
+  academyDays          AcademyDay[]
+}
+
+/// TradeD Academy: one row per user and lesson (lesson content lives in code, identified by slug).
+model AcademyProgress {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonSlug  String
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  /// Best share of the lesson's questions answered correctly, 0 to 100.
+  bestScore   Int       @default(0)
+  completions Int       @default(0)
+
+  @@unique([userId, lessonSlug])
+}
+
+/// Every graded answer (the server grades; the browser never sends correctness).
+model AcademyAnswer {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lessonSlug String
+  questionId String
+  correct    Boolean
+  createdAt  DateTime @default(now())
+
+  @@index([userId, lessonSlug])
+  @@index([userId, questionId])
+}
+
+/// XP ledger. Each reward has a key unique per user, so a refresh, a second tab or a replayed
+/// request can never award the same XP twice. Learning XP never touches any wallet.
+model XpEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String
+  amount    Int
+  reason    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, key])
+  @@index([userId, createdAt])
+}
+
+/// A day (India Standard Time, YYYY-MM-DD) on which the user completed a qualifying activity.
+/// Streaks are computed from these rows; the composite key makes repeated activity count once.
+model AcademyDay {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  day       String
+  createdAt DateTime @default(now())
+
+  @@id([userId, day])
 }
 
 enum PremiumPlan {

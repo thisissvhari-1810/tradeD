@@ -6,7 +6,7 @@ import type { Premium } from "@/lib/premium/entitlements";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, GraduationCap, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
@@ -84,6 +84,7 @@ const NAV: NavItem[] = [
   { href: "/chart", label: "Chart", icon: CandlestickChart },
   { href: "/watchlist", label: "Watchlist", icon: Star, rail: false },
   { href: "/options", label: "Options", icon: GitBranch },
+  { href: "/academy", label: "Academy", title: "TradeD Academy", icon: GraduationCap },
   { href: "/multi-account", label: "Accounts", title: "Multi-Account Trading", icon: UsersRound, feature: "multiAccount" },
   // rail: false — left out of the desktop sidebar; still in the phone menu, search and the chart's side panel.
   { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio", rail: false },
