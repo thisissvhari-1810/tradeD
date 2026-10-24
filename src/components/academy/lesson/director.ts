@@ -106,7 +106,7 @@ export function reactTo(event: LessonEvent): Reaction {
     case "HINT_CLOSED":
       return { mood: "thinking", say: null };
     case "CONTINUE_PRESSED":
-      return { mood: "idle", say: null };
+      return { mood: "idle", say: null, sound: "page" };
     case "LESSON_COMPLETED":
       return {
         mood: event.perfect ? "streak" : "mission-complete",

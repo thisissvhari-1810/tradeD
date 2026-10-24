@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Clapperboard, Flame, GraduationCap, Navigation, Target, Volume2, VolumeX, Zap } from "lucide-react";
+import { ArrowLeft, Clapperboard, Flame, GraduationCap, Music, Navigation, Target, Volume2, VolumeX, Zap } from "lucide-react";
+import { syncMusic } from "@/components/academy/academy-music";
 import { setFeedbackPrefs, useFeedbackPrefs } from "@/components/academy/academy-sound";
 import { styles } from "./academy-game-classes";
 
@@ -65,7 +66,8 @@ export function AcademyHud({ xp, streak, today, goal, bumpXp, onReplayIntro, cha
       ) : null}
       <span className="flex-1" />
       {onJump ? <button type="button" className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20 md:hidden" style={{ color: "#fff" }} onClick={onJump} aria-label="Go to your next lesson"><Navigation className="h-4 w-4" aria-hidden /></button> : null}
-      <button type="button" className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" style={{ color: "#fff" }} aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => setFeedbackPrefs({ sound: !prefs.sound })}>{prefs.sound ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}</button>
+      <button type="button" className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" style={{ color: "#fff" }} aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => { setFeedbackPrefs({ sound: !prefs.sound }); syncMusic(); }}>{prefs.sound ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}</button>
+      <button type="button" className="mq-music-btn grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" data-on={prefs.music && prefs.sound ? "true" : "false"} style={{ color: "#fff" }} aria-pressed={prefs.music} aria-label="Music" title={prefs.music ? "Music on" : "Music off"} onClick={() => { setFeedbackPrefs({ music: !prefs.music, ...(prefs.music ? {} : { sound: true }) }); syncMusic(); }}><Music className="h-4 w-4" aria-hidden /></button>
       {onReplayIntro ? <button type="button" className="hidden h-9 items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 text-[12px] font-bold hover:bg-white/20 sm:inline-flex" style={{ color: "#fff" }} onClick={onReplayIntro} aria-label="Replay intro" title="Replay intro"><Clapperboard className="h-4 w-4" aria-hidden /><span className="max-lg:hidden">Replay intro</span></button> : null}
       <Counter icon={<Zap className="h-4 w-4 text-[#5a3b00]" fill="currentColor" />} tone="linear-gradient(180deg,#ffe07a,#ffb81f)" label="XP" value={xp} bump={bumpXp} />
       <Counter icon={<Flame className="h-4 w-4 text-white" fill="currentColor" />} tone="linear-gradient(180deg,#ff9a6b,#ff5a4a)" label="Day streak" value={streak} bump={false} />

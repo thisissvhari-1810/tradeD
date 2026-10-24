@@ -87,9 +87,16 @@ describe("the lesson player", () => {
     expect(player).not.toMatch(/correct:\s*true/);
   });
 
-  it("keeps sound off until the learner turns it on", () => {
-    const feedback = read("src/components/academy/academy-sound.ts");
-    expect(feedback).toMatch(/DEFAULT: FeedbackPrefs = \{ sound: false/);
+  it("starts audio only from a tap, uses no audio files, and has its own sound and music switches", () => {
+    const sound = read("src/components/academy/academy-sound.ts");
+    const music = read("src/components/academy/academy-music.ts");
+    const feel = read("src/components/academy/academy-feel.ts");
+    // Audio is unlocked from the learner's first press in the Academy (browsers block it before).
+    expect(feel).toMatch(/const onDown = [\s\S]*primeAudio\(\);[\s\S]*syncMusic\(\);/);
+    expect(sound + music).not.toMatch(/new Audio\(|\.(mp3|wav|ogg)["'`]/);
+    expect(sound).toMatch(/sound: true, music: true/);
+    // Music follows both switches: it never plays with sound or music off.
+    expect(music).toMatch(/feedbackPrefs\(\)\.music && feedbackPrefs\(\)\.sound/);
   });
 
   it("includes chart and sequencing exercises graded on the server", () => {

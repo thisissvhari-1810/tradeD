@@ -6,7 +6,9 @@ import { createPortal } from "react-dom";
 import { Award, BookOpen, Flame, Lightbulb, RefreshCw, Settings2, Volume2, VolumeX, X, Zap } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { CandleSketch } from "@/components/academy/candle-sketch";
-import { setFeedbackPrefs, useFeedbackPrefs, type FeedbackPrefs } from "@/components/academy/academy-sound";
+import { cue, setFeedbackPrefs, useFeedbackPrefs, type FeedbackPrefs } from "@/components/academy/academy-sound";
+import { useAcademyFeel, usePresence } from "@/components/academy/academy-feel";
+import { syncMusic } from "@/components/academy/academy-music";
 import { FRESH_KEY } from "@/components/academy/game/academy-game-map";
 import { starsFor } from "@/components/academy/game/geometry";
 import { RewardCelebration } from "@/components/academy/game/reward-celebration";
@@ -92,10 +94,17 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const [tipsOpen, setTipsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const shell = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
   useEffect(() => () => timers.current.forEach((timer) => window.clearTimeout(timer)), []);
   const later = (ms: number, run: () => void) => { timers.current.push(window.setTimeout(run, ms)); };
   const motion = prefs.motion && !reducedMotion();
+  useAcademyFeel(shell, Boolean(lesson));
+  const tipsSheet = usePresence(tipsOpen ? true : null, 220);
+  const settingsMenu = usePresence(settingsOpen ? true : null, 160);
+  const openTips = () => { cue("open"); setTipsOpen(true); };
+  const closeTips = useCallback(() => { cue("close"); setTipsOpen(false); }, []);
+  const closeSettings = useCallback(() => { cue("close"); setSettingsOpen(false); }, []);
 
   const byIdOf = (data: LessonData) => new Map(data.questions.map((question) => [question.id, question]));
 
@@ -310,7 +319,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const tip = step?.kind === "tip" ? lesson.cards[step.index] : null;
 
   return (
-    <div className="ax-shell" data-motion={prefs.motion ? undefined : "off"}>
+    <div ref={shell} className="ax-shell" data-motion={prefs.motion ? undefined : "off"}>
       {/* Academy's own compact header: leave, lesson progress, combo, XP and the sound / settings controls. */}
       <div className="relative flex items-center gap-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))] sm:gap-3 sm:px-5">
         <button type="button" className="ax-toggle" aria-label="Leave the lesson (your answers are saved)" title="Back to map" onClick={() => router.push("/academy")}><X className="h-5 w-5" aria-hidden /></button>
@@ -325,12 +334,12 @@ export function LessonPlayer({ slug }: { slug: string }) {
           </span>
         ) : null}
         <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-extrabold tabular-nums text-gold" aria-label={`${xpEarned} XP earned in this lesson`}><Zap className="h-4 w-4" fill="currentColor" aria-hidden />{xpEarned}</span>
-        <button type="button" className="ax-toggle" aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => setFeedbackPrefs({ sound: !prefs.sound })}>
+        <button type="button" className="ax-toggle" aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => { setFeedbackPrefs({ sound: !prefs.sound }); syncMusic(); }}>
           <span key={String(prefs.sound)} className="ax-pop inline-flex">{prefs.sound ? <Volume2 className="h-5 w-5" aria-hidden /> : <VolumeX className="h-5 w-5" aria-hidden />}</span>
         </button>
         <div className="relative">
-          <button type="button" className="ax-toggle" aria-label="Lesson settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}><Settings2 className="h-5 w-5" aria-hidden /></button>
-          {settingsOpen ? <SettingsMenu prefs={prefs} onClose={() => setSettingsOpen(false)} /> : null}
+          <button type="button" className="ax-toggle" aria-label="Lesson settings" aria-expanded={settingsOpen} onClick={() => { if (settingsOpen) closeSettings(); else { cue("open"); setSettingsOpen(true); } }}><Settings2 className="h-5 w-5" aria-hidden /></button>
+          {settingsMenu.shown ? <SettingsMenu prefs={prefs} closing={settingsMenu.closing} onClose={closeSettings} /> : null}
         </div>
       </div>
 
@@ -406,7 +415,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
 
       {/* Footer: the action for this screen, or the verdict tray once the server has answered. */}
       {phase === "play" && question && (feedback || checkError) ? (
-        <AcademyFeedbackTray feedback={feedback} error={checkError} praise={praiseFor(question.id)} combo={combo} onContinue={proceed} onRetry={() => void check()} retrying={checking} />
+        <AcademyFeedbackTray feedback={feedback} error={checkError} praise={praiseFor(question.id)} combo={combo} onContinue={proceed} onRetry={() => void check()} retrying={checking} closing={leaving} />
       ) : (
         <div className="ax-footer px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <div className="mx-auto flex max-w-2xl items-center gap-2">
@@ -418,7 +427,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
             ) : null}
             {phase === "play" && question ? (
               <>
-                {hasTips ? <button type="button" className="ax-btn-ghost max-sm:px-3" onClick={() => setTipsOpen(true)} aria-label="Review the lesson tips"><BookOpen className="h-5 w-5" aria-hidden /><span className="max-sm:hidden">Tips</span></button> : null}
+                {hasTips ? <button type="button" className="ax-btn-ghost max-sm:px-3" onClick={openTips} aria-label="Review the lesson tips"><BookOpen className="h-5 w-5" aria-hidden /><span className="max-sm:hidden">Tips</span></button> : null}
                 <button type="button" className={`ax-btn ax-check ml-auto min-w-40 flex-1 sm:flex-none ${input && !checking ? "ax-ready" : ""}`} data-tone="success" disabled={!input || checking || leaving} onClick={() => void check()}>
                   <span className="ax-check-label" data-busy={checking ? "true" : undefined}><span className="ax-spin" aria-hidden /><span>{checking ? "Checking" : "Check"}</span></span>
                 </button>
@@ -440,13 +449,13 @@ export function LessonPlayer({ slug }: { slug: string }) {
         </div>
       )}
 
-      {tipsOpen ? <TipsSheet lesson={lesson} onClose={() => setTipsOpen(false)} /> : null}
+      {tipsSheet.shown ? <TipsSheet lesson={lesson} closing={tipsSheet.closing} onClose={closeTips} /> : null}
     </div>
   );
 }
 
 /** Sound, vibration and animation, each on its own switch (kept on this device). */
-function SettingsMenu({ prefs, onClose }: { prefs: FeedbackPrefs; onClose: () => void }) {
+function SettingsMenu({ prefs, closing, onClose }: { prefs: FeedbackPrefs; closing: boolean; onClose: () => void }) {
   const first = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     first.current?.focus();
@@ -455,16 +464,17 @@ function SettingsMenu({ prefs, onClose }: { prefs: FeedbackPrefs; onClose: () =>
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const rows: Array<[keyof FeedbackPrefs, string, string]> = [
-    ["sound", "Sound effects", "Short sounds for answers and rewards"],
+    ["sound", "Sound effects", "Taps, answers, rewards and panels"],
+    ["music", "Music", "A calm background tune while you learn"],
     ["haptics", "Vibration", "On phones that support it"],
     ["motion", "Animations", "Tiko's moves, transitions and sparkles"],
   ];
   return (
     <>
       <button type="button" tabIndex={-1} aria-label="Close settings" className="fixed inset-0 z-40 cursor-default" onClick={onClose} />
-      <div role="dialog" aria-label="Lesson settings" className="ax-menu">
+      <div role="dialog" aria-label="Lesson settings" className="ax-menu" data-closing={closing ? "true" : undefined}>
         {rows.map(([key, label, note], index) => (
-          <button key={key} ref={index === 0 ? first : undefined} type="button" role="switch" aria-checked={prefs[key]} className="ax-menu-row" onClick={() => setFeedbackPrefs({ [key]: !prefs[key] })}>
+          <button key={key} ref={index === 0 ? first : undefined} type="button" role="switch" aria-checked={prefs[key]} className="ax-menu-row" onClick={() => { setFeedbackPrefs({ [key]: !prefs[key] }); syncMusic(); }}>
             <span className="min-w-0 flex-1 text-left"><span className="block text-[14px] font-bold">{label}</span><span className="block text-[12px] text-muted">{note}</span></span>
             <span className="ax-switch" data-on={prefs[key] ? "true" : "false"} aria-hidden><i /></span>
           </button>
@@ -475,7 +485,7 @@ function SettingsMenu({ prefs, onClose }: { prefs: FeedbackPrefs; onClose: () =>
 }
 
 /** All of the lesson's tips, to look back at during the exercises. */
-function TipsSheet({ lesson, onClose }: { lesson: LessonData; onClose: () => void }) {
+function TipsSheet({ lesson, closing, onClose }: { lesson: LessonData; closing: boolean; onClose: () => void }) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     close.current?.focus();
@@ -485,8 +495,8 @@ function TipsSheet({ lesson, onClose }: { lesson: LessonData; onClose: () => voi
   }, [onClose]);
   return createPortal(
     <>
-      <button type="button" tabIndex={-1} aria-label="Close tips" className="fixed inset-0 z-[90]" style={{ background: "var(--scrim)" }} onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label={`${lesson.title}: tips`} className="ax-tray fixed inset-x-0 bottom-0 z-[91] mx-auto flex max-h-[80dvh] max-w-2xl flex-col rounded-t-3xl bg-panel text-text shadow-[0_-10px_40px_rgba(0,0,0,.3)]">
+      <button type="button" tabIndex={-1} aria-label="Close tips" className="ax-scrim fixed inset-0 z-[90]" data-closing={closing ? "true" : undefined} style={{ background: "var(--scrim)" }} onClick={onClose} />
+      <div role="dialog" aria-modal="true" aria-label={`${lesson.title}: tips`} data-closing={closing ? "true" : undefined} className="ax-sheet ax-tray fixed inset-x-0 bottom-0 z-[91] mx-auto flex max-h-[80dvh] max-w-2xl flex-col rounded-t-3xl bg-panel text-text shadow-[0_-10px_40px_rgba(0,0,0,.3)]">
         <div className="flex items-center gap-2 border-b border-border-soft px-5 py-3">
           <BookOpen className="h-5 w-5 text-info" aria-hidden />
           <p className="flex-1 text-[16px] font-bold">Lesson tips</p>

@@ -3,18 +3,21 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Academy sound and haptic cues. Sound starts off and only plays after the learner switches it on
- * (itself a tap, so the browser allows audio); vibration is used only where the device supports it.
- * The tones are synthesised with Web Audio, so there are no sound files to download. Preferences are
- * kept on this device.
+ * Academy sound and haptics. Every effect is synthesised with Web Audio (no files to download): each
+ * note layers a main voice with a softer octave voice, through one master chain (a gentle compressor
+ * and a short echo) so the set sounds like one instrument. Browsers only allow audio after a user
+ * gesture, so the first tap in the Academy unlocks it (`primeAudio`). Sound, music, vibration and
+ * animation are separate switches, kept on this device.
  */
 
-/** Sound, vibration and animation are switched independently (less sensory input when wanted). */
-export type FeedbackPrefs = { sound: boolean; haptics: boolean; motion: boolean };
-export type Cue = "select" | "check" | "correct" | "wrong" | "dialogue" | "hint" | "combo" | "unlock" | "complete";
+export type FeedbackPrefs = { sound: boolean; music: boolean; haptics: boolean; motion: boolean };
+export type Cue =
+  | "tap" | "select" | "check" | "correct" | "wrong" | "dialogue" | "hint" | "combo" | "unlock" | "complete"
+  | "open" | "close" | "page" | "start" | "locked";
 
-const KEY = "td-academy-feedback";
-const DEFAULT: FeedbackPrefs = { sound: false, haptics: true, motion: true };
+// v2: sound and music now start on (the first Academy version started silent, which read as "no sound").
+const KEY = "td-academy-feedback-v2";
+const DEFAULT: FeedbackPrefs = { sound: true, music: true, haptics: true, motion: true };
 const listeners = new Set<() => void>();
 let cache: FeedbackPrefs | null = null;
 
@@ -23,11 +26,15 @@ function read(): FeedbackPrefs {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<FeedbackPrefs>) : {};
-    cache = { sound: parsed.sound === true, haptics: parsed.haptics !== false, motion: parsed.motion !== false };
+    cache = { ...DEFAULT, ...parsed };
   } catch {
     cache = DEFAULT;
   }
   return cache;
+}
+
+export function feedbackPrefs() {
+  return read();
 }
 
 export function setFeedbackPrefs(next: Partial<FeedbackPrefs>) {
@@ -45,53 +52,139 @@ export function useFeedbackPrefs() {
   );
 }
 
-/** [frequency Hz, start s, duration s] per note. */
-const TONES: Record<Cue, { wave: OscillatorType; gain: number; notes: Array<[number, number, number]>; glide?: number }> = {
-  select: { wave: "sine", gain: 0.05, notes: [[880, 0, 0.05]] },
-  check: { wave: "sine", gain: 0.04, notes: [[660, 0, 0.04], [990, 0.035, 0.05]] },
-  correct: { wave: "triangle", gain: 0.09, notes: [[784, 0, 0.11], [1175, 0.09, 0.2]] },
-  wrong: { wave: "triangle", gain: 0.08, notes: [[247, 0, 0.22]], glide: 196 },
-  dialogue: { wave: "sine", gain: 0.035, notes: [[1046, 0, 0.05], [1318, 0.05, 0.07]] },
-  hint: { wave: "sine", gain: 0.05, notes: [[880, 0, 0.08], [1175, 0.07, 0.08], [1568, 0.14, 0.14]] },
-  combo: { wave: "triangle", gain: 0.08, notes: [[784, 0, 0.09], [988, 0.08, 0.09], [1319, 0.16, 0.24]] },
-  unlock: { wave: "sine", gain: 0.07, notes: [[587, 0, 0.12], [880, 0.1, 0.12], [1175, 0.2, 0.3]] },
-  complete: { wave: "triangle", gain: 0.08, notes: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.12], [1047, 0.3, 0.32]] },
-};
-// Only meaningful moments vibrate (a pick and a press are too small to buzz).
-const VIBRATION: Record<Cue, number | number[] | null> = { select: null, check: null, dialogue: null, hint: null, correct: 18, wrong: [30, 50, 30], combo: [16, 30, 16, 30, 24], unlock: [20, 40, 40], complete: [20, 40, 20, 40, 60] };
-const lastPlayed = new Map<Cue, number>();
+/* ---------------- the audio graph ---------------- */
 
-let audio: AudioContext | null = null;
+type Graph = { context: AudioContext; sfx: GainNode; music: GainNode; echo: GainNode };
+let graph: Graph | null = null;
+
+/** The shared audio graph (created on first use, after a gesture). Null where Web Audio is missing. */
+export function audioGraph(): Graph | null {
+  if (typeof window === "undefined") return null;
+  if (graph) return graph;
+  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Context) return null;
+  const context = new Context();
+  const compressor = context.createDynamicsCompressor();
+  compressor.threshold.value = -18;
+  compressor.ratio.value = 3;
+  compressor.connect(context.destination);
+  // A short, quiet echo gives the effects a little space.
+  const delay = context.createDelay(1);
+  delay.delayTime.value = 0.16;
+  const feedback = context.createGain();
+  feedback.gain.value = 0.22;
+  const echo = context.createGain();
+  echo.gain.value = 0.18;
+  echo.connect(delay);
+  delay.connect(feedback).connect(delay);
+  delay.connect(compressor);
+  const sfx = context.createGain();
+  sfx.gain.value = 0.9;
+  sfx.connect(compressor);
+  sfx.connect(echo);
+  const music = context.createGain();
+  music.gain.value = 0;
+  music.connect(compressor);
+  graph = { context, sfx, music, echo };
+  return graph;
+}
+
+/** Unlocks audio from a user gesture (browsers keep it suspended until then). */
+export function primeAudio() {
+  const current = audioGraph();
+  if (current && current.context.state === "suspended") void current.context.resume();
+}
+
+type Note = [frequency: number, start: number, duration: number];
+type Tone = { wave: OscillatorType; gain: number; notes: Note[]; glide?: number; layer?: number; noise?: boolean };
+
+const C5 = 523.25, D5 = 587.33, E5 = 659.25, G5 = 783.99, A5 = 880, B5 = 987.77, C6 = 1046.5, D6 = 1174.66, E6 = 1318.51, G6 = 1567.98;
+const TONES: Record<Cue, Tone> = {
+  tap: { wave: "sine", gain: 0.12, notes: [[1200, 0, 0.035]], layer: 0 },
+  select: { wave: "triangle", gain: 0.2, notes: [[A5, 0, 0.07]], layer: 0.35 },
+  check: { wave: "sine", gain: 0.16, notes: [[E5, 0, 0.05], [B5, 0.045, 0.07]] },
+  correct: { wave: "triangle", gain: 0.26, notes: [[G5, 0, 0.12], [D6, 0.1, 0.16], [G6, 0.2, 0.32]], layer: 0.4 },
+  wrong: { wave: "sine", gain: 0.24, notes: [[311, 0, 0.16], [233, 0.13, 0.3]], glide: 0.94, layer: 0.3 },
+  dialogue: { wave: "sine", gain: 0.12, notes: [[C6, 0, 0.05], [E6, 0.05, 0.06], [G6, 0.1, 0.08]] },
+  hint: { wave: "triangle", gain: 0.16, notes: [[A5, 0, 0.08], [D6, 0.07, 0.08], [A5 * 2, 0.14, 0.18]], layer: 0.3 },
+  combo: { wave: "triangle", gain: 0.24, notes: [[G5, 0, 0.08], [B5, 0.07, 0.08], [D6, 0.14, 0.08], [G6, 0.21, 0.36]], layer: 0.45 },
+  unlock: { wave: "sine", gain: 0.24, notes: [[D5, 0, 0.12], [A5, 0.1, 0.12], [D6, 0.2, 0.14], [A5 * 2, 0.32, 0.4]], layer: 0.5 },
+  complete: { wave: "triangle", gain: 0.24, notes: [[C5, 0, 0.12], [E5, 0.11, 0.12], [G5, 0.22, 0.12], [C6, 0.33, 0.14], [E6, 0.46, 0.16], [G6, 0.6, 0.55]], layer: 0.45 },
+  open: { wave: "sine", gain: 0.13, notes: [[420, 0, 0.13]], glide: 2.1, noise: true },
+  close: { wave: "sine", gain: 0.11, notes: [[820, 0, 0.12]], glide: 0.5, noise: true },
+  page: { wave: "sine", gain: 0.1, notes: [[560, 0, 0.1]], glide: 1.6, noise: true },
+  start: { wave: "triangle", gain: 0.22, notes: [[G5 / 2, 0, 0.1], [C5, 0.08, 0.1], [E5, 0.16, 0.1], [G5, 0.24, 0.3]], layer: 0.4 },
+  locked: { wave: "square", gain: 0.06, notes: [[196, 0, 0.09], [185, 0.1, 0.12]] },
+};
+
+// Only meaningful moments vibrate (taps, picks and panels are too small to buzz).
+const VIBRATION: Partial<Record<Cue, number | number[]>> = { correct: 18, wrong: [30, 50, 30], combo: [16, 30, 16, 30, 24], unlock: [20, 40, 40], complete: [20, 40, 20, 40, 60], locked: 12 };
+
+function voice(context: AudioContext, out: AudioNode, wave: OscillatorType, frequency: number, at: number, duration: number, peak: number, glide?: number) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = wave;
+  oscillator.frequency.setValueAtTime(frequency, at);
+  if (glide) oscillator.frequency.exponentialRampToValueAtTime(frequency * glide, at + duration);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  oscillator.connect(gain).connect(out);
+  oscillator.start(at);
+  oscillator.stop(at + duration + 0.03);
+}
+
+/** A soft filtered-noise "air" layer for whooshes (panels opening and closing, pages turning). */
+function air(context: AudioContext, out: AudioNode, at: number, duration: number, peak: number, rising: boolean) {
+  const length = Math.ceil(context.sampleRate * duration);
+  const buffer = context.createBuffer(1, length, context.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let index = 0; index < length; index += 1) data[index] = Math.random() * 2 - 1;
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  const filter = context.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.Q.value = 0.9;
+  filter.frequency.setValueAtTime(rising ? 700 : 2600, at);
+  filter.frequency.exponentialRampToValueAtTime(rising ? 2600 : 700, at + duration);
+  const gain = context.createGain();
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + duration * 0.35);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  source.connect(filter).connect(gain).connect(out);
+  source.start(at);
+}
 
 function play(kind: Cue) {
-  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Context) return;
-  audio ??= new Context();
-  if (audio.state === "suspended") void audio.resume();
+  const current = audioGraph();
+  if (!current) return;
+  const { context, sfx } = current;
+  if (context.state === "suspended") void context.resume();
+  // Test hook: an automated check can list the effects that played (absent for real users).
+  (window as unknown as { __academySfx?: Cue[] }).__academySfx?.push(kind);
   const tone = TONES[kind];
-  const now = audio.currentTime;
+  const now = context.currentTime + 0.005;
   for (const [frequency, start, duration] of tone.notes) {
-    const oscillator = audio.createOscillator();
-    const gain = audio.createGain();
-    oscillator.type = tone.wave;
-    oscillator.frequency.setValueAtTime(frequency, now + start);
-    if (tone.glide) oscillator.frequency.exponentialRampToValueAtTime(tone.glide, now + start + duration);
-    gain.gain.setValueAtTime(0.0001, now + start);
-    gain.gain.exponentialRampToValueAtTime(tone.gain, now + start + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + start + duration);
-    oscillator.connect(gain).connect(audio.destination);
-    oscillator.start(now + start);
-    oscillator.stop(now + start + duration + 0.02);
+    voice(context, sfx, tone.wave, frequency, now + start, duration, tone.gain, tone.glide);
+    // A quieter voice an octave up makes the note shimmer.
+    if (tone.layer) voice(context, sfx, "sine", frequency * 2, now + start, duration * 0.8, tone.gain * tone.layer, tone.glide);
   }
+  if (tone.noise) air(context, sfx, now, tone.notes[0][2] + 0.06, tone.gain * 0.5, kind !== "close");
 }
+
+const lastPlayed = new Map<Cue, number>();
+let lastAny = -Infinity;
 
 /** Plays a cue the learner's settings allow. Call only from a user action or its direct result. */
 export function cue(kind: Cue) {
   if (typeof window === "undefined") return;
-  // One event plays once, even if a handler runs twice in quick succession (e.g. development double calls).
   const now = performance.now();
+  // One event plays once, even if a handler runs twice in quick succession (e.g. development double calls).
   if (now - (lastPlayed.get(kind) ?? -Infinity) < 90) return;
+  // A generic tap never doubles a control's own sound.
+  if (kind === "tap" && now - lastAny < 120) return;
   lastPlayed.set(kind, now);
+  lastAny = now;
   const prefs = read();
   try {
     if (prefs.sound) play(kind);

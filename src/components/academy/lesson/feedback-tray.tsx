@@ -8,7 +8,7 @@ import type { Feedback } from "./exercise-view";
  * place (`inline`, inside a story scene). Colour, icon and words all carry the result; XP shows only
  * what the server paid. With `error` (the check itself failed) nothing is marked and Retry resends.
  */
-export function AcademyFeedbackTray({ feedback, error, praise, combo = 0, hint, onContinue, onRetry, retrying = false, variant = "dock", continueLabel = "Continue" }: {
+export function AcademyFeedbackTray({ feedback, error, praise, combo = 0, hint, onContinue, onRetry, retrying = false, variant = "dock", continueLabel = "Continue", closing = false }: {
   feedback: Feedback | null;
   error?: string | null;
   praise: string;
@@ -21,12 +21,14 @@ export function AcademyFeedbackTray({ feedback, error, praise, combo = 0, hint, 
   retrying?: boolean;
   variant?: "dock" | "inline";
   continueLabel?: string;
+  /** Slides back down (Continue was pressed and the next exercise is on its way). */
+  closing?: boolean;
 }) {
   const tone = feedback ? (feedback.correct ? "correct" : "wrong") : "error";
   const colour = tone === "correct" ? "var(--profit)" : tone === "wrong" ? "var(--loss)" : "var(--warning)";
   const dock = variant === "dock";
   return (
-    <div className={dock ? "ax-footer ax-tray px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-4" : "ax-tray rounded-2xl p-3"} data-tone={tone} role="status" aria-live="assertive">
+    <div className={dock ? "ax-footer ax-tray px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-4" : "ax-tray rounded-2xl p-3"} data-tone={tone} data-closing={closing ? "true" : undefined} role="status" aria-live="assertive">
       <div className={dock ? "mx-auto flex max-w-2xl flex-col gap-3 sm:flex-row sm:items-end" : "flex flex-col gap-3"}>
         <div className="flex min-w-0 flex-1 gap-3">
           <span className="ax-tray-icon" style={{ color: colour }} aria-hidden>

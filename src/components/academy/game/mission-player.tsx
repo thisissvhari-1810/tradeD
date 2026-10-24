@@ -1,11 +1,12 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { useDesk } from "@/components/shell";
 import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
+import { useAcademyFeel } from "@/components/academy/academy-feel";
 import { ExerciseView, inputOf, type Draft, type Feedback } from "@/components/academy/lesson/exercise-view";
 import { AcademyFeedbackTray } from "@/components/academy/lesson/feedback-tray";
 import type { DecisionChoice, Line, Mission, Scene, TikoMood } from "@/lib/academy/missions";
@@ -28,6 +29,7 @@ type Completion = { score: number; firstTime: boolean; xp: number; xpTotal: numb
 export function MissionPlayer({ mission }: { mission: Mission }) {
   const router = useRouter();
   const prefs = useFeedbackPrefs();
+  const root = useRef<HTMLDivElement>(null);
   const [lesson, setLesson] = useState<LessonData | null>(null);
   const [error, setError] = useState<{ message: string; locked: boolean } | null>(null);
   const [scene, setScene] = useState(0);
@@ -41,6 +43,7 @@ export function MissionPlayer({ mission }: { mission: Mission }) {
   }, [mission.slug]);
   useEffect(() => { load(); }, [load]);
 
+  useAcademyFeel(root, Boolean(lesson));
   const questions = useMemo(() => new Map((lesson?.questions ?? []).map((question) => [question.id, question])), [lesson]);
   const current = mission.scenes[scene];
 
@@ -81,7 +84,7 @@ export function MissionPlayer({ mission }: { mission: Mission }) {
   }
 
   return (
-    <div data-motion={prefs.motion ? undefined : "off"} className={`${styles.world} ${styles.lessonIn} h-full overflow-y-auto`}>
+    <div ref={root} data-motion={prefs.motion ? undefined : "off"} className={`${styles.world} ${styles.lessonIn} h-full overflow-y-auto`}>
       <div className="sticky top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-[#0b1f3a] to-transparent px-3 py-2.5 sm:px-5">
         <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" aria-label="Back to map" onClick={() => router.push("/academy")}><ArrowLeft className="h-5 w-5" aria-hidden /></button>
         <div className="min-w-0 flex-1">

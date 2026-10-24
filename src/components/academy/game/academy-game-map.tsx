@@ -17,6 +17,7 @@ import { WindingRoad } from "./winding-road";
 import { THEME } from "./world-art";
 import { api } from "@/components/api";
 import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
+import { useAcademyFeel, usePresence } from "@/components/academy/academy-feel";
 import { missionFor, type Line, type TikoMood } from "@/lib/academy/missions";
 import { DAILY_GOAL_XP } from "@/lib/academy/rules";
 import { journeyOf, type JourneyChapter, type JourneyStop, type JourneyUnit } from "@/lib/academy/world";
@@ -93,6 +94,9 @@ export function AcademyGameMap() {
   const frame = useRef(0);
   const hintSeq = useRef(0);
 
+  useAcademyFeel(worldRef, Boolean(data));
+  // The lesson panel animates out before it unmounts.
+  const panel = usePresence(open, 200);
   const journey = useMemo(() => (data ? journeyOf(data.units) : null), [data]);
   const expanded = useMemo(() => journey?.chapters.filter((chapter) => chapter.expanded) ?? [], [journey]);
   const hidden = useMemo(() => journey?.chapters.filter((chapter) => !chapter.expanded) ?? [], [journey]);
@@ -225,7 +229,7 @@ export function AcademyGameMap() {
   const freshChapter = freshStop && currentChapter && currentChapter.index !== freshStop.chapter ? currentChapter.index : -1;
   const wide = layout === "wide";
   const positionOf = (stop: JourneyStop) => ({ index: journey.chapters[stop.chapter].stops.indexOf(stop) + 1, of: journey.chapters[stop.chapter].total });
-  const openStop = open != null ? stops[open] ?? null : null;
+  const openStop = panel.shown != null ? stops[panel.shown] ?? null : null;
 
   // One background for the whole journey: each region's colours, blended where regions meet.
   const stopsCss: string[] = [];
@@ -247,6 +251,7 @@ export function AcademyGameMap() {
   function play(index: number) {
     const stop = stops[index];
     if (!stop || stop.stop === "locked" || launching) return;
+    cue("start");
     writeSession(SCROLL_KEY, String(worldRef.current?.scrollTop ?? 0));
     setOpen(null);
     setLaunching(stop.slug);
@@ -254,6 +259,7 @@ export function AcademyGameMap() {
   }
   const close = () => {
     const index = open;
+    if (index != null) cue("close");
     setOpen(null);
     if (index != null) nodeRefs.current.get(index)?.focus();
   };
@@ -264,6 +270,7 @@ export function AcademyGameMap() {
     later(3400, () => setHint((value) => (value?.key === key ? null : value)));
   }
   function lockedStop(index: number) {
+    cue("locked");
     const stop = stops[index];
     const before = stops[index - 1];
     const at = percent(world, world.nodes[index]);
@@ -333,7 +340,7 @@ export function AcademyGameMap() {
                       story={Boolean(missionFor(stop.slug))}
                       launching={launching === stop.slug}
                       unlocked={unlocked === index}
-                      onOpen={() => { scrollToStop(index, false); setOpen(index); }}
+                      onOpen={() => { scrollToStop(index, false); cue("open"); setOpen(index); }}
                       onLocked={() => lockedStop(index)}
                     />
                   );
@@ -346,8 +353,9 @@ export function AcademyGameMap() {
             <RoadAhead chapters={hidden} current={currentChapter.def.name} onHint={aheadHint} style={{ top: `${((world.fog.top + 30) / world.height) * 100}%`, left: "4%", width: "92%" }} />
           ) : null}
 
-          {openStop && open != null ? (
+          {openStop && panel.shown != null ? (
             <StopPanel
+              closing={panel.closing}
               stop={openStop}
               theme={journey.chapters[openStop.chapter].def.theme}
               chapter={{ number: journey.chapters[openStop.chapter].unit.number, name: journey.chapters[openStop.chapter].def.name }}
@@ -355,8 +363,8 @@ export function AcademyGameMap() {
               stars={starsFor(openStop.score)}
               story={Boolean(missionFor(openStop.slug))}
               sheet={!wide}
-              anchor={percent(world, world.nodes[open])}
-              onPlay={() => play(open)}
+              anchor={percent(world, world.nodes[panel.shown])}
+              onPlay={() => play(panel.shown!)}
               onClose={close}
             />
           ) : null}

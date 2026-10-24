@@ -322,6 +322,36 @@
 
 .ax-perfect { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: linear-gradient(180deg, #fff2c2, #ffd96b); color: #5a3b00; font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; box-shadow: 0 3px 0 #d8b46a; animation: axPopIn 420ms cubic-bezier(.3, 1.6, .5, 1) 400ms both; }
 
+/* ---------- every press: a spring, and a ripple from the finger on the main buttons ---------- */
+.ax-btn, .ax-btn-ghost, .ax-hint-btn, .ax-menu-row, .mq-fog-card { position: relative; overflow: hidden; }
+.ax-option { overflow: hidden; }
+/* `scale` (not transform) so the press composes with each control's own movement. */
+.ax-press { animation: axPress 300ms cubic-bezier(.3, 1.5, .5, 1); }
+@keyframes axPress { 0% { scale: 1; } 30% { scale: .93; } 70% { scale: 1.03; } 100% { scale: 1; } }
+.ax-ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .25; transform: scale(0); pointer-events: none; animation: axRipple 620ms cubic-bezier(.2, .7, .3, 1) forwards; }
+@keyframes axRipple { to { transform: scale(1); opacity: 0; } }
+
+/* ---------- panels and sheets also animate out ---------- */
+.ax-scrim { animation: axFadeIn 200ms ease both; }
+.ax-scrim[data-closing="true"] { animation: axFadeOut 200ms ease forwards; pointer-events: none; }
+@keyframes axFadeIn { from { opacity: 0; } }
+@keyframes axFadeOut { to { opacity: 0; } }
+.ax-sheet[data-closing="true"], .mq-sheet[data-closing="true"] { animation: axSheetOut 220ms cubic-bezier(.5, 0, .8, .4) forwards; pointer-events: none; }
+@keyframes axSheetOut { to { transform: translateY(100%); } }
+.mq-panel[data-closing="true"] { animation: axPanelOut 180ms cubic-bezier(.5, 0, .8, .4) forwards; pointer-events: none; }
+@keyframes axPanelOut { to { opacity: 0; transform: scale(.88); } }
+.ax-menu[data-closing="true"] { animation: axMenuOut 150ms ease forwards; pointer-events: none; }
+@keyframes axMenuOut { to { opacity: 0; transform: scale(.92) translateY(-4px); } }
+.ax-tray[data-closing="true"] { animation: axTrayOut 190ms cubic-bezier(.5, 0, .8, .4) forwards; }
+@keyframes axTrayOut { to { transform: translateY(100%); opacity: .6; } }
+
+/* Music switched off: the note is dimmed and struck through. */
+.mq-music-btn { position: relative; }
+.mq-music-btn[data-on="false"] { opacity: .6; }
+.mq-music-btn[data-on="false"]::after { content: ""; position: absolute; left: 9px; right: 9px; top: 50%; height: 2px; border-radius: 2px; background: currentColor; transform: rotate(-40deg); }
+.mq-music-btn[data-on="true"] svg { animation: axMusic 1.4s ease-in-out infinite; }
+@keyframes axMusic { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-2px) rotate(-8deg); } }
+
 /* Animations switched off by the learner: everything still works, nothing moves. */
 [data-motion="off"] *, [data-motion="off"] *::before, [data-motion="off"] *::after { animation: none !important; transition: none !important; }
 [data-motion="off"] .ax-speech-text, [data-motion="off"] .ax-speech-dismiss { opacity: 1; clip-path: none; transform: none; }
@@ -329,7 +359,8 @@
 [data-motion="off"] .ax-check-draw { stroke-dashoffset: 0; }
 
 @media (prefers-reduced-motion: reduce) {
-  .ax-speech-text, .ax-speech-dismiss { animation: none !important; }
+  .ax-speech-text, .ax-speech-dismiss, .ax-press, .mq-music-btn svg { animation: none !important; }
+  .ax-ripple { display: none; }
   .ax-typing, .ax-particles, .ax-sparks { display: none; }
   .ax-tutor-in, .ax-nod, .ax-react, .ax-ready, .ax-check-draw, .ax-xp, .ax-pop, .ax-burst i, .ax-perfect, .ax-screen-out, .ax-lock, .ax-hint-in { animation: none !important; }
   .ax-check-draw { stroke-dashoffset: 0; }

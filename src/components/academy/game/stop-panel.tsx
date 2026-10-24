@@ -13,7 +13,7 @@ import { THEME } from "./world-art";
  * bottom sheet on phones. Escape, the close button or a tap outside dismisses it. Rewards shown are
  * the Academy's real XP rules; nothing here grants anything.
  */
-export function StopPanel({ stop, theme, chapter, position, stars, story, sheet, anchor, onPlay, onClose }: {
+export function StopPanel({ stop, theme, chapter, position, stars, story, sheet, anchor, onPlay, onClose, closing = false }: {
   stop: JourneyStop;
   theme: ChapterTheme;
   chapter: { number: number; name: string };
@@ -25,6 +25,8 @@ export function StopPanel({ stop, theme, chapter, position, stars, story, sheet,
   anchor: { left: number; top: number };
   onPlay: () => void;
   onClose: () => void;
+  /** Animating out (it unmounts a moment later). */
+  closing?: boolean;
 }) {
   const playRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -78,8 +80,8 @@ export function StopPanel({ stop, theme, chapter, position, stars, story, sheet,
     // Attached to the page itself, so it sits above the app's bottom bar (the map is its own layer).
     return createPortal(
       <>
-        <button type="button" tabIndex={-1} aria-label="Close lesson" className="fixed inset-0 z-[79]" style={{ background: "var(--scrim)" }} onClick={onClose} />
-        <div role="dialog" aria-modal="true" aria-label={stop.title} className="mq-sheet">
+        <button type="button" tabIndex={-1} aria-label="Close lesson" className="ax-scrim fixed inset-0 z-[79]" data-closing={closing ? "true" : undefined} style={{ background: "var(--scrim)" }} onClick={onClose} />
+        <div role="dialog" aria-modal="true" aria-label={stop.title} className="mq-sheet" data-closing={closing ? "true" : undefined}>
           <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-border-strong" aria-hidden />
           <div className="relative mx-auto max-w-md">{body}</div>
         </div>
@@ -96,6 +98,7 @@ export function StopPanel({ stop, theme, chapter, position, stars, story, sheet,
         role="dialog"
         aria-label={stop.title}
         className="mq-panel"
+        data-closing={closing ? "true" : undefined}
         style={{
           top: `calc(${anchor.top}% - 150px)`,
           ...(right ? { left: `calc(${anchor.left}% + 64px)` } : { right: `calc(${100 - anchor.left}% + 64px)` }),
