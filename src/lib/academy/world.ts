@@ -25,7 +25,7 @@ export function chapterFor(unitId: string, number: number): ChapterDef {
 }
 
 export type StopState = "completed" | "current" | "open" | "locked";
-export type JourneyLesson = { slug: string; title: string; summary: string; minutes: number; questions: number; state: LessonState; score: number };
+export type JourneyLesson = { slug: string; title: string; summary: string; minutes: number; questions: number; state: LessonState; score: number; answered?: number };
 export type JourneyUnit = { id: string; number: number; title: string; lessons: JourneyLesson[] };
 
 export type JourneyStop = JourneyLesson & { stop: StopState; index: number; chapter: number };

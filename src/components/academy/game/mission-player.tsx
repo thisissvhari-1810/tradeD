@@ -43,7 +43,7 @@ export function MissionPlayer({ mission }: { mission: Mission }) {
   }, [mission.slug]);
   useEffect(() => { load(); }, [load]);
 
-  useAcademyFeel(root, Boolean(lesson));
+  useAcademyFeel(root, Boolean(lesson), 0.72);
   const questions = useMemo(() => new Map((lesson?.questions ?? []).map((question) => [question.id, question])), [lesson]);
   const current = mission.scenes[scene];
 

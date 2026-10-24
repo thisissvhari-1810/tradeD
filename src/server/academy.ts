@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { UNITS } from "@/lib/academy/content";
+import { ACADEMY_THEMES, type AcademyTheme } from "@/lib/academy/themes";
 import { BADGES, DAILY_GOAL_XP, PASS_PERCENT, XP_RULES, answerText, earnedBadges, grade, istDay, lessonScore, lessonStates, levelFor, publicQuestion, streakFrom, weekOf, type LessonState } from "@/lib/academy/rules";
 import type { AnswerInput, Lesson, Unit } from "@/lib/academy/types";
 import type { SessionUser } from "@/server/auth";
@@ -53,11 +54,18 @@ function lessonCard(lesson: Lesson, state: LessonState, unit: Unit, score = 0) {
 
 /** Everything the Academy home and learning path need, for the signed-in user. */
 export async function academyOverview(user: SessionUser) {
-  const [state, profile] = await Promise.all([loadState(user.id), prisma.user.findUnique({ where: { id: user.id }, select: { academyIntroAt: true } })]);
+  const [state, profile, correct] = await Promise.all([
+    loadState(user.id),
+    prisma.user.findUnique({ where: { id: user.id }, select: { academyIntroAt: true, academyTheme: true } }),
+    // Questions answered correctly at least once, per lesson (the in-progress ring on the map).
+    prisma.academyAnswer.findMany({ where: { userId: user.id, correct: true }, select: { lessonSlug: true, questionId: true }, distinct: ["lessonSlug", "questionId"] }),
+  ]);
+  const answered = new Map<string, number>();
+  for (const row of correct) answered.set(row.lessonSlug, (answered.get(row.lessonSlug) ?? 0) + 1);
   const streak = streakFrom(state.days, state.today);
   const scores = new Map(state.progress.map((row) => [row.lessonSlug, row.bestScore]));
   const units = UNITS.map((unit) => {
-    const lessons = unit.lessons.map((lesson) => lessonCard(lesson, state.states.get(lesson.slug) ?? "locked", unit, scores.get(lesson.slug) ?? 0));
+    const lessons = unit.lessons.map((lesson) => ({ ...lessonCard(lesson, state.states.get(lesson.slug) ?? "locked", unit, scores.get(lesson.slug) ?? 0), answered: Math.min(lesson.questions.length, answered.get(lesson.slug) ?? 0) }));
     const done = lessons.filter((lesson) => lesson.state === "completed" || lesson.state === "mastered").length;
     return { id: unit.id, number: unit.number, title: unit.title, description: unit.description, done, total: lessons.length, lessons };
   });
@@ -75,7 +83,18 @@ export async function academyOverview(user: SessionUser) {
     badges: BADGES.map((badge) => ({ ...badge, earnedAt: held.get(badge.slug) ?? null })),
     rules: { passPercent: PASS_PERCENT, xp: XP_RULES },
     introSeen: profile?.academyIntroAt != null,
+    theme: themeOf(profile?.academyTheme),
   };
+}
+
+function themeOf(value: string | null | undefined): AcademyTheme | null {
+  return value && (ACADEMY_THEMES as readonly string[]).includes(value) ? (value as AcademyTheme) : null;
+}
+
+/** Saves the learner's map world. Presentation only: lessons, progress and rewards are untouched. */
+export async function academySetTheme(user: SessionUser, theme: AcademyTheme) {
+  await prisma.user.update({ where: { id: user.id }, data: { academyTheme: theme } });
+  return { theme };
 }
 
 /** Records that the opening cinematic was watched or skipped (so it is not forced again). */
@@ -91,6 +110,7 @@ export async function academyLesson(user: SessionUser, slug: string) {
   const status = state.states.get(slug) ?? "locked";
   if (status === "locked") throw new AppError("Finish the lessons before this one to unlock it.", 403, "LESSON_LOCKED");
   await prisma.academyProgress.upsert({ where: { userId_lessonSlug: { userId: user.id, lessonSlug: slug } }, create: { userId: user.id, lessonSlug: slug }, update: {} });
+  const profile = await prisma.user.findUnique({ where: { id: user.id }, select: { academyTheme: true } });
   const correct = await prisma.academyAnswer.findMany({ where: { userId: user.id, lessonSlug: slug, correct: true }, select: { questionId: true }, distinct: ["questionId"] });
   const unitLessons = unit.lessons;
   const at = unitLessons.findIndex((item) => item.slug === slug);
@@ -107,6 +127,7 @@ export async function academyLesson(user: SessionUser, slug: string) {
     questions: lesson.questions.map(publicQuestion),
     answeredCorrectly: correct.map((row) => row.questionId),
     passPercent: PASS_PERCENT,
+    theme: themeOf(profile?.academyTheme),
   };
 }
 

@@ -19,7 +19,8 @@ export function TutorStage({ stage, nod, onDismiss, dismissLabel = "Got it", siz
   size?: number;
 }) {
   const { speech } = stage;
-  const glow = stage.mood === "celebrate" || stage.mood === "streak" || stage.mood === "mission-complete" ? "good"
+  const glow = speech?.open && speech.tone === "reward" ? "reward"
+    : stage.mood === "celebrate" || stage.mood === "streak" || stage.mood === "mission-complete" ? "good"
     : speech?.open && (speech.tone === "soft" || speech.tone === "hint") ? "soft"
       : stage.talking ? "talk" : "none";
   return (
@@ -33,7 +34,8 @@ export function TutorStage({ stage, nod, onDismiss, dismissLabel = "Got it", siz
         ) : null}
         {/* Alternating the animation name replays the nod without re-creating Tiko (his pose carries on). */}
         <span className={nod ? `inline-flex ${nod % 2 ? "ax-nod" : "ax-nod-b"}` : "inline-flex"}>
-          <Tiko mood={stage.mood} talking={stage.talking} size={size} className="ax-tiko" />
+          {/* No mouth movement: Tiko has no voice, so moving lips would be fake. */}
+          <Tiko mood={stage.mood} size={size} className="ax-tiko" />
         </span>
       </div>
       <div className="ax-speech" data-open={speech?.open ? "true" : "false"} data-tone={speech?.tone} aria-hidden={!speech?.open}>

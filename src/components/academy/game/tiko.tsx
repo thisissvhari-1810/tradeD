@@ -5,13 +5,12 @@ import type { TikoMood } from "@/lib/academy/missions";
  * thrusters, animated per mood by CSS (academy-game.css, `.mq-tiko[data-mood=…]`). One mood plays
  * at a time; reduced-motion users see the still pose.
  */
-/** `talking` animates the mouth on top of any mood (while a speech bubble is opening). */
-export function Tiko({ mood = "idle", size = 120, className, facing = "right", talking = false }: { mood?: TikoMood; size?: number; className?: string; facing?: "left" | "right"; talking?: boolean }) {
+export function Tiko({ mood = "idle", size = 120, className, facing = "right" }: { mood?: TikoMood; size?: number; className?: string; facing?: "left" | "right" }) {
   const happy = mood === "celebrate" || mood === "mission-complete" || mood === "encourage" || mood === "streak";
   const wide = mood === "surprised";
   const puzzled = mood === "confused" || mood === "thinking";
   return (
-    <span className={`mq-tiko ${className ?? ""}`} data-mood={mood} data-talking={talking ? "true" : undefined} style={{ width: size, height: size * 1.15, transform: facing === "left" ? "scaleX(-1)" : undefined }} role="img" aria-label={`Tiko, your market guide (${mood.replace("-", " ")})`}>
+    <span className={`mq-tiko ${className ?? ""}`} data-mood={mood} style={{ width: size, height: size * 1.15, transform: facing === "left" ? "scaleX(-1)" : undefined }} role="img" aria-label={`Tiko, your market guide (${mood.replace("-", " ")})`}>
       <svg viewBox="0 0 120 138" width="100%" height="100%" aria-hidden>
         <defs>
           <linearGradient id="tiko-shell" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#f6fbff" /><stop offset="1" stopColor="#c7dbe8" /></linearGradient>

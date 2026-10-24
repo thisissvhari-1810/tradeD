@@ -95,8 +95,11 @@ describe("the lesson player", () => {
     expect(feel).toMatch(/const onDown = [\s\S]*primeAudio\(\);[\s\S]*syncMusic\(\);/);
     expect(sound + music).not.toMatch(/new Audio\(|\.(mp3|wav|ogg)["'`]/);
     expect(sound).toMatch(/sound: true, music: true/);
-    // Music follows both switches: it never plays with sound or music off.
-    expect(music).toMatch(/feedbackPrefs\(\)\.music && feedbackPrefs\(\)\.sound/);
+    // Music follows its switch, mute and its volume: it never plays when any of them says no.
+    expect(music).toMatch(/prefs\.music && !prefs\.muted && prefs\.musicVolume > 0/);
+    // Master, music and effects volumes and mute all reach the audio graph.
+    expect(sound).toMatch(/set\(graph\.master, prefs\.muted \? 0 : prefs\.master\)/);
+    expect(sound).toMatch(/set\(graph\.music, prefs\.music \? prefs\.musicVolume : 0\)/);
   });
 
   it("includes chart and sequencing exercises graded on the server", () => {

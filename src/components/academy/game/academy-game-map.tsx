@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { RefreshCw } from "lucide-react";
+import { LocateFixed, RefreshCw, ZoomIn, ZoomOut } from "lucide-react";
 import { styles } from "./academy-game-classes";
 import { AcademyHud } from "./academy-hud";
 import { ChapterCard, RoadAhead } from "./chapter-card";
@@ -14,7 +14,10 @@ import { StopPanel } from "./stop-panel";
 import { Tiko } from "./tiko";
 import { TutorDialogue } from "./tutor-dialogue";
 import { WindingRoad } from "./winding-road";
-import { THEME } from "./world-art";
+import { ThemePicker } from "./theme-picker";
+import { WORLDS } from "./worlds/config";
+import { AcademyTransition, TRANSITION_MS, type TransitionRun } from "@/components/academy/transition";
+import { DEFAULT_THEME, type AcademyTheme } from "@/lib/academy/themes";
 import { api } from "@/components/api";
 import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
 import { useAcademyFeel, usePresence } from "@/components/academy/academy-feel";
@@ -27,7 +30,12 @@ type Overview = {
   streak: { current: number };
   units: JourneyUnit[];
   introSeen: boolean;
+  /** The learner's map world (null until chosen). */
+  theme: AcademyTheme | null;
 };
+
+/** The world picker was dismissed this session ("decide later"), so it does not reopen on every visit. */
+const PICKER_KEY = "td-academy-picker-later";
 
 /** Where the map was scrolled, and a lesson just completed (set by the lesson), for the return trip. */
 const SCROLL_KEY = "td-academy-scroll";
@@ -87,6 +95,14 @@ export function AcademyGameMap() {
   const [intro, setIntro] = useState<null | "reveal" | "arrive" | "welcome" | "mission">(null);
   const [introMood, setIntroMood] = useState<TikoMood>("idle");
   const onIntroLine = useCallback((line: Line) => setIntroMood(line.mood), []);
+  // Map world: the picker (open with a highlighted choice), a full-map preview, saving, and the change cinematic.
+  const [picker, setPicker] = useState<AcademyTheme | null>(null);
+  const [preview, setPreview] = useState<AcademyTheme | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [themeError, setThemeError] = useState("");
+  const [cinematic, setCinematic] = useState<TransitionRun | null>(null);
+  // Map zoom: 1 is the normal view, below 1 an overview of more of the journey.
+  const [zoom, setZoom] = useState(1);
   const worldRef = useRef<HTMLDivElement>(null);
   const guideRef = useRef<HTMLDivElement>(null);
   const nodeRefs = useRef(new Map<number, HTMLButtonElement | null>());
@@ -122,12 +138,12 @@ export function AcademyGameMap() {
     const element = guideRef.current;
     if (!element || reducedMotion()) { done(); return; }
     setWalking(true);
-    const duration = 900 + Math.min(6, to - from) * 260;
+    const duration = 700 + Math.min(6, Math.abs(to - from)) * 230;
     const began = performance.now();
     const step = (now: number) => {
       const t = Math.min(1, (now - began) / duration);
       const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-      const at = percent(worldNow.current, pointAlong(worldNow.current, from, to, eased));
+      const at = percent(worldNow.current, from <= to ? pointAlong(worldNow.current, from, to, eased) : pointAlong(worldNow.current, to, from, 1 - eased));
       element.style.left = `${at.left}%`;
       element.style.top = `${at.top}%`;
       if (t < 1) frame.current = requestAnimationFrame(step);
@@ -151,10 +167,12 @@ export function AcademyGameMap() {
         const target = current >= 0 ? current : visible.length - 1;
         const nextLine = current >= 0 ? `Next stop: ${visible[current].title}` : "You have finished every chapter. Review any stop to keep it fresh.";
         if (!next.introSeen) { setIntro("reveal"); return; }
+        // A world has not been chosen yet: offer the picker (unless the learner said "later" this visit).
+        if (!next.theme && !readSession(PICKER_KEY)) setPicker(DEFAULT_THEME);
         const doneAt = justDone ? visible.findIndex((stop) => stop.slug === justDone) : -1;
         if (doneAt >= 0 && current > doneAt) {
           // Celebrate where the lesson was, then fly to the next stop (and greet a new chapter).
-          const newChapter = visible[current].chapter !== visible[doneAt].chapter ? plan.chapters[visible[current].chapter].def.name : null;
+          const newChapter = visible[current].chapter !== visible[doneAt].chapter ? WORLDS[next.theme ?? DEFAULT_THEME].chapters[visible[current].chapter] : null;
           setGuide({ at: doneAt, mood: "celebrate", line: "Lesson complete!" });
           later(1300, () => {
             setGuide({ at: doneAt, mood: "fly", line: null });
@@ -221,6 +239,8 @@ export function AcademyGameMap() {
   if (!data || !journey) return <div className={`${styles.world} h-full`} aria-busy="true" aria-label="Loading the Academy" />;
 
   const motion = typeof window !== "undefined" && !reducedMotion() && prefs.motion;
+  const theme = WORLDS[preview ?? data.theme ?? DEFAULT_THEME];
+  const nameOf = (chapter: JourneyChapter) => theme.chapters[chapter.index] ?? chapter.def.name;
   const lead = stops.findIndex((stop) => stop.stop !== "completed");
   const completedUpTo = lead < 0 ? stops.length - 1 : lead - 1;
   const current = stops.findIndex((stop) => stop.stop === "current");
@@ -234,24 +254,93 @@ export function AcademyGameMap() {
   // One background for the whole journey: each region's colours, blended where regions meet.
   const stopsCss: string[] = [];
   world.chapters.forEach((box) => {
-    const [from, to] = THEME[expanded[box.index].def.theme].ground;
+    const [from, to] = theme.region(box.index).ground;
     stopsCss.push(`${from} ${((box.top + 40) / world.height) * 100}%`, `${to} ${((box.top + box.height - 60) / world.height) * 100}%`);
   });
-  if (world.fog) stopsCss.push(`#33476b ${((world.fog.top + 60) / world.height) * 100}%`, "#1c2740 100%");
+  if (world.fog) stopsCss.push(`${theme.fog[0]} ${((world.fog.top + 60) / world.height) * 100}%`, `${theme.fog[1]} 100%`);
   const background = `linear-gradient(180deg, ${stopsCss.join(", ")})`;
 
   /** The intro was watched or skipped: remember it on the account (best effort). */
-  function endIntro() {
+  function endIntro(offerWorlds = true) {
     setIntro(null);
     const target = current >= 0 ? current : 0;
     setGuide({ at: target, mood: "idle", line: null });
     if (!data?.introSeen) void api("/api/academy", { action: "intro-seen" }).catch(() => undefined);
+    if (offerWorlds && !data?.theme) setPicker(DEFAULT_THEME);
+  }
+
+  /** The world-change cinematic over the map (the new world is already drawn underneath). */
+  function playCinematic(next: AcademyTheme) {
+    if (!motion) return;
+    const intensity = "full";
+    setCinematic({ key: Date.now(), style: WORLDS[next].transition, intensity });
+    later(TRANSITION_MS[intensity] + 60, () => setCinematic(null));
+  }
+
+  /** Saves the chosen world on the account. Presentation only: progress is not touched. */
+  async function chooseWorld(next: AcademyTheme) {
+    if (saving) return;
+    setSaving(true);
+    setThemeError("");
+    try {
+      await api("/api/academy", { action: "theme", theme: next });
+      setData((current) => (current ? { ...current, theme: next } : current));
+      setPicker(null);
+      setPreview(null);
+      cue("unlock");
+      playCinematic(next);
+      const target = current >= 0 ? current : 0;
+      setGuide({ at: target, mood: "celebrate", line: `Welcome to ${WORLDS[next].name}!` });
+      later(3200, () => setGuide({ at: target, mood: "idle", line: null }));
+    } catch (caught) {
+      setThemeError(caught instanceof Error ? caught.message : "The world could not be saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const closePicker = () => {
+    cue("close");
+    if (!data?.theme) writeSession(PICKER_KEY, "1");
+    setPicker(null);
+    setPreview(null);
+  };
+  const previewWorld = (next: AcademyTheme) => {
+    cue("page");
+    setPreview(next);
+    setPicker(null);
+    playCinematic(next);
+    later(80, () => scrollToStop(current >= 0 ? current : 0, false));
+  };
+
+  /** Opening a stop: the map pans to it and Tiko flies over, then its panel opens. */
+  function openStopAt(index: number) {
+    cue("open");
+    scrollToStop(index, motion);
+    const from = guide?.at;
+    if (motion && from != null && from !== index && Math.abs(from - index) <= 8 && !walking) {
+      setGuide({ at: from, mood: "fly", line: null });
+      walk(from, index, () => {
+        setGuide({ at: index, mood: "point", line: null });
+        setOpen(index);
+      });
+      return;
+    }
+    if (guide) setGuide({ at: index, mood: "point", line: null });
+    window.setTimeout(() => setOpen(index), motion ? 260 : 0);
+  }
+
+  function zoomTo(next: number) {
+    const target = current >= 0 ? current : 0;
+    setZoom(next);
+    cue("page");
+    requestAnimationFrame(() => requestAnimationFrame(() => scrollToStop(target, false)));
   }
 
   function play(index: number) {
     const stop = stops[index];
     if (!stop || stop.stop === "locked" || launching) return;
     cue("start");
+    setGuide({ at: index, mood: "celebrate", line: "Let's go!" });
     writeSession(SCROLL_KEY, String(worldRef.current?.scrollTop ?? 0));
     setOpen(null);
     setLaunching(stop.slug);
@@ -277,14 +366,14 @@ export function AcademyGameMap() {
     const chapter = journey!.chapters[stop.chapter];
     const previousChapter = journey!.chapters[stop.chapter - 1];
     const text = chapter.status === "locked" && previousChapter
-      ? `${chapter.def.name} opens when you finish ${previousChapter.def.name}.`
+      ? `${nameOf(chapter)} opens when you finish ${nameOf(previousChapter)}.`
       : `Finish “${before?.title ?? "the lesson before"}” first to unlock this stop.`;
     showHint({ left: at.left, top: at.top + (wide ? 9 : 5) }, text);
   }
   function aheadHint(chapter: JourneyChapter) {
     const previous = journey!.chapters[chapter.index - 1];
     const top = world.fog ? ((world.fog.top + 40) / world.height) * 100 : 50;
-    showHint({ left: 50, top }, `${chapter.def.name} opens after ${previous?.def.name ?? "the chapter before"}. Keep going: it is on this road.`);
+    showHint({ left: 50, top }, `${nameOf(chapter)} opens after ${previous ? nameOf(previous) : "the chapter before"}. Keep going: it is on this road.`);
   }
   const jump = () => {
     const target = current >= 0 ? current : stops.length - 1;
@@ -295,10 +384,20 @@ export function AcademyGameMap() {
 
   const guideAt = guide ? besideStop(world, guide.at) : null;
   const introAt = besideStop(world, 0);
-  const width = wide ? "min(100%, 1180px)" : "min(100%, 560px)";
+  const width = wide ? `min(100%, ${Math.round(1180 * zoom)}px)` : `min(100%, ${Math.round(560 * zoom)}px)`;
 
   return (
-    <div ref={worldRef} data-motion={prefs.motion ? undefined : "off"} className={`${styles.world} ${wide ? "" : "mq-tall"} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
+    <div
+      ref={worldRef}
+      data-motion={prefs.motion ? undefined : "off"}
+      data-world={theme.id}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget && (event.target as HTMLElement).closest("input, [role='dialog']")) return;
+        if (event.key === "-" && zoom > 0.6) zoomTo(0.6);
+        if ((event.key === "+" || event.key === "=") && zoom < 1) zoomTo(1);
+      }}
+      className={`${styles.world} ${wide ? "" : "mq-tall"} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
       <AcademyHud
         xp={data.xp.total}
         streak={data.streak.current}
@@ -306,13 +405,15 @@ export function AcademyGameMap() {
         goal={data.xp.dailyGoal || DAILY_GOAL_XP}
         bumpXp={Boolean(fresh)}
         onReplayIntro={intro ? undefined : () => setIntro("reveal")}
-        chapter={currentChapter ? { name: currentChapter.def.name, done: currentChapter.done, total: currentChapter.total } : null}
+        chapter={currentChapter ? { name: nameOf(currentChapter), done: currentChapter.done, total: currentChapter.total } : null}
         onJump={stops.length ? jump : undefined}
+        onChangeWorld={() => { cue("open"); setPicker(preview ?? data.theme ?? DEFAULT_THEME); }}
+        worldName={theme.name}
       />
       <div className="relative -mt-14 w-full" style={{ background }}>
         <div className="relative mx-auto" style={{ width, aspectRatio: `${world.width} / ${world.height}` }}>
-          <MapEnvironment world={world} chapters={expanded.map((chapter) => ({ theme: chapter.def.theme, complete: chapter.status === "complete" }))} />
-          <WindingRoad world={world} completedUpTo={completedUpTo} current={current} fresh={Boolean(freshStop)} motion={motion} />
+          <MapEnvironment world={world} theme={theme} chapters={expanded.map((chapter) => ({ complete: chapter.status === "complete", progress: chapter.total ? chapter.done / chapter.total : 0 }))} />
+          <WindingRoad world={world} style={theme.road} completedUpTo={completedUpTo} current={current} fresh={Boolean(freshStop)} motion={motion} />
 
           {expanded.map((chapter, chapterIndex) => {
             const box = world.chapters[chapterIndex];
@@ -320,8 +421,8 @@ export function AcademyGameMap() {
               ? { top: `${((box.top + 36) / world.height) * 100}%`, width: "36%", ...(box.side === "right" ? { left: "3%" } : { right: "3%" }) }
               : { top: `${((box.top + 18) / world.height) * 100}%`, left: "4%", width: "92%" };
             return (
-              <section key={chapter.unit.id} aria-label={`Chapter ${chapter.unit.number}: ${chapter.def.name}`}>
-                <ChapterCard chapter={chapter} previous={journey.chapters[chapterIndex - 1]?.def.name ?? null} style={cardStyle} fresh={chapterIndex === freshChapter} />
+              <section key={chapter.unit.id} aria-label={`Chapter ${chapter.unit.number}: ${nameOf(chapter)}`}>
+                <ChapterCard chapter={chapter} world={theme} previous={journey.chapters[chapterIndex - 1] ? nameOf(journey.chapters[chapterIndex - 1]) : null} style={cardStyle} fresh={chapterIndex === freshChapter} />
                 {chapter.stops.map((stop) => {
                   const index = stops.indexOf(stop);
                   const at = percent(world, world.nodes[index]);
@@ -331,7 +432,8 @@ export function AcademyGameMap() {
                       ref={(node) => { nodeRefs.current.set(index, node); }}
                       stop={stop}
                       theme={chapter.def.theme}
-                      chapterName={chapter.def.name}
+                      world={theme}
+                      chapterName={nameOf(chapter)}
                       position={positionOf(stop)}
                       left={at.left}
                       top={at.top}
@@ -340,7 +442,7 @@ export function AcademyGameMap() {
                       story={Boolean(missionFor(stop.slug))}
                       launching={launching === stop.slug}
                       unlocked={unlocked === index}
-                      onOpen={() => { scrollToStop(index, false); cue("open"); setOpen(index); }}
+                      onOpen={() => openStopAt(index)}
                       onLocked={() => lockedStop(index)}
                     />
                   );
@@ -350,7 +452,7 @@ export function AcademyGameMap() {
           })}
 
           {world.fog && currentChapter ? (
-            <RoadAhead chapters={hidden} current={currentChapter.def.name} onHint={aheadHint} style={{ top: `${((world.fog.top + 30) / world.height) * 100}%`, left: "4%", width: "92%" }} />
+            <RoadAhead chapters={hidden} world={theme} current={nameOf(currentChapter)} onHint={aheadHint} style={{ top: `${((world.fog.top + 30) / world.height) * 100}%`, left: "4%", width: "92%" }} />
           ) : null}
 
           {openStop && panel.shown != null ? (
@@ -358,7 +460,7 @@ export function AcademyGameMap() {
               closing={panel.closing}
               stop={openStop}
               theme={journey.chapters[openStop.chapter].def.theme}
-              chapter={{ number: journey.chapters[openStop.chapter].unit.number, name: journey.chapters[openStop.chapter].def.name }}
+              chapter={{ number: journey.chapters[openStop.chapter].unit.number, name: nameOf(journey.chapters[openStop.chapter]) }}
               position={positionOf(openStop)}
               stars={starsFor(openStop.score)}
               story={Boolean(missionFor(openStop.slug))}
@@ -392,10 +494,32 @@ export function AcademyGameMap() {
       </div>
       <div className={styles.veil} aria-hidden />
 
+      {/* Map controls: focus the next lesson, and zoom out for an overview of the journey. */}
+      {!intro && !picker ? (
+        <div className="mq-map-controls" role="group" aria-label="Map view">
+          <button type="button" className="mq-map-control" aria-label="Go to your next lesson" title="Next lesson" onClick={jump}><LocateFixed className="h-5 w-5" aria-hidden /></button>
+          {zoom < 1
+            ? <button type="button" className="mq-map-control" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomTo(1)}><ZoomIn className="h-5 w-5" aria-hidden /></button>
+            : <button type="button" className="mq-map-control" aria-label="Zoom out to see more of the journey" title="Zoom out (−)" onClick={() => zoomTo(0.6)}><ZoomOut className="h-5 w-5" aria-hidden /></button>}
+        </div>
+      ) : null}
+
+      {/* Choosing, previewing and changing the map world. */}
+      {picker ? <ThemePicker selected={picker} saved={data.theme} saving={saving} error={themeError} onSelect={(next) => { cue("select"); setPicker(next); }} onPreview={previewWorld} onConfirm={(next) => void chooseWorld(next)} onClose={closePicker} /> : null}
+      {preview ? createPortal(
+        <div className="mq-preview-bar" role="region" aria-label="World preview">
+          <p className="min-w-0 flex-1 text-[14px] font-bold text-white">Previewing <span className="text-[#38e1ff]">{WORLDS[preview].name}</span><span className="block text-[12px] font-semibold text-white/65">Your lessons and progress are the same in every world.</span></p>
+          <button type="button" className="ax-btn-ghost mq-ghost-dark" onClick={() => { cue("page"); setPicker(preview); setPreview(null); }}>Back to worlds</button>
+          <button type="button" className="ax-btn" data-tone="success" disabled={saving} onClick={() => void chooseWorld(preview)}>{saving ? <><span className="ax-spin" aria-hidden />Saving</> : "Use this world"}</button>
+        </div>,
+        document.body,
+      ) : null}
+      {cinematic ? createPortal(<div className="mq-cinematic"><AcademyTransition run={cinematic} /></div>, document.body) : null}
+
       {/* Attached to the page itself, so it sits above the app's bottom bar (the map is its own layer). */}
       {intro ? createPortal(
         <div className="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))]" role="dialog" aria-label="Welcome to the TradeD Academy">
-          <button type="button" className="self-end rounded-full bg-black/45 px-4 py-2 text-[13px] font-bold hover:bg-black/60" style={{ color: "#fff" }} onClick={endIntro}>Skip intro</button>
+          <button type="button" className="self-end rounded-full bg-black/45 px-4 py-2 text-[13px] font-bold hover:bg-black/60" style={{ color: "#fff" }} onClick={() => endIntro()}>Skip intro</button>
           {intro === "welcome" || intro === "mission" ? (
             <div className="w-full max-w-xl">
               {intro === "welcome" ? (
@@ -419,14 +543,14 @@ export function AcademyGameMap() {
               ) : (
                 <div className="flex flex-col gap-2">
                   <TutorDialogue lines={[{ mood: "point", text: "Your first stop is a story mission in Market City: learn how prices move and make your first plan." }]} onLine={onIntroLine} avatar={false} />
-                  <button type="button" className={styles.play} onClick={() => { endIntro(); play(0); }}>START YOUR FIRST MISSION</button>
+                  <button type="button" className={styles.play} onClick={() => { endIntro(false); play(0); }}>START YOUR FIRST MISSION</button>
                 </div>
               )}
             </div>
           ) : null}
         </div>
       , document.body) : null}
-      <p className="sr-only" aria-live="polite">{current >= 0 ? `Next lesson: ${stops[current].title}, in ${currentChapter?.def.name}.` : "Every chapter is complete."}</p>
+      <p className="sr-only" aria-live="polite">{current >= 0 ? `Next lesson: ${stops[current].title}, in ${currentChapter ? nameOf(currentChapter) : ""}.` : "Every chapter is complete."}</p>
     </div>
   );
 }

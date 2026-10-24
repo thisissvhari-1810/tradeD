@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import { cue, feedbackPrefs, primeAudio } from "./academy-sound";
-import { holdMusic, syncMusic } from "./academy-music";
+import { holdMusic, setMusicLevel, syncMusic } from "./academy-music";
 
 const RIPPLE = ".ax-btn, .ax-btn-ghost, .ax-option, .mq-play, .mq-fog-card, .ax-hint-btn, .ax-menu-row";
 const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches || !feedbackPrefs().motion;
@@ -13,8 +13,10 @@ const reduced = () => window.matchMedia("(prefers-reduced-motion: reduce)").matc
  * a ripple from the finger); a tap on a control without its own sound plays a soft click. Listeners
  * are attached once and removed on unmount.
  */
-export function useAcademyFeel(root: RefObject<HTMLElement | null>, ready = true) {
+export function useAcademyFeel(root: RefObject<HTMLElement | null>, ready = true, musicLevel = 1) {
   useEffect(() => holdMusic(), []);
+  // Lessons play the music a little quieter than the map; it fades between the two.
+  useEffect(() => { setMusicLevel(musicLevel); }, [musicLevel]);
   useEffect(() => {
     const element = root.current;
     if (!element || !ready) return;

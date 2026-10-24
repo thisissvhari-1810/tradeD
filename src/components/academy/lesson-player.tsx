@@ -1,14 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { Award, BookOpen, Flame, Lightbulb, RefreshCw, Settings2, Volume2, VolumeX, X, Zap } from "lucide-react";
+import { Award, BookOpen, Flame, Lightbulb, RefreshCw, X, Zap } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { CandleSketch } from "@/components/academy/candle-sketch";
-import { cue, setFeedbackPrefs, useFeedbackPrefs, type FeedbackPrefs } from "@/components/academy/academy-sound";
+import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
+import { AcademyAudioSettings } from "@/components/academy/audio-settings";
 import { useAcademyFeel, usePresence } from "@/components/academy/academy-feel";
-import { syncMusic } from "@/components/academy/academy-music";
 import { FRESH_KEY } from "@/components/academy/game/academy-game-map";
 import { starsFor } from "@/components/academy/game/geometry";
 import { RewardCelebration } from "@/components/academy/game/reward-celebration";
@@ -17,6 +17,10 @@ import { COMBO, useLessonDirector } from "@/components/academy/lesson/director";
 import { ExerciseView, inputOf, type Draft, type Feedback } from "@/components/academy/lesson/exercise-view";
 import { AcademyFeedbackTray } from "@/components/academy/lesson/feedback-tray";
 import { TutorStage } from "@/components/academy/lesson/tutor-stage";
+import { AcademyTransition, SWAP, TRANSITION_MS, type TransitionRun } from "@/components/academy/transition";
+import { worldOf } from "@/components/academy/game/worlds/config";
+import { hasVisual } from "@/components/academy/lesson/exercise-view";
+import type { AcademyTheme } from "@/lib/academy/themes";
 import type { LessonCard, PublicQuestion } from "@/lib/academy/types";
 
 export type { Feedback } from "@/components/academy/lesson/exercise-view";
@@ -34,7 +38,19 @@ type LessonData = {
   questions: PublicQuestion[];
   answeredCorrectly: string[];
   passPercent: number;
+  /** The learner's map world: the transitions take its weather. */
+  theme: AcademyTheme | null;
 };
+
+const WIDE = "(min-width: 1024px)";
+/** Wide screens show a chart beside the question (as a trading mission), phones stack them. */
+function useWide() {
+  return useSyncExternalStore(
+    (notify) => { const query = window.matchMedia(WIDE); query.addEventListener("change", notify); return () => query.removeEventListener("change", notify); },
+    () => window.matchMedia(WIDE).matches,
+    () => true,
+  );
+}
 type Completion = { score: number; firstTime: boolean; xp: number; xpTotal: number; newBadges: Array<{ name: string; description: string }>; streak: { current: number; todayDone: boolean }; level: { level: number; title: string } };
 type Step = { kind: "tip"; index: number } | { kind: "question"; id: string };
 type Phase = "play" | "saving" | "done" | "save-error";
@@ -92,19 +108,20 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const [completion, setCompletion] = useState<Completion | null>(null);
   const [saveError, setSaveError] = useState("");
   const [tipsOpen, setTipsOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const wide = useWide();
+  // The cinematic between screens; while it plays nothing in the lesson can be pressed.
+  const [transition, setTransition] = useState<TransitionRun | null>(null);
   const shell = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
   useEffect(() => () => timers.current.forEach((timer) => window.clearTimeout(timer)), []);
   const later = (ms: number, run: () => void) => { timers.current.push(window.setTimeout(run, ms)); };
   const motion = prefs.motion && !reducedMotion();
-  useAcademyFeel(shell, Boolean(lesson));
+  useAcademyFeel(shell, Boolean(lesson), 0.72);
   const tipsSheet = usePresence(tipsOpen ? true : null, 220);
-  const settingsMenu = usePresence(settingsOpen ? true : null, 160);
   const openTips = () => { cue("open"); setTipsOpen(true); };
   const closeTips = useCallback(() => { cue("close"); setTipsOpen(false); }, []);
-  const closeSettings = useCallback(() => { cue("close"); setSettingsOpen(false); }, []);
 
   const byIdOf = (data: LessonData) => new Map(data.questions.map((question) => [question.id, question]));
 
@@ -150,12 +167,12 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const question = step?.kind === "question" ? byId.get(step.id) ?? null : null;
   const value = draft.turn === turn ? draft.value : {};
   const input = question ? inputOf(question, value) : null;
-  const locked = checking || Boolean(feedback) || leaving;
+  const locked = checking || Boolean(feedback) || leaving || transition != null;
   const hintOpen = hintFor === turn;
 
   /** Continue: the bubble closes into Tiko, the screen slides out, the next one comes in and Tiko speaks. */
-  function advance(next: Step[]) {
-    if (!lesson) return;
+  function advance(next: Step[], strength: TransitionRun["intensity"] = "soft") {
+    if (!lesson || leaving || transition) return;
     const data = lesson;
     const wasTip = step?.kind === "tip";
     dispatch({ type: "CONTINUE_PRESSED" });
@@ -172,16 +189,28 @@ export function LessonPlayer({ slug }: { slug: string }) {
       if (upcoming.kind === "question") setAsked((current) => new Set(current).add(upcoming.id));
       enter(upcoming, data, { afterTips: wasTip, retry, index: turn + 1, first: false });
     };
-    if (!motion) { go(); return; }
+    if (!motion) { go(); requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })); return; }
+    // The world's weather sweeps in, the screens swap behind it, then it parts on the next one. Timers
+    // (not animation events) drive each step, so a failed animation can never hold the lesson up.
+    const intensity = next.length ? strength : "grand";
+    const duration = TRANSITION_MS[intensity];
     setLeaving(true);
-    later(190, go);
+    setTransition({ key: turn + 1, style: worldOf(data.theme).transition, intensity });
+    later(duration * SWAP, go);
+    later(duration, () => {
+      setTransition(null);
+      if (next.length) cue("reveal");
+      // Focus once the content is interactive again (it stays inert until this update has rendered).
+      requestAnimationFrame(() => requestAnimationFrame(() => heading.current?.focus({ preventScroll: true })));
+    });
   }
 
   function nextTip() {
     if (leaving) return;
     setDone((value) => value + 1);
     setBump((value) => value + 1);
-    advance(queue.slice(1));
+    const next = queue.slice(1);
+    advance(next, next[0]?.kind === "question" ? "full" : "soft");
   }
 
   function skipTips() {
@@ -189,7 +218,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
     const tips = queue.filter((item) => item.kind === "tip").length;
     setDone((value) => value + tips);
     setBump((value) => value + 1);
-    advance(queue.filter((item) => item.kind !== "tip"));
+    advance(queue.filter((item) => item.kind !== "tip"), "full");
   }
 
   /** A tap that picks or places an answer: Tiko listens and nods (no words, no interruption). */
@@ -260,12 +289,21 @@ export function LessonPlayer({ slug }: { slug: string }) {
     }
   }
 
+  // A long pause on a question with nothing picked: Tiko gets curious and offers help (once per screen).
+  const idleKey = phase === "play" && question && !feedback && !checking && !input && !transition ? `${turn}` : null;
+  const nudged = useRef<string | null>(null);
+  useEffect(() => {
+    if (!idleKey || nudged.current === idleKey) return;
+    const timer = window.setTimeout(() => { nudged.current = idleKey; dispatch({ type: "IDLE_NUDGE", hasHint: Boolean(question?.hint) }); }, 14_000);
+    return () => window.clearTimeout(timer);
+  }, [idleKey, nod, dispatch, question?.hint]);
+
   // Keyboard: number keys pick an answer, Enter checks or continues (buttons and inputs handle their own keys).
   const keys = useRef<(event: KeyboardEvent) => void>(() => undefined);
   useEffect(() => {
     keys.current = (event) => {
       const target = event.target as HTMLElement | null;
-      if (event.metaKey || event.ctrlKey || event.altKey || tipsOpen || settingsOpen || phase !== "play") return;
+      if (event.metaKey || event.ctrlKey || event.altKey || tipsOpen || phase !== "play") return;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       if (event.key === "Enter") {
         if (target && (/^(BUTTON|A)$/.test(target.tagName) || target.getAttribute("role") === "slider")) return;
@@ -317,6 +355,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const hasTips = lesson.cards.length > 0;
   const perfect = phase === "done" && mistakes === 0 && total > 0;
   const tip = step?.kind === "tip" ? lesson.cards[step.index] : null;
+  const split = wide && phase === "play" && question != null && hasVisual(question);
 
   return (
     <div ref={shell} className="ax-shell" data-motion={prefs.motion ? undefined : "off"}>
@@ -334,18 +373,14 @@ export function LessonPlayer({ slug }: { slug: string }) {
           </span>
         ) : null}
         <span className="inline-flex shrink-0 items-center gap-1 text-[13px] font-extrabold tabular-nums text-gold" aria-label={`${xpEarned} XP earned in this lesson`}><Zap className="h-4 w-4" fill="currentColor" aria-hidden />{xpEarned}</span>
-        <button type="button" className="ax-toggle" aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => { setFeedbackPrefs({ sound: !prefs.sound }); syncMusic(); }}>
-          <span key={String(prefs.sound)} className="ax-pop inline-flex">{prefs.sound ? <Volume2 className="h-5 w-5" aria-hidden /> : <VolumeX className="h-5 w-5" aria-hidden />}</span>
-        </button>
-        <div className="relative">
-          <button type="button" className="ax-toggle" aria-label="Lesson settings" aria-expanded={settingsOpen} onClick={() => { if (settingsOpen) closeSettings(); else { cue("open"); setSettingsOpen(true); } }}><Settings2 className="h-5 w-5" aria-hidden /></button>
-          {settingsMenu.shown ? <SettingsMenu prefs={prefs} closing={settingsMenu.closing} onClose={closeSettings} /> : null}
-        </div>
+        <AcademyAudioSettings />
       </div>
 
-      {/* The one scroll area of the lesson: everything between the header and the footer or tray. */}
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div className="mx-auto flex max-w-2xl flex-col gap-3 px-4 pb-8 pt-1 sm:px-6">
+      {/* The one scroll area of the lesson (between the header and the footer or tray); the cinematic
+          covers it between screens, and while it plays the content cannot be pressed (inert). */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" inert={transition != null}>
+        <div className={`mx-auto flex ${split ? "max-w-6xl" : wide ? "max-w-3xl" : "max-w-2xl"} flex-col gap-3 px-4 pb-8 pt-1 sm:px-6`}>
           {/* Tiko stays for the whole lesson: only his pose and bubble change between screens. */}
           {phase !== "save-error" ? <TutorStage stage={stage} nod={nod} onDismiss={hintOpen ? toggleHint : undefined} size={phase === "done" ? 96 : 76} /> : null}
 
@@ -356,19 +391,19 @@ export function LessonPlayer({ slug }: { slug: string }) {
                   <span className="ax-tip-label">Tip {step.index + 1} of {lesson.cards.length}</span>
                   <span className="text-[12px] font-bold text-muted">Unit {lesson.unit.number} · {lesson.title}</span>
                 </div>
-                <h1 className="text-[19px] font-bold leading-snug">{tip.title}</h1>
+                <h1 ref={heading} tabIndex={-1} className="text-[19px] font-bold leading-snug outline-none">{tip.title}</h1>
                 {tip.candles ? <div className="grid place-items-center"><CandleSketch candles={tip.candles} /></div> : null}
                 <Body text={tip.body} />
               </article>
             ) : null}
 
-            {phase === "play" && question ? (
-              <>
+            {phase === "play" && question ? (() => {
+              const card = (
                 <section className="ax-question">
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="mb-1 text-[11px] font-extrabold uppercase tracking-[0.12em] text-muted">{lesson.title}</p>
-                      <h1 className="text-[17px] font-bold leading-snug sm:text-[19px]">{question.prompt}</h1>
+                      <h1 ref={heading} tabIndex={-1} className="text-[17px] font-bold leading-snug outline-none sm:text-[19px]">{question.prompt}</h1>
                     </div>
                     {question.hint && !feedback ? (
                       <button type="button" className="ax-hint-btn" aria-expanded={hintOpen} onClick={toggleHint}>
@@ -377,11 +412,25 @@ export function LessonPlayer({ slug }: { slug: string }) {
                     ) : null}
                   </div>
                 </section>
-                <div className={feedback && !feedback.correct ? "ax-shake" : undefined}>
-                  <ExerciseView key={turn} question={question} draft={value} onDraft={(next) => setDraft({ turn, value: next })} onPick={picked} locked={locked} feedback={feedback} onSubmit={() => void check()} showPrompt={false} hideHint />
+              );
+              const props = { question, draft: value, onDraft: (next: Draft) => setDraft({ turn, value: next }), onPick: picked, locked, feedback, onSubmit: () => void check(), showPrompt: false, hideHint: true } as const;
+              const shake = feedback && !feedback.correct ? "ax-shake" : undefined;
+              // A trading mission on wide screens: a large chart on the left, the question and answers on the right.
+              return split ? (
+                <div className="ax-mission">
+                  <div className={shake}><ExerciseView key={`v${turn}`} {...props} part="visual" chartHeight={380} /></div>
+                  <div className="flex min-w-0 flex-col gap-4">
+                    {card}
+                    <div className={shake}><ExerciseView key={turn} {...props} part="controls" /></div>
+                  </div>
                 </div>
-              </>
-            ) : null}
+              ) : (
+                <>
+                  {card}
+                  <div className={shake}><ExerciseView key={turn} {...props} chartHeight={wide ? 320 : 240} /></div>
+                </>
+              );
+            })() : null}
 
             {phase === "saving" ? <p className="py-6 text-center text-[16px] font-bold text-muted">Saving your progress…</p> : null}
             {phase === "save-error" ? (
@@ -413,6 +462,9 @@ export function LessonPlayer({ slug }: { slug: string }) {
         </div>
       </div>
 
+      <AcademyTransition run={transition} />
+      </div>
+
       {/* Footer: the action for this screen, or the verdict tray once the server has answered. */}
       {phase === "play" && question && (feedback || checkError) ? (
         <AcademyFeedbackTray feedback={feedback} error={checkError} praise={praiseFor(question.id)} combo={combo} onContinue={proceed} onRetry={() => void check()} retrying={checking} closing={leaving} />
@@ -428,7 +480,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
             {phase === "play" && question ? (
               <>
                 {hasTips ? <button type="button" className="ax-btn-ghost max-sm:px-3" onClick={openTips} aria-label="Review the lesson tips"><BookOpen className="h-5 w-5" aria-hidden /><span className="max-sm:hidden">Tips</span></button> : null}
-                <button type="button" className={`ax-btn ax-check ml-auto min-w-40 flex-1 sm:flex-none ${input && !checking ? "ax-ready" : ""}`} data-tone="success" disabled={!input || checking || leaving} onClick={() => void check()}>
+                <button type="button" className={`ax-btn ax-check ml-auto min-w-40 flex-1 sm:flex-none ${input && !checking ? "ax-ready" : ""}`} data-tone="success" disabled={!input || checking || leaving || transition != null} onClick={() => void check()}>
                   <span className="ax-check-label" data-busy={checking ? "true" : undefined}><span className="ax-spin" aria-hidden /><span>{checking ? "Checking" : "Check"}</span></span>
                 </button>
               </>
@@ -451,36 +503,6 @@ export function LessonPlayer({ slug }: { slug: string }) {
 
       {tipsSheet.shown ? <TipsSheet lesson={lesson} closing={tipsSheet.closing} onClose={closeTips} /> : null}
     </div>
-  );
-}
-
-/** Sound, vibration and animation, each on its own switch (kept on this device). */
-function SettingsMenu({ prefs, closing, onClose }: { prefs: FeedbackPrefs; closing: boolean; onClose: () => void }) {
-  const first = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    first.current?.focus();
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const rows: Array<[keyof FeedbackPrefs, string, string]> = [
-    ["sound", "Sound effects", "Taps, answers, rewards and panels"],
-    ["music", "Music", "A calm background tune while you learn"],
-    ["haptics", "Vibration", "On phones that support it"],
-    ["motion", "Animations", "Tiko's moves, transitions and sparkles"],
-  ];
-  return (
-    <>
-      <button type="button" tabIndex={-1} aria-label="Close settings" className="fixed inset-0 z-40 cursor-default" onClick={onClose} />
-      <div role="dialog" aria-label="Lesson settings" className="ax-menu" data-closing={closing ? "true" : undefined}>
-        {rows.map(([key, label, note], index) => (
-          <button key={key} ref={index === 0 ? first : undefined} type="button" role="switch" aria-checked={prefs[key]} className="ax-menu-row" onClick={() => { setFeedbackPrefs({ [key]: !prefs[key] }); syncMusic(); }}>
-            <span className="min-w-0 flex-1 text-left"><span className="block text-[14px] font-bold">{label}</span><span className="block text-[12px] text-muted">{note}</span></span>
-            <span className="ax-switch" data-on={prefs[key] ? "true" : "false"} aria-hidden><i /></span>
-          </button>
-        ))}
-      </div>
-    </>
   );
 }
 

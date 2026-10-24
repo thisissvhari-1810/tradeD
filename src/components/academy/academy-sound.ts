@@ -10,14 +10,16 @@ import { useSyncExternalStore } from "react";
  * animation are separate switches, kept on this device.
  */
 
-export type FeedbackPrefs = { sound: boolean; music: boolean; haptics: boolean; motion: boolean };
+/** Volumes are 0–1. `muted` silences everything at once without losing the levels. */
+export type FeedbackPrefs = { sound: boolean; music: boolean; haptics: boolean; motion: boolean; muted: boolean; master: number; musicVolume: number; sfxVolume: number };
 export type Cue =
   | "tap" | "select" | "check" | "correct" | "wrong" | "dialogue" | "hint" | "combo" | "unlock" | "complete"
-  | "open" | "close" | "page" | "start" | "locked";
+  | "open" | "close" | "page" | "reveal" | "start" | "locked";
 
 // v2: sound and music now start on (the first Academy version started silent, which read as "no sound").
 const KEY = "td-academy-feedback-v2";
-const DEFAULT: FeedbackPrefs = { sound: true, music: true, haptics: true, motion: true };
+const DEFAULT: FeedbackPrefs = { sound: true, music: true, haptics: true, motion: true, muted: false, master: 0.85, musicVolume: 0.6, sfxVolume: 0.9 };
+const clamp = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : fallback);
 const listeners = new Set<() => void>();
 let cache: FeedbackPrefs | null = null;
 
@@ -26,7 +28,13 @@ function read(): FeedbackPrefs {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<FeedbackPrefs>) : {};
-    cache = { ...DEFAULT, ...parsed };
+    cache = {
+      ...DEFAULT,
+      ...parsed,
+      master: clamp(parsed.master, DEFAULT.master),
+      musicVolume: clamp(parsed.musicVolume, DEFAULT.musicVolume),
+      sfxVolume: clamp(parsed.sfxVolume, DEFAULT.sfxVolume),
+    };
   } catch {
     cache = DEFAULT;
   }
@@ -41,7 +49,8 @@ export function setFeedbackPrefs(next: Partial<FeedbackPrefs>) {
   cache = { ...read(), ...next };
   try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch { /* storage unavailable: kept for this visit */ }
   listeners.forEach((listener) => listener());
-  if (next.sound) cue("select");
+  applyVolumes();
+  if (next.sound || next.muted === false) cue("select");
 }
 
 export function useFeedbackPrefs() {
@@ -54,7 +63,7 @@ export function useFeedbackPrefs() {
 
 /* ---------------- the audio graph ---------------- */
 
-type Graph = { context: AudioContext; sfx: GainNode; music: GainNode; echo: GainNode };
+type Graph = { context: AudioContext; master: GainNode; sfx: GainNode; music: GainNode; echo: GainNode; musicLevel: GainNode };
 let graph: Graph | null = null;
 
 /** The shared audio graph (created on first use, after a gesture). Null where Web Audio is missing. */
@@ -67,7 +76,10 @@ export function audioGraph(): Graph | null {
   const compressor = context.createDynamicsCompressor();
   compressor.threshold.value = -18;
   compressor.ratio.value = 3;
-  compressor.connect(context.destination);
+  // Master volume (and mute) sit after the compressor, so the levels are what the learner set.
+  const master = context.createGain();
+  master.connect(context.destination);
+  compressor.connect(master);
   // A short, quiet echo gives the effects a little space.
   const delay = context.createDelay(1);
   delay.delayTime.value = 0.16;
@@ -79,14 +91,36 @@ export function audioGraph(): Graph | null {
   delay.connect(feedback).connect(delay);
   delay.connect(compressor);
   const sfx = context.createGain();
-  sfx.gain.value = 0.9;
   sfx.connect(compressor);
   sfx.connect(echo);
+  // The music bus: `music` is the learner's music volume, `musicLevel` the player's fades (0–1).
   const music = context.createGain();
-  music.gain.value = 0;
+  const musicLevel = context.createGain();
+  musicLevel.gain.value = 0;
+  musicLevel.connect(music);
   music.connect(compressor);
-  graph = { context, sfx, music, echo };
+  graph = { context, master, sfx, music, echo, musicLevel };
+  applyVolumes();
   return graph;
+}
+
+/** Sets the gains from the learner's settings (smoothly, so a slider never clicks). */
+function applyVolumes() {
+  if (!graph) return;
+  const prefs = read();
+  const at = graph.context.currentTime;
+  const set = (node: GainNode, value: number) => { node.gain.cancelScheduledValues(at); node.gain.setTargetAtTime(value, at, 0.04); };
+  set(graph.master, prefs.muted ? 0 : prefs.master);
+  set(graph.sfx, prefs.sound ? prefs.sfxVolume * 1.1 : 0);
+  set(graph.music, prefs.music ? prefs.musicVolume : 0);
+}
+
+/** Whether the browser has let audio start (it needs a tap first). */
+export function audioState(): "running" | "blocked" | "unsupported" {
+  if (typeof window === "undefined") return "unsupported";
+  const Context = window.AudioContext ?? (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext;
+  if (!Context) return "unsupported";
+  return graph?.context.state === "running" ? "running" : "blocked";
 }
 
 /** Unlocks audio from a user gesture (browsers keep it suspended until then). */
@@ -113,6 +147,7 @@ const TONES: Record<Cue, Tone> = {
   open: { wave: "sine", gain: 0.13, notes: [[420, 0, 0.13]], glide: 2.1, noise: true },
   close: { wave: "sine", gain: 0.11, notes: [[820, 0, 0.12]], glide: 0.5, noise: true },
   page: { wave: "sine", gain: 0.1, notes: [[560, 0, 0.1]], glide: 1.6, noise: true },
+  reveal: { wave: "sine", gain: 0.11, notes: [[E5, 0, 0.09], [A5, 0.06, 0.1], [E6, 0.12, 0.18]], layer: 0.3 },
   start: { wave: "triangle", gain: 0.22, notes: [[G5 / 2, 0, 0.1], [C5, 0.08, 0.1], [E5, 0.16, 0.1], [G5, 0.24, 0.3]], layer: 0.4 },
   locked: { wave: "square", gain: 0.06, notes: [[196, 0, 0.09], [185, 0.1, 0.12]] },
 };
@@ -187,7 +222,7 @@ export function cue(kind: Cue) {
   lastAny = now;
   const prefs = read();
   try {
-    if (prefs.sound) play(kind);
+    if (prefs.sound && !prefs.muted && prefs.master > 0 && prefs.sfxVolume > 0) play(kind);
     const pattern = VIBRATION[kind];
     if (prefs.haptics && pattern && typeof navigator.vibrate === "function") navigator.vibrate(pattern);
   } catch { /* audio or vibration unavailable: the visual feedback still shows */ }

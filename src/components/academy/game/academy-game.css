@@ -456,10 +456,11 @@
 .mq-tiko[data-mood="look"] .mq-tiko-eyes, .mq-tiko[data-mood="listening"] .mq-tiko-eyes { translate: 4px 3px; transition: translate 260ms ease; }
 .mq-tiko[data-mood="look"] .mq-tiko-body { animation: tikoHover 3.2s ease-in-out infinite; }
 
-/* talking: the mouth moves while a bubble opens (any mood) */
-.mq-tiko-mouth { transform-origin: center; }
-.mq-tiko[data-talking="true"] .mq-tiko-mouth { animation: tikoTalk 220ms ease-in-out 5 alternate; }
-@keyframes tikoTalk { from { transform: scaleY(1); } to { transform: scaleY(2.2) scaleX(.85); } }
+/* curious: head tilted up, eyes up, antenna twitching (a pause on a question) */
+.mq-tiko[data-mood="curious"] .mq-tiko-head { transform: rotate(-9deg) translateY(-2px); transition: transform 320ms cubic-bezier(.3, 1.4, .5, 1); }
+.mq-tiko[data-mood="curious"] .mq-tiko-eyes { translate: -2px -3px; transition: translate 260ms ease; }
+.mq-tiko[data-mood="curious"] .mq-tiko-antenna { animation: tikoPerk 700ms ease-in-out 3; }
+.mq-tiko[data-mood="curious"] .mq-tiko-body { animation: tikoHover 3s ease-in-out infinite; }
 
 /* ---------- tutor dialogue ---------- */
 .mq-bubble { position: relative; padding: 14px 16px; border-radius: 18px; background: var(--mq-bubble, #fffaf0); color: #0d1726; box-shadow: 0 4px 0 #d8b46a, 0 14px 30px rgba(0, 0, 0, .25); animation: pop2 240ms cubic-bezier(.2, .9, .3, 1.3); }
@@ -481,4 +482,83 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mq-tiko *, .mq-tiko, .mq-bubble, .mq-title-card, .mq-landing, .mq-ticker-track { animation: none !important; transition: none !important; }
+}
+
+/* ---------- the four worlds: stop shapes ---------- */
+.mq-stop[data-world="metropolis"] .mq-stop-face, .mq-stop[data-world="metropolis"]::before { border-radius: 28%; }
+.mq-stop[data-world="metropolis"] .mq-stop-ring { border-radius: 30%; }
+.mq-stop[data-world="circuit"] .mq-stop-face, .mq-stop[data-world="circuit"]::before { border-radius: 20%; }
+.mq-stop[data-world="circuit"] .mq-stop-ring { border-radius: 22%; }
+.mq-stop[data-world="circuit"] .mq-stop-face { box-shadow: inset 0 -6px 0 rgba(0, 0, 0, .2), inset 0 0 0 3px rgba(255, 255, 255, .18), 0 0 0 2px rgba(56, 225, 255, .25); }
+.mq-stop[data-world="cosmos"] .mq-stop-face { background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .7), transparent 34%), radial-gradient(circle at 50% 50%, var(--face-a), var(--face-b) 78%); }
+.mq-stop[data-world="cosmos"]::before { inset: 22% -14% 4% -14%; border-radius: 50%; background: transparent; border: 3px solid color-mix(in srgb, var(--rim) 60%, #fff); box-shadow: none; transform: rotate(-12deg) scaleY(.36); }
+
+/* In progress: a ring of how much of the lesson is answered. */
+.mq-progress-ring { position: absolute; inset: -16%; width: 132%; height: 132%; pointer-events: none; z-index: 2; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .4)); }
+/* A perfect lesson: a gold crown and a slow sparkle. */
+.mq-crown { position: absolute; top: -14px; right: -6px; z-index: 3; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(180deg, #ffe49a, #f0ac1c); color: #6b4300; border: 2px solid #fff6dc; box-shadow: 0 3px 0 rgba(0, 0, 0, .3); animation: crownShine 3.2s ease-in-out infinite; }
+@keyframes crownShine { 0%, 80%, 100% { transform: rotate(0) scale(1); } 88% { transform: rotate(-10deg) scale(1.15); } }
+.mq-stop[data-perfect="true"]::after { content: ""; position: absolute; inset: -12%; border-radius: inherit; border: 2px solid rgba(255, 210, 90, .7); animation: perfectPulse 2.8s ease-in-out infinite; pointer-events: none; }
+@keyframes perfectPulse { 0%, 100% { opacity: .2; transform: scale(.96); } 50% { opacity: .9; transform: scale(1.04); } }
+
+/* ---------- world scenery motion (purposeful, slow, paused with the tab) ---------- */
+.mq-ticker-scroll { animation: tickerScroll 6s linear infinite; }
+@keyframes tickerScroll { from { transform: translateX(0); } to { transform: translateX(-96px); } }
+.mq-neon { filter: drop-shadow(0 0 6px currentColor); animation: neonPulse 2.6s ease-in-out infinite; }
+@keyframes neonPulse { 0%, 100% { opacity: .75; } 50% { opacity: 1; } }
+.mq-vault-wheel { animation: vaultTurn 14s linear infinite; }
+@keyframes vaultTurn { to { transform: rotate(360deg); } }
+.mq-beam-soft { animation: beamSoft 4s ease-in-out infinite; }
+@keyframes beamSoft { 0%, 100% { opacity: .1; } 50% { opacity: .26; } }
+.mq-orbit { animation: orbitTurn 18s linear infinite; transform-box: view-box; transform-origin: 0 0; }
+.mq-orbit-slow { animation: orbitTurn 40s linear infinite; transform-origin: 0 0; }
+@keyframes orbitTurn { to { transform: rotate(360deg); } }
+.mq-float { animation: floatY 5s ease-in-out infinite; transform-box: fill-box; }
+@keyframes floatY { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+.mq-comet { animation: comet 7s ease-in-out infinite; }
+@keyframes comet { 0%, 70% { opacity: 0; transform: translate(0, 0); } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(70px, -24px); } }
+.mq-gear { animation: vaultTurn 9s linear infinite; }
+.mq-gear-slow { animation: vaultTurn 24s linear infinite; transform-origin: 0 0; }
+.mq-scan { animation: scanDown 3s ease-in-out infinite; }
+@keyframes scanDown { 0%, 100% { transform: translateY(0); opacity: .2; } 50% { transform: translateY(150px); opacity: .9; } }
+.mq-wave-run { stroke-dasharray: 40 12; animation: waveRun 2s linear infinite; }
+@keyframes waveRun { to { stroke-dashoffset: -104; } }
+.mq-blink { animation: ledBlink 1.6s steps(2, jump-none) infinite; }
+@keyframes ledBlink { 50% { opacity: .25; } }
+.mq-pulse { stroke-dasharray: 18 46; animation: pulseRun 1.8s linear infinite; }
+@keyframes pulseRun { to { stroke-dashoffset: -128; } }
+.mq-orbit-dots { animation: orbitDots 2.4s linear infinite; }
+@keyframes orbitDots { to { stroke-dashoffset: -46; } }
+
+/* ---------- map controls ---------- */
+.mq-map-controls { position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 20; display: flex; flex-direction: column; gap: 8px; }
+.mq-map-control { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 16px; border: 1px solid rgba(255, 255, 255, .22); background: rgba(8, 16, 30, .7); color: #fff; box-shadow: 0 8px 22px rgba(0, 0, 0, .35); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); cursor: pointer; transition: transform 140ms ease, background-color 140ms ease; }
+.mq-map-control:hover { background: rgba(8, 16, 30, .88); transform: translateY(-2px); }
+.mq-map-control:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
+/* ---------- choose your market world ---------- */
+.mq-picker { position: fixed; inset: 0; z-index: 95; display: grid; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(120% 80% at 50% 0%, rgba(30, 64, 110, .96), rgba(6, 12, 24, .98)); animation: pickerIn 320ms cubic-bezier(.2, .8, .3, 1); }
+@keyframes pickerIn { from { opacity: 0; } to { opacity: 1; } }
+.mq-picker-inner { width: min(1120px, 100%); margin: auto; padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 18px; }
+.mq-picker-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.mq-world-card { position: relative; display: flex; flex-direction: column; overflow: hidden; border-radius: 22px; border: 2px solid rgba(255, 255, 255, .14); background: rgba(10, 18, 34, .8); cursor: pointer; text-align: left; transition: transform 180ms cubic-bezier(.3, 1.4, .5, 1), border-color 180ms ease, box-shadow 220ms ease; animation: cardIn 420ms cubic-bezier(.2, .9, .3, 1.2) both; }
+.mq-world-card:nth-child(2) { animation-delay: 60ms; }
+.mq-world-card:nth-child(3) { animation-delay: 120ms; }
+.mq-world-card:nth-child(4) { animation-delay: 180ms; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(18px) scale(.96); } to { opacity: 1; transform: none; } }
+.mq-world-card:hover { transform: translateY(-4px); border-color: rgba(56, 225, 255, .5); }
+.mq-world-card:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+.mq-world-card[data-active="true"] { border-color: #38e1ff; box-shadow: 0 0 0 4px rgba(56, 225, 255, .25), 0 18px 40px rgba(0, 0, 0, .45); }
+.mq-world-card-art { display: block; width: 100%; aspect-ratio: 16 / 10; height: auto; }
+.mq-world-check { display: grid; place-items: center; flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, .35); color: #062433; }
+.mq-world-card[data-active="true"] .mq-world-check { background: #38e1ff; border-color: #38e1ff; animation: axPopIn 300ms cubic-bezier(.3, 1.6, .5, 1); }
+.mq-world-current { position: absolute; left: 10px; top: 10px; padding: 4px 10px; border-radius: 999px; background: rgba(8, 16, 30, .8); color: #ffc83d; font: 800 11px/1.2 ui-sans-serif, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+.mq-picker-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.mq-ghost-dark { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .25); color: #fff; }
+.mq-ghost-dark:hover { background: rgba(255, 255, 255, .16); }
+.mq-preview-bar { position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); z-index: 90; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: min(760px, calc(100vw - 24px)); padding: 12px 14px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, .18); background: rgba(8, 16, 30, .88); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-shadow: 0 18px 44px rgba(0, 0, 0, .45); transform: translateX(-50%); animation: previewIn 320ms cubic-bezier(.2, .9, .3, 1.2); }
+@keyframes previewIn { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translateX(-50%); } }
+.mq-cinematic { position: fixed; inset: 0; z-index: 96; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mq-world-card, .mq-picker, .mq-preview-bar, .mq-crown, .mq-stop[data-perfect="true"]::after { animation: none !important; }
 }

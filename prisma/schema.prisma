@@ -114,6 +114,8 @@ model User {
   notes                String  @default("")
   /// When the user finished or skipped the Academy's opening cinematic (null: show it).
   academyIntroAt       DateTime?
+  /// The Academy map world the learner chose (metropolis | cosmos | circuit | expedition); null until chosen.
+  academyTheme         String?
   createdById    String?
   createdBy      User?      @relation("UserCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers   User[]     @relation("UserCreator")

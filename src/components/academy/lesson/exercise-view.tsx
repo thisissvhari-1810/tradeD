@@ -57,7 +57,7 @@ export function hasVisual(question: PublicQuestion) {
  * One exercise, any kind. Controlled: the parent keeps the draft and checks it with the server; once
  * `feedback` arrives the tiles show the verdict (correct, wrong, and the right one where it is known).
  */
-export function ExerciseView({ question, draft, onDraft, locked, feedback, onSubmit, showPrompt = true, onPick, hideHint = false }: {
+export function ExerciseView({ question, draft, onDraft, locked, feedback, onSubmit, showPrompt = true, onPick, hideHint = false, part = "all", chartHeight = 230 }: {
   question: PublicQuestion;
   draft: Draft;
   onDraft: (draft: Draft) => void;
@@ -70,6 +70,12 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
   onPick?: () => void;
   /** True when the lesson shows the hint itself (in Tiko's bubble). */
   hideHint?: boolean;
+  /**
+   * Which part to draw: everything, only the chart or illustration (`visual`), or only the answer
+   * controls — so a wide screen can show a large chart beside the question.
+   */
+  part?: "all" | "visual" | "controls";
+  chartHeight?: number;
 }) {
   const [hint, setHint] = useState(false);
   const pick = (next: Draft) => {
@@ -104,6 +110,9 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
   );
 
   let body: React.ReactNode = null;
+  let visual: React.ReactNode = question.candles?.length
+    ? <div className="ax-sketch grid place-items-center rounded-2xl border-2 border-border bg-panel p-3"><CandleSketch candles={question.candles} className={chartHeight > 260 ? "h-56 w-full max-w-md" : undefined} /></div>
+    : null;
   switch (question.kind) {
     case "choice":
       body = <div className="flex flex-col gap-2.5" role="group" aria-label="Answers">{question.options.map((label, index) => tile(String(index), label, String(index + 1), draft.choice === index, verdict(draft.choice === index, label), () => pick({ ...draft, choice: index })))}</div>;
@@ -146,9 +155,9 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
       break;
     case "tapcandle": {
       const correct = feedback ? (feedback.correct ? draft.candle ?? null : Number(/(\d+)/.exec(feedback.answer)?.[1] ?? 0) - 1) : null;
+      visual = <EduChart candles={question.chart} height={chartHeight} numbered onSelect={locked ? undefined : (index) => pick({ ...draft, candle: index })} selected={draft.candle ?? null} result={{ correct: correct != null && correct >= 0 ? correct : null }} label="Educational example · made-up prices · tap a candle" />;
       body = (
         <div className="flex flex-col gap-2.5">
-          <EduChart candles={question.chart} height={230} numbered onSelect={locked ? undefined : (index) => pick({ ...draft, candle: index })} selected={draft.candle ?? null} result={{ correct: correct != null && correct >= 0 ? correct : null }} label="Educational example · made-up prices · tap a candle" />
           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${question.chart.length}, minmax(0, 1fr))` }} role="group" aria-label="Candles">
             {question.chart.map((_, index) => {
               const selected = draft.candle === index;
@@ -174,9 +183,9 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
       const zone = feedback && !feedback.correct ? (feedback.answer.match(/[\d.]+/g)?.map(Number).slice(0, 2) as [number, number] | undefined) ?? null : null;
       const move = (next: number) => { if (!locked && next !== draft.price) onDraft({ ...draft, price: next }); };
       const nudge = (by: number) => move(Math.min(question.range[1], Math.max(question.range[0], Math.round((price + by) / question.step) * question.step)));
+      visual = <PriceLineChart candles={question.chart} price={price} step={question.step} range={question.range} onChange={locked ? undefined : move} tone={tone} zone={zone && zone.length === 2 ? zone : null} height={chartHeight + 20} />;
       body = (
         <div className="flex flex-col gap-2.5">
-          <PriceLineChart candles={question.chart} price={price} step={question.step} range={question.range} onChange={locked ? undefined : move} tone={tone} zone={zone && zone.length === 2 ? zone : null} />
           <div className="flex items-center gap-2">
             <button type="button" className="ax-btn-ghost w-14 px-0" disabled={locked} aria-label={`Lower the line by ₹${question.step}`} onClick={() => nudge(-question.step)}><Minus className="h-5 w-5" aria-hidden /></button>
             <p className="flex-1 text-center text-[15px] font-bold tabular-nums" aria-live="polite">Stop-loss at ₹{price.toFixed(1)}{draft.price == null ? <span className="block text-[12px] font-semibold text-muted">Drag the line, tap the chart, or use − and +</span> : null}</p>
@@ -188,10 +197,11 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
     }
   }
 
+  if (part === "visual") return visual ? <section className="ax-visual">{visual}</section> : null;
   return (
     <section className="flex flex-col gap-4">
       {showPrompt ? <h2 className="text-[18px] font-bold leading-snug">{question.prompt}</h2> : null}
-      {question.candles?.length ? <div className="grid place-items-center rounded-2xl border-2 border-border bg-panel p-3"><CandleSketch candles={question.candles} /></div> : null}
+      {part === "all" ? visual : null}
       {body}
       {question.hint && !feedback && !hideHint ? (
         hint

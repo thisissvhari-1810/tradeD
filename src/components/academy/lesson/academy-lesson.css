@@ -327,7 +327,6 @@
 .ax-option { overflow: hidden; }
 /* `scale` (not transform) so the press composes with each control's own movement. */
 .ax-press { animation: axPress 300ms cubic-bezier(.3, 1.5, .5, 1); }
-@keyframes axPress { 0% { scale: 1; } 30% { scale: .93; } 70% { scale: 1.03; } 100% { scale: 1; } }
 .ax-ripple { position: absolute; border-radius: 50%; background: currentColor; opacity: .25; transform: scale(0); pointer-events: none; animation: axRipple 620ms cubic-bezier(.2, .7, .3, 1) forwards; }
 @keyframes axRipple { to { transform: scale(1); opacity: 0; } }
 
@@ -351,6 +350,71 @@
 .mq-music-btn[data-on="false"]::after { content: ""; position: absolute; left: 9px; right: 9px; top: 50%; height: 2px; border-radius: 2px; background: currentColor; transform: rotate(-40deg); }
 .mq-music-btn[data-on="true"] svg { animation: axMusic 1.4s ease-in-out infinite; }
 @keyframes axMusic { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-2px) rotate(-8deg); } }
+
+/* ---------- audio & settings panel ---------- */
+.ax-audio { width: min(300px, calc(100vw - 24px)); max-height: min(560px, calc(100dvh - 90px)); overflow-y: auto; overscroll-behavior: contain; color: var(--text); }
+.ax-status { padding: 3px 8px; border-radius: 999px; font: 800 10px/1.3 ui-sans-serif, system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; background: var(--sunken); color: var(--muted); }
+.ax-status[data-state="running"] { background: var(--ax-correct-soft); color: var(--ax-correct); }
+.ax-status[data-state="blocked"] { background: var(--warning-soft); color: var(--warning); }
+.ax-status[data-state="muted"] { background: var(--ax-wrong-soft); color: var(--ax-wrong); }
+.ax-slider-row { display: flex; flex-direction: column; gap: 6px; padding: 4px 10px 10px; }
+.ax-slider-row[data-disabled="true"] { opacity: .45; }
+.ax-range { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer; }
+.ax-range:disabled { cursor: default; }
+.ax-range::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--ax-accent) var(--val), var(--border) var(--val)); }
+.ax-range::-moz-range-track { height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--ax-accent) var(--val), var(--border) var(--val)); }
+.ax-range::-webkit-slider-thumb { -webkit-appearance: none; margin-top: -7px; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 3px solid var(--ax-accent); box-shadow: 0 2px 6px rgba(0, 0, 0, .25); transition: transform 120ms ease; }
+.ax-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; border: 3px solid var(--ax-accent); }
+.ax-range:active::-webkit-slider-thumb { transform: scale(1.18); }
+.ax-range:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; border-radius: 6px; }
+
+/* ---------- the trading mission layout (wide screens) ---------- */
+.ax-mission { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.ax-mission .ax-visual { position: sticky; top: 8px; }
+
+/* Reward bubbles (milestones, completion) are gold. */
+.ax-speech[data-tone="reward"] { border-color: color-mix(in srgb, #ffc83d 70%, var(--border)); background: color-mix(in srgb, #ffc83d 16%, var(--panel)); }
+.ax-stage[data-glow="reward"] .ax-halo { opacity: 1; transform: scale(1.12); background: radial-gradient(circle, rgba(255, 200, 61, .45), transparent 68%); }
+
+/* ---------- the cinematic between screens ---------- */
+.ax-xfade { position: absolute; inset: 0; z-index: 30; overflow: hidden; pointer-events: none; --dur: 700ms; }
+.ax-xfade > * { position: absolute; pointer-events: none; }
+.ax-xfade-haze { inset: 0; animation: xHaze var(--dur) ease-in-out forwards; }
+@keyframes xHaze { 0% { opacity: 0; } 38%, 56% { opacity: 1; } 100% { opacity: 0; } }
+.ax-xfade-flare { inset: -20%; background: radial-gradient(circle at 50% 50%, rgba(255, 220, 120, .55), transparent 55%); animation: xFlare var(--dur) ease-out forwards; }
+@keyframes xFlare { 0%, 30% { opacity: 0; transform: scale(.6); } 50% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.4); } }
+
+/* Expedition: drifting clouds and dust. */
+.ax-xfade[data-style="clouds"] .ax-xfade-haze { background: linear-gradient(100deg, rgba(240, 246, 255, .2), rgba(240, 246, 255, .95) 45%, rgba(225, 236, 250, .95) 60%, rgba(240, 246, 255, .25)); }
+.ax-cloud { right: -60%; width: calc(70% * var(--s)); aspect-ratio: 2.4; border-radius: 50%; background: radial-gradient(ellipse at 40% 45%, #ffffff 0 38%, rgba(255, 255, 255, .85) 52%, rgba(255, 255, 255, 0) 70%); filter: drop-shadow(0 18px 24px rgba(30, 50, 80, .15)); animation: xCloud var(--dur) cubic-bezier(.4, 0, .3, 1) forwards; }
+@keyframes xCloud { 0% { transform: translateX(0) scale(.9); opacity: .2; } 45% { opacity: 1; } 100% { transform: translateX(-210%) scale(1.15); opacity: 0; } }
+.ax-dust { width: 6px; height: 6px; border-radius: 50%; background: rgba(214, 180, 120, .8); animation: xDust var(--dur) ease-out forwards; }
+@keyframes xDust { 0% { opacity: 0; transform: translate(40px, 10px); } 40% { opacity: .9; } 100% { opacity: 0; transform: translate(-90px, -30px); } }
+
+/* Metropolis: city mist with glowing lights. */
+.ax-xfade[data-style="mist"] .ax-xfade-haze { background: linear-gradient(180deg, rgba(14, 34, 64, .5), rgba(18, 52, 84, .96) 40%, rgba(12, 40, 60, .96) 60%, rgba(14, 34, 64, .45)); }
+.ax-bokeh { width: var(--r); height: var(--r); border-radius: 50%; background: radial-gradient(circle, var(--c), transparent 70%); animation: xBokeh var(--dur) ease-in-out forwards; }
+@keyframes xBokeh { 0% { opacity: 0; transform: translateY(30px) scale(.5); } 45% { opacity: .95; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-40px) scale(1.3); } }
+
+/* Cosmos: a nebula and warp streaks. */
+.ax-xfade[data-style="nebula"] .ax-xfade-haze { background: radial-gradient(60% 70% at 30% 40%, rgba(167, 123, 255, .9), transparent 70%), radial-gradient(60% 70% at 70% 60%, rgba(56, 225, 255, .75), transparent 70%), rgba(10, 10, 38, .92); }
+.ax-warp { left: 50%; top: 50%; width: 40%; height: 2px; border-radius: 2px; background: linear-gradient(90deg, transparent, #fff); transform-origin: 0 50%; animation: xWarp var(--dur) cubic-bezier(.5, 0, .5, 1) forwards; }
+@keyframes xWarp { 0% { opacity: 0; transform: rotate(var(--a)) translateX(0) scaleX(.1); } 45% { opacity: 1; } 100% { opacity: 0; transform: rotate(var(--a)) translateX(120%) scaleX(1); } }
+
+/* Circuit: a digital scan with data pulses. */
+.ax-xfade[data-style="scan"] .ax-xfade-haze { background: rgba(8, 14, 22, .94); }
+.ax-scan-grid { inset: 0; background-image: linear-gradient(rgba(56, 225, 255, .14) 1px, transparent 1px), linear-gradient(90deg, rgba(56, 225, 255, .14) 1px, transparent 1px); background-size: 32px 32px; animation: xHaze var(--dur) ease-in-out forwards; }
+.ax-scan-line { left: 0; right: 0; top: 0; height: 3px; background: #38e1ff; box-shadow: 0 0 18px 6px rgba(56, 225, 255, .6); animation: xScan var(--dur) cubic-bezier(.5, 0, .5, 1) forwards; }
+@keyframes xScan { 0% { transform: translateY(-10px); opacity: 0; } 15% { opacity: 1; } 100% { transform: translateY(110vh); opacity: .2; } }
+.ax-data { left: -40%; width: 38%; height: 2px; background: linear-gradient(90deg, transparent, #3fe08d, #fff); animation: xData var(--dur) linear forwards; }
+@keyframes xData { 0% { transform: translateX(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateX(380%); opacity: 0; } }
+
+/* The press: a gentle compress (0.965), as the shared press feel for every control. */
+@keyframes axPress { 0% { scale: 1; } 30% { scale: .965; } 70% { scale: 1.02; } 100% { scale: 1; } }
+
+@media (max-width: 1023px) { .ax-mission { grid-template-columns: minmax(0, 1fr); } .ax-mission .ax-visual { position: static; } }
+@media (prefers-reduced-motion: reduce) { .ax-xfade { display: none; } }
+[data-motion="off"] .ax-xfade { display: none; }
 
 /* Animations switched off by the learner: everything still works, nothing moves. */
 [data-motion="off"] *, [data-motion="off"] *::before, [data-motion="off"] *::after { animation: none !important; transition: none !important; }

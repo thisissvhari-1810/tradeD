@@ -27,9 +27,11 @@ export type LessonEvent =
   | { type: "HINT_OPENED"; hint: string }
   | { type: "HINT_CLOSED" }
   | { type: "CONTINUE_PRESSED" }
+  /** The learner has paused on a question for a while (no pick yet). */
+  | { type: "IDLE_NUDGE"; hasHint: boolean }
   | { type: "LESSON_COMPLETED"; perfect: boolean; firstTime: boolean };
 
-export type SpeechTone = "info" | "good" | "soft" | "hint";
+export type SpeechTone = "info" | "good" | "soft" | "hint" | "reward";
 export type Reaction = {
   mood: TikoMood;
   /** What Tiko says (a new bubble), null to close the bubble, undefined to leave it as it is. */
@@ -86,7 +88,7 @@ export function reactTo(event: LessonEvent): Reaction {
       const text = combo === COMBO.milestone ? `${combo} in a row! Incredible!` : combo === COMBO.cheer ? `${combo} in a row! You're on fire!` : combo === COMBO.notice ? `${pick(RIGHT, event.index)} That's ${combo} in a row.` : pick(RIGHT, event.index);
       return {
         mood: combo >= COMBO.cheer && milestone ? "streak" : "celebrate",
-        say: { text, tone: "good" },
+        say: { text, tone: milestone ? "reward" : "good" },
         settle: { mood: "idle", after: combo >= COMBO.cheer && milestone ? 2600 : 1500 },
         sound: combo >= COMBO.cheer && milestone ? "combo" : "correct",
         burst: combo === COMBO.milestone ? "big" : "good",
@@ -106,11 +108,14 @@ export function reactTo(event: LessonEvent): Reaction {
     case "HINT_CLOSED":
       return { mood: "thinking", say: null };
     case "CONTINUE_PRESSED":
-      return { mood: "idle", say: null, sound: "page" };
+      // Tiko takes off with the transition; he lands for the next screen.
+      return { mood: "fly", say: null, sound: "page" };
+    case "IDLE_NUDGE":
+      return { mood: "curious", say: { text: event.hasHint ? "Stuck? Tap Hint and I'll give you a clue." : "Take your time. Read each option once more.", tone: "info" }, settle: { mood: "thinking", after: 1600 } };
     case "LESSON_COMPLETED":
       return {
         mood: event.perfect ? "streak" : "mission-complete",
-        say: { text: event.perfect ? "A perfect lesson! Not a single mistake." : event.firstTime ? "Lesson complete! Your progress is saved." : "Lesson reviewed. Nicely done.", tone: "good" },
+        say: { text: event.perfect ? "A perfect lesson! Not a single mistake." : event.firstTime ? "Lesson complete! Your progress is saved." : "Lesson reviewed. Nicely done.", tone: "reward" },
         sound: "complete",
         burst: "big",
       };
