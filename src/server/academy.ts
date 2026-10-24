@@ -53,7 +53,7 @@ function lessonCard(lesson: Lesson, state: LessonState, unit: Unit, score = 0) {
 
 /** Everything the Academy home and learning path need, for the signed-in user. */
 export async function academyOverview(user: SessionUser) {
-  const state = await loadState(user.id);
+  const [state, profile] = await Promise.all([loadState(user.id), prisma.user.findUnique({ where: { id: user.id }, select: { academyIntroAt: true } })]);
   const streak = streakFrom(state.days, state.today);
   const scores = new Map(state.progress.map((row) => [row.lessonSlug, row.bestScore]));
   const units = UNITS.map((unit) => {
@@ -74,7 +74,14 @@ export async function academyOverview(user: SessionUser) {
     total: units.reduce((sum, unit) => sum + unit.total, 0),
     badges: BADGES.map((badge) => ({ ...badge, earnedAt: held.get(badge.slug) ?? null })),
     rules: { passPercent: PASS_PERCENT, xp: XP_RULES },
+    introSeen: profile?.academyIntroAt != null,
   };
+}
+
+/** Records that the opening cinematic was watched or skipped (so it is not forced again). */
+export async function academyIntroSeen(user: SessionUser) {
+  await prisma.user.updateMany({ where: { id: user.id, academyIntroAt: null }, data: { academyIntroAt: new Date() } });
+  return { introSeen: true };
 }
 
 /** A lesson to study: cards and questions without answers. Locked lessons are refused. */

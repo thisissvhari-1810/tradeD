@@ -112,6 +112,8 @@ model User {
   featOrderHistory     Boolean @default(true)
   featAnalytics        Boolean @default(true)
   notes                String  @default("")
+  /// When the user finished or skipped the Academy's opening cinematic (null: show it).
+  academyIntroAt       DateTime?
   createdById    String?
   createdBy      User?      @relation("UserCreator", fields: [createdById], references: [id], onDelete: SetNull)
   createdUsers   User[]     @relation("UserCreator")

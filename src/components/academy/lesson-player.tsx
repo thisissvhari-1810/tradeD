@@ -25,7 +25,7 @@ type LessonData = {
   answeredCorrectly: string[];
   passPercent: number;
 };
-type Feedback = { correct: boolean; explanation: string; mistake: string | null; answer: string; xp: number };
+export type Feedback = { correct: boolean; explanation: string; mistake: string | null; answer: string; xp: number };
 type Completion = { score: number; firstTime: boolean; xp: number; xpTotal: number; newBadges: Array<{ name: string; description: string }>; streak: { current: number; todayDone: boolean }; level: { level: number; title: string } };
 
 /** One lesson: read the cards, answer the questions (graded on the server), then complete it. */
@@ -217,7 +217,7 @@ function Body({ text }: { text: string }) {
   );
 }
 
-function QuestionView({ question, feedback, busy, onSubmit }: { question: PublicQuestion; feedback: Feedback | null; busy: boolean; onSubmit: (input: AnswerInput) => void }) {
+export function QuestionView({ question, feedback, busy, onSubmit }: { question: PublicQuestion; feedback: Feedback | null; busy: boolean; onSubmit: (input: AnswerInput) => void }) {
   const [choice, setChoice] = useState<number | null>(null);
   const [bool, setBool] = useState<boolean | null>(null);
   const [text, setText] = useState("");

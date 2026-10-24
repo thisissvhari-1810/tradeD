@@ -342,3 +342,83 @@
   .mq-road-reveal, .mq-road-done-fresh { stroke-dashoffset: 0; }
   .mq-parallax-far, .mq-parallax-near { transform: none !important; }
 }
+
+/* ---------- Tiko, the guide ---------- */
+.mq-tiko { position: relative; display: inline-block; flex-shrink: 0; filter: drop-shadow(0 8px 12px rgba(0, 0, 0, .25)); }
+.mq-tiko svg * { transform-box: fill-box; }
+.mq-tiko-body, .mq-tiko-head, .mq-tiko-arm-l, .mq-tiko-arm-r, .mq-tiko-antenna, .mq-tiko-shadow, .mq-tiko-flame { transform-origin: center; }
+.mq-tiko-arm-l { transform-origin: 90% 10%; }
+.mq-tiko-arm-r { transform-origin: 10% 10%; }
+.mq-tiko-head { transform-origin: 50% 90%; }
+.mq-tiko-antenna { transform-origin: 50% 100%; }
+.mq-tiko-flame { opacity: 0; }
+.mq-tiko-eyes { animation: tikoBlink 5.5s infinite; transform-origin: 50% 50%; }
+@keyframes tikoBlink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+
+/* idle: a slow hover */
+.mq-tiko[data-mood="idle"] .mq-tiko-body, .mq-tiko[data-mood="explain"] .mq-tiko-body, .mq-tiko[data-mood="encourage"] .mq-tiko-body { animation: tikoHover 3.2s ease-in-out infinite; }
+.mq-tiko[data-mood="idle"] .mq-tiko-shadow { animation: tikoShadow 3.2s ease-in-out infinite; }
+@keyframes tikoHover { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes tikoShadow { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(.85); } }
+.mq-tiko[data-mood="idle"] .mq-tiko-antenna { animation: tikoAntenna 3.2s ease-in-out infinite; }
+@keyframes tikoAntenna { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(5deg); } }
+
+/* enter / fly: thrusters on, swoop in */
+.mq-tiko[data-mood="enter"] { animation: tikoEnter 900ms cubic-bezier(.2, .8, .3, 1.2) both; }
+.mq-tiko[data-mood="enter"] .mq-tiko-flame, .mq-tiko[data-mood="fly"] .mq-tiko-flame { opacity: 1; animation: tikoFlame 180ms ease-in-out infinite alternate; }
+.mq-tiko[data-mood="fly"] .mq-tiko-body { animation: tikoHover 1.2s ease-in-out infinite; }
+.mq-tiko[data-mood="fly"] .mq-tiko-shadow { transform: scaleX(.55); opacity: .5; }
+@keyframes tikoEnter { 0% { transform: translate(140px, -120px) rotate(14deg) scale(.7); opacity: 0; } 70% { transform: translate(0, 6px) rotate(-4deg) scale(1); opacity: 1; } 100% { transform: none; } }
+@keyframes tikoFlame { from { transform: scaleY(.8); } to { transform: scaleY(1.15); } }
+
+/* walk: little steps */
+.mq-tiko[data-mood="walk"] .mq-tiko-body { animation: tikoWalk 520ms ease-in-out infinite; }
+@keyframes tikoWalk { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-4px) rotate(3deg); } }
+
+/* point: right arm up towards the target */
+.mq-tiko[data-mood="point"] .mq-tiko-arm-r { animation: tikoPoint 600ms cubic-bezier(.3, 1.5, .5, 1) forwards; }
+@keyframes tikoPoint { to { transform: rotate(-120deg); } }
+.mq-tiko[data-mood="point"] .mq-tiko-head { transform: rotate(6deg); transition: transform 300ms ease; }
+
+/* explain: a gentle wave of the left hand */
+.mq-tiko[data-mood="explain"] .mq-tiko-arm-l { animation: tikoGesture 1.6s ease-in-out infinite; }
+@keyframes tikoGesture { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(28deg); } }
+
+/* thinking: head tilt, hand to chin */
+.mq-tiko[data-mood="thinking"] .mq-tiko-head { animation: tikoTilt 2.4s ease-in-out infinite; }
+.mq-tiko[data-mood="thinking"] .mq-tiko-arm-r { transform: rotate(-70deg); transition: transform 300ms ease; }
+@keyframes tikoTilt { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(4deg); } }
+
+/* confused: a quick shake */
+.mq-tiko[data-mood="confused"] .mq-tiko-head { animation: tikoShake 520ms ease-in-out 2; }
+.mq-tiko[data-mood="confused"] .mq-tiko-antenna { animation: tikoAntenna 260ms ease-in-out 4; }
+@keyframes tikoShake { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-9deg); } 75% { transform: rotate(9deg); } }
+
+/* celebrate / mission-complete: jump with both arms up */
+.mq-tiko[data-mood="celebrate"] .mq-tiko-body, .mq-tiko[data-mood="mission-complete"] .mq-tiko-body { animation: tikoJump 700ms cubic-bezier(.3, 1.4, .5, 1) 2; }
+.mq-tiko[data-mood="celebrate"] .mq-tiko-arm-l, .mq-tiko[data-mood="mission-complete"] .mq-tiko-arm-l { transform: rotate(110deg); transition: transform 250ms cubic-bezier(.3, 1.5, .5, 1); }
+.mq-tiko[data-mood="celebrate"] .mq-tiko-arm-r, .mq-tiko[data-mood="mission-complete"] .mq-tiko-arm-r { transform: rotate(-110deg); transition: transform 250ms cubic-bezier(.3, 1.5, .5, 1); }
+.mq-tiko[data-mood="mission-complete"] .mq-tiko-flame { opacity: 1; animation: tikoFlame 180ms ease-in-out infinite alternate; }
+@keyframes tikoJump { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-16px); } }
+
+/* ---------- tutor dialogue ---------- */
+.mq-bubble { position: relative; padding: 14px 16px; border-radius: 18px; background: var(--mq-bubble, #fffaf0); color: #0d1726; box-shadow: 0 4px 0 #d8b46a, 0 14px 30px rgba(0, 0, 0, .25); animation: pop2 240ms cubic-bezier(.2, .9, .3, 1.3); }
+.mq-bubble::before { content: ""; position: absolute; left: -9px; top: 26px; width: 18px; height: 18px; background: inherit; transform: rotate(45deg); border-radius: 3px; }
+@keyframes pop2 { from { opacity: 0; transform: translateY(6px) scale(.96); } to { opacity: 1; transform: none; } }
+.mq-caret { display: inline-block; width: 2px; height: 1em; margin-left: 2px; background: currentColor; vertical-align: -2px; animation: caret 900ms steps(1) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+
+/* ---------- intro cinematic ---------- */
+.mq-intro { position: absolute; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; padding: 24px; pointer-events: none; }
+.mq-intro > * { pointer-events: auto; }
+.mq-title-card { text-align: center; animation: titleIn 700ms cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes titleIn { from { opacity: 0; transform: translateY(16px) scale(.96); letter-spacing: .2em; } to { opacity: 1; transform: none; } }
+.mq-landing { animation: landing 500ms ease-out both; }
+@keyframes landing { 0% { transform: scale(.4); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
+.mq-ticker-board { display: flex; gap: 18px; overflow: hidden; white-space: nowrap; }
+.mq-ticker-track { display: inline-flex; gap: 18px; animation: tickerMove 22s linear infinite; }
+@keyframes tickerMove { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mq-tiko *, .mq-tiko, .mq-bubble, .mq-title-card, .mq-landing, .mq-ticker-track { animation: none !important; transition: none !important; }
+}

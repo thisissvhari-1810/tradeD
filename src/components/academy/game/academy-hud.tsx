@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Flame, GraduationCap, Target, Zap } from "lucide-react";
+import { ArrowLeft, Clapperboard, Flame, GraduationCap, Target, Zap } from "lucide-react";
 import { styles } from "./academy-game-classes";
 
 /** Counts from the previous value (or `initial`) to the new one, only when the value really changes. */
@@ -38,7 +38,7 @@ function Counter({ icon, tone, label, value, suffix, bump }: { icon: React.React
 }
 
 /** The game's top bar: back to the app, title, and the real XP, streak and daily goal. */
-export function AcademyHud({ xp, streak, today, goal, bumpXp }: { xp: number; streak: number; today: number; goal: number; bumpXp: boolean }) {
+export function AcademyHud({ xp, streak, today, goal, bumpXp, onReplayIntro }: { xp: number; streak: number; today: number; goal: number; bumpXp: boolean; onReplayIntro?: () => void }) {
   return (
     <div className={styles.hud}>
       <Link href="/" className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20" aria-label="Back to TradeD"><ArrowLeft className="h-4 w-4" aria-hidden /></Link>
@@ -47,6 +47,7 @@ export function AcademyHud({ xp, streak, today, goal, bumpXp }: { xp: number; st
         <span className="truncate text-[15px] max-[380px]:hidden">Market Quest</span>
       </span>
       <span className="flex-1" />
+      {onReplayIntro ? <button type="button" className="hidden h-9 items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 text-[12px] font-bold hover:bg-white/20 sm:inline-flex" style={{ color: "#fff" }} onClick={onReplayIntro}><Clapperboard className="h-4 w-4" aria-hidden />Replay intro</button> : null}
       <Counter icon={<Zap className="h-4 w-4 text-[#5a3b00]" fill="currentColor" />} tone="linear-gradient(180deg,#ffe07a,#ffb81f)" label="XP" value={xp} bump={bumpXp} />
       <Counter icon={<Flame className="h-4 w-4 text-white" fill="currentColor" />} tone="linear-gradient(180deg,#ff9a6b,#ff5a4a)" label="Day streak" value={streak} bump={false} />
       <span className="max-sm:hidden">

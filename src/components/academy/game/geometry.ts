@@ -18,7 +18,7 @@ export type LevelDef = {
 };
 
 export const LEVELS: LevelDef[] = [
-  { id: "l1", number: 1, title: "Market Explorer", description: "Learn what a stock is and how the stock market works.", teaser: "Discover how the stock market works.", theme: "market", lessonSlug: "u1-what-is-a-stock" },
+  { id: "l1", number: 1, title: "Market Explorer", description: "Learn what a stock is and how the stock market works.", teaser: "Discover how the stock market works.", theme: "market", lessonSlug: "m1-first-trading-day" },
   { id: "l2", number: 2, title: "Candlestick Canyon", description: "Read the story inside every candle: open, high, low and close.", teaser: "Candles, wicks and the patterns traders watch.", theme: "candles", lessonSlug: null },
   { id: "l3", number: 3, title: "Price Action Summit", description: "Climb through support, resistance and trend structure.", teaser: "Support, resistance and the shape of a trend.", theme: "summit", lessonSlug: null },
 ];
