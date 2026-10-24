@@ -2,8 +2,11 @@
    from the app's theme tokens, so the player follows light and dark mode. */
 
 .ax-shell { display: flex; flex-direction: column; height: 100%; background: var(--background); color: var(--text); }
-.ax-screen { animation: axScreenIn 280ms cubic-bezier(.2, .8, .3, 1) both; }
-@keyframes axScreenIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+.ax-screen { animation: axScreenIn 300ms cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes axScreenIn { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+/* The exercise being left slides out before the next one comes in. */
+.ax-screen-out { animation: axScreenOut 170ms cubic-bezier(.5, 0, .8, .4) both; pointer-events: none; }
+@keyframes axScreenOut { to { opacity: 0; transform: translateX(-28px); } }
 
 /* ---------- top bar: progress + combo ---------- */
 .ax-progress { position: relative; flex: 1; height: 14px; border-radius: 999px; background: var(--sunken); overflow: hidden; box-shadow: inset 0 1px 2px rgba(0, 0, 0, .08); }
@@ -14,10 +17,13 @@
   background: linear-gradient(180deg, color-mix(in srgb, var(--profit) 75%, #fff), var(--profit));
   transition: width 520ms cubic-bezier(.3, 1.3, .5, 1);
   min-width: 14px;
+  animation: axFillIn 700ms cubic-bezier(.3, 1.2, .5, 1);
 }
+/* On entry the bar grows from empty to where the lesson stands. */
+@keyframes axFillIn { from { width: 0; } }
 /* The light strip along the top of the bar, and a shine that sweeps across when it grows. */
 .ax-progress-fill::before { content: ""; position: absolute; left: 7px; right: 7px; top: 3px; height: 3px; border-radius: 999px; background: rgba(255, 255, 255, .45); }
-.ax-progress-fill[data-bump="true"]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .7) 50%, transparent 80%); animation: axShine 700ms ease-out; }
+.ax-progress-shine { position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .75) 50%, transparent 80%); animation: axShine 760ms ease-out forwards; }
 @keyframes axShine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
 
 .ax-combo { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 999px; background: color-mix(in srgb, #ff8a3d 16%, var(--panel)); color: #e0621a; font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; white-space: nowrap; animation: axPopIn 360ms cubic-bezier(.3, 1.6, .5, 1); }
@@ -61,6 +67,12 @@
 @keyframes axPick { 0% { transform: scale(.97); } 60% { transform: scale(1.015); } 100% { transform: scale(1); } }
 @keyframes axShake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
 .ax-shake { animation: axShake 380ms ease-in-out; }
+/* A matched pair snaps together. */
+.ax-lock { animation: axLock 420ms cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes axLock { 0% { transform: scale(.94); } 45% { transform: scale(1.04); box-shadow: 0 0 0 6px color-mix(in srgb, var(--pair, var(--primary)) 25%, transparent); } 100% { transform: scale(1); box-shadow: none; } }
+.ax-hint-in { animation: axHintIn 260ms cubic-bezier(.2, .9, .3, 1.2); transform-origin: top left; }
+@keyframes axHintIn { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+.ax-input[data-result="correct"] { animation: axPick 260ms cubic-bezier(.3, 1.6, .5, 1); }
 
 .ax-key { display: grid; place-items: center; flex-shrink: 0; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 9px; border: 2px solid var(--border); color: var(--muted); font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; }
 .ax-option[aria-pressed="true"] .ax-key { border-color: var(--primary); color: var(--primary); }
@@ -132,6 +144,78 @@
 .ax-toggle[aria-pressed="true"] { color: var(--primary); }
 .ax-toggle:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; }
 
+/* ---------- drag-the-line exercise ---------- */
+.ax-line-handle { position: absolute; top: 0; left: 10px; z-index: 2; height: 0; display: flex; align-items: center; touch-action: none; outline: none; }
+.ax-line-grip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #ffc83d;
+  color: #0d1726;
+  font: 800 13px/1 ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, .35), 0 8px 18px rgba(0, 0, 0, .3);
+  transform: translateY(-50%);
+  cursor: grab;
+  touch-action: none;
+  transition: background-color 160ms ease, scale 120ms ease;
+}
+.ax-line-handle:active .ax-line-grip { cursor: grabbing; scale: 1.06; }
+.ax-line-handle:focus-visible .ax-line-grip { outline: 3px solid #fff; outline-offset: 2px; }
+.ax-line-handle[data-tone="correct"] .ax-line-grip { background: #3fe08d; }
+.ax-line-handle[data-tone="wrong"] .ax-line-grip { background: #ff6b7a; }
+.ax-line-handle[aria-disabled="true"] .ax-line-grip { cursor: default; }
+
+/* ---------- Tiko in the lesson ---------- */
+.ax-tutor-in { animation: axTutorIn 420ms cubic-bezier(.3, 1.5, .5, 1) both; }
+@keyframes axTutorIn { from { opacity: 0; transform: translateY(10px) scale(.85); } to { opacity: 1; transform: none; } }
+/* A pick: Tiko nods. */
+.ax-nod { animation: axNod 420ms ease-in-out; transform-origin: 50% 90%; }
+@keyframes axNod { 30% { transform: rotate(-6deg) translateY(2px); } 65% { transform: rotate(4deg); } }
+.ax-react {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 2px);
+  left: -4px;
+  width: max-content;
+  max-width: 190px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--background);
+  font: 800 12px/1.3 ui-sans-serif, system-ui, sans-serif;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .2);
+  pointer-events: none;
+  animation: axReact 2.6s cubic-bezier(.2, .9, .3, 1.3) forwards;
+}
+.ax-react::after { content: ""; position: absolute; left: 22px; top: 100%; border: 6px solid transparent; border-top-color: var(--text); }
+.ax-react[data-tone="good"] { background: var(--profit); color: #fff; }
+.ax-react[data-tone="good"]::after { border-top-color: var(--profit); }
+@keyframes axReact { 0% { opacity: 0; transform: translateY(6px) scale(.8); } 10% { opacity: 1; transform: none; } 85% { opacity: 1; } 100% { opacity: 0; transform: translateY(-4px); } }
+
+/* The Check button arrives when the answer is complete. */
+.ax-ready { animation: axReady 360ms cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes axReady { 0% { transform: scale(.94); } 55% { transform: scale(1.04); } 100% { transform: scale(1); } }
+/* The tray's tick draws itself; XP pops in after it. */
+.ax-check-draw { stroke-dasharray: 24; stroke-dashoffset: 24; animation: axDraw 380ms ease-out 180ms forwards; }
+@keyframes axDraw { to { stroke-dashoffset: 0; } }
+.ax-xp { animation: axPopIn 380ms cubic-bezier(.3, 1.6, .5, 1) 260ms both; }
+.ax-pop { animation: axPopIn 260ms cubic-bezier(.3, 1.6, .5, 1); }
+
+/* A big combo: sparks burst from the combo badge. */
+.ax-burst { position: absolute; right: 120px; top: 50%; width: 0; height: 0; pointer-events: none; }
+.ax-burst i { position: absolute; width: 6px; height: 12px; border-radius: 3px; background: #ff8a3d; transform: rotate(var(--a)) translateY(0); animation: axSpark 800ms cubic-bezier(.2, .7, .3, 1) forwards; }
+.ax-burst i:nth-child(3n) { background: #ffc83d; }
+.ax-burst i:nth-child(3n + 1) { background: var(--profit); }
+@keyframes axSpark { from { opacity: 1; transform: rotate(var(--a)) translateY(0); } to { opacity: 0; transform: rotate(var(--a)) translateY(-46px); } }
+
+.ax-perfect { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: linear-gradient(180deg, #fff2c2, #ffd96b); color: #5a3b00; font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; box-shadow: 0 3px 0 #d8b46a; animation: axPopIn 420ms cubic-bezier(.3, 1.6, .5, 1) 400ms both; }
+
 @media (prefers-reduced-motion: reduce) {
+  .ax-tutor-in, .ax-nod, .ax-react, .ax-ready, .ax-check-draw, .ax-xp, .ax-pop, .ax-burst i, .ax-perfect, .ax-screen-out, .ax-lock, .ax-hint-in { animation: none !important; }
+  .ax-check-draw { stroke-dashoffset: 0; }
   .ax-screen, .ax-combo, .ax-tray, .ax-tray-icon, .ax-option, .ax-input, .ax-shake, .ax-progress-fill, .ax-progress-fill::after { animation: none !important; transition: none !important; }
 }

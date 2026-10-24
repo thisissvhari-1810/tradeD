@@ -162,6 +162,7 @@ export function publicQuestion(question: Question): PublicQuestion {
       if (items.every((step, index) => step === question.steps[index])) items = [...items.slice(1), items[0]];
       return { ...base, kind: "order", items };
     }
+    case "pricezone": return { ...base, kind: "pricezone", chart: question.chart, start: question.start, step: question.step, range: question.range };
   }
 }
 
@@ -180,6 +181,7 @@ export function grade(question: Question, input: AnswerInput): boolean {
     }
     case "tapcandle": return input.kind === "tapcandle" && input.index === question.answer;
     case "order": return input.kind === "order" && input.steps.length === question.steps.length && input.steps.every((step, index) => step === question.steps[index]);
+    case "pricezone": return input.kind === "pricezone" && Number.isFinite(input.price) && input.price >= question.accept[0] - 1e-9 && input.price <= question.accept[1] + 1e-9;
   }
 }
 
@@ -193,6 +195,7 @@ export function answerText(question: Question): string {
     case "match": return question.pairs.map(([left, right]) => `${left} → ${right}`).join("; ");
     case "tapcandle": return `Candle ${question.answer + 1}`;
     case "order": return question.steps.join(" → ");
+    case "pricezone": return `Between ₹${question.accept[0]} and ₹${question.accept[1]}`;
   }
 }
 

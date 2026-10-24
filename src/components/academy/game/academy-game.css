@@ -22,7 +22,9 @@
   position: relative;
   isolation: isolate;
   min-height: 100%;
-  overflow: hidden;
+  /* No overflow here: this rule is outside Tailwind's layers, so it would beat the scroll container's
+     overflow-y-auto (wheel and touch scrolling then did nothing on the map and the story mission). */
+  overflow-x: clip;
   background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 38%, var(--sky-low) 70%, var(--grass-deep) 100%);
   color: var(--paper);
   animation: worldIn 420ms ease-out both;
@@ -138,6 +140,11 @@
   animation: breathe 2.6s ease-in-out infinite;
 }
 .mq-stop-ring { position: absolute; inset: -13%; border-radius: 50%; pointer-events: none; }
+/* A stop opening: a ring bursts outwards and the platform springs up. */
+.mq-unlock { position: absolute; inset: -10%; border-radius: 50%; border: 4px solid var(--accent); pointer-events: none; animation: unlockRing 900ms cubic-bezier(.2, .7, .3, 1) forwards; }
+.mq-unlock + .mq-stop-face, .mq-stop:has(.mq-unlock) .mq-stop-face { animation: unlockFace 700ms cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes unlockRing { from { opacity: 1; transform: scale(.8); } to { opacity: 0; transform: scale(2); } }
+@keyframes unlockFace { 0% { transform: scale(.7) rotate(-12deg); } 60% { transform: scale(1.12) rotate(4deg); } 100% { transform: none; } }
 .mq-stop[data-state="current"] .mq-stop-ring {
   background: conic-gradient(from 0deg, transparent 0 58%, rgba(255, 255, 255, .95) 70%, transparent 82% 100%);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 6px), #000 calc(100% - 5px));
@@ -261,6 +268,9 @@
 .mq-guide-bubble[data-away="right"] { left: 22%; transform: none; }
 .mq-guide-bubble[data-away="left"]::after { left: auto; right: 18px; transform: translateY(-6px) rotate(45deg); }
 .mq-guide-bubble[data-away="right"]::after { left: 18px; transform: translateY(-6px) rotate(45deg); }
+/* Phones: the bubble sits under Tiko, centred on him, so it never runs off the screen edge. */
+.mq-tall .mq-guide-bubble, .mq-tall .mq-guide-bubble[data-away] { top: calc(100% + 4px); bottom: auto; left: 50%; right: auto; transform: translateX(-50%); max-width: min(220px, 56vw); }
+.mq-tall .mq-guide-bubble::after, .mq-tall .mq-guide-bubble[data-away]::after { top: auto; bottom: 100%; left: 50%; right: auto; transform: translate(-50%, 6px) rotate(45deg); }
 .mq-hint {
   position: absolute;
   z-index: 8;
@@ -416,6 +426,30 @@
 .mq-tiko[data-mood="celebrate"] .mq-tiko-arm-r, .mq-tiko[data-mood="mission-complete"] .mq-tiko-arm-r { transform: rotate(-110deg); transition: transform 250ms cubic-bezier(.3, 1.5, .5, 1); }
 .mq-tiko[data-mood="mission-complete"] .mq-tiko-flame { opacity: 1; animation: tikoFlame 180ms ease-in-out infinite alternate; }
 @keyframes tikoJump { 0%, 100% { transform: translateY(0); } 45% { transform: translateY(-16px); } }
+
+/* listening: head tilts towards the answer, antenna perks up */
+.mq-tiko[data-mood="listening"] .mq-tiko-head { transform: rotate(8deg); transition: transform 260ms cubic-bezier(.3, 1.5, .5, 1); }
+.mq-tiko[data-mood="listening"] .mq-tiko-antenna { animation: tikoPerk 900ms ease-in-out infinite; }
+.mq-tiko[data-mood="listening"] .mq-tiko-body { animation: tikoHover 3.2s ease-in-out infinite; }
+@keyframes tikoPerk { 0%, 100% { transform: rotate(0) scaleY(1); } 50% { transform: rotate(-6deg) scaleY(1.12); } }
+
+/* hint: one arm raised, antenna bulb glowing like an idea */
+.mq-tiko[data-mood="hint"] .mq-tiko-arm-r { transform: rotate(-125deg); transition: transform 280ms cubic-bezier(.3, 1.5, .5, 1); }
+.mq-tiko[data-mood="hint"] .mq-tiko-antenna circle { animation: tikoIdea 1.1s ease-in-out infinite; }
+.mq-tiko[data-mood="hint"] .mq-tiko-body { animation: tikoHover 2.4s ease-in-out infinite; }
+@keyframes tikoIdea { 0%, 100% { fill: #ffc83d; } 50% { fill: #fff6c2; filter: drop-shadow(0 0 6px #ffe27a); } }
+
+/* surprised: a small jump with wide eyes */
+.mq-tiko[data-mood="surprised"] .mq-tiko-body { animation: tikoStartle 420ms cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes tikoStartle { 40% { transform: translateY(-10px) scale(1.04); } }
+
+/* streak: a spin, then jumping with thrusters on */
+.mq-tiko[data-mood="streak"] { animation: tikoSpin 700ms cubic-bezier(.3, 1.2, .5, 1); }
+.mq-tiko[data-mood="streak"] .mq-tiko-body { animation: tikoJump 620ms cubic-bezier(.3, 1.4, .5, 1) 700ms 3; }
+.mq-tiko[data-mood="streak"] .mq-tiko-arm-l { transform: rotate(110deg); transition: transform 250ms ease; }
+.mq-tiko[data-mood="streak"] .mq-tiko-arm-r { transform: rotate(-110deg); transition: transform 250ms ease; }
+.mq-tiko[data-mood="streak"] .mq-tiko-flame { opacity: 1; animation: tikoFlame 160ms ease-in-out infinite alternate; }
+@keyframes tikoSpin { from { rotate: -360deg; scale: .8; } to { rotate: 0deg; scale: 1; } }
 
 /* ---------- tutor dialogue ---------- */
 .mq-bubble { position: relative; padding: 14px 16px; border-radius: 18px; background: var(--mq-bubble, #fffaf0); color: #0d1726; box-shadow: 0 4px 0 #d8b46a, 0 14px 30px rgba(0, 0, 0, .25); animation: pop2 240ms cubic-bezier(.2, .9, .3, 1.3); }

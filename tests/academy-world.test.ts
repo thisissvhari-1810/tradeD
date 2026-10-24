@@ -88,7 +88,7 @@ describe("the lesson player", () => {
   });
 
   it("keeps sound off until the learner turns it on", () => {
-    const feedback = read("src/components/academy/feedback.ts");
+    const feedback = read("src/components/academy/academy-sound.ts");
     expect(feedback).toMatch(/DEFAULT: FeedbackPrefs = \{ sound: false/);
   });
 
@@ -96,5 +96,6 @@ describe("the lesson player", () => {
     const kinds = UNITS.flatMap((unit) => unit.lessons.flatMap((lesson) => lesson.questions.map((question) => question.kind)));
     expect(kinds).toContain("tapcandle");
     expect(kinds).toContain("order");
+    expect(kinds).toContain("pricezone");
   });
 });

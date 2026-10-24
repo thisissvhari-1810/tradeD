@@ -101,8 +101,9 @@ const TAB_BAR: Array<{ href: string; label: string; icon: LucideIcon; feature?: 
   { href: "/", label: "Home", icon: House, match: ["/"] },
   { href: "/watchlist", label: "Watchlist", icon: Star, match: ["/watchlist", "/markets"] },
   { href: "/chart", label: "Trade", icon: CandlestickChart, match: ["/chart", "/terminal", "/options"] },
-  { href: "/positions", label: "Positions", icon: Layers, feature: "portfolio", match: ["/positions", "/orders"] },
-  { href: "/holdings", label: "Portfolio", icon: PieChart, feature: "portfolio", match: ["/holdings", "/funds"] },
+  // Positions and Orders live under Portfolio (its page links to them; they are also in the menu and search).
+  { href: "/academy", label: "Academy", icon: GraduationCap, match: ["/academy"] },
+  { href: "/holdings", label: "Portfolio", icon: PieChart, feature: "portfolio", match: ["/holdings", "/funds", "/positions", "/orders"] },
 ];
 
 const TICKER_LABEL: Record<string, string> = { "Nifty 50": "NIFTY", "Nifty Bank": "BANKNIFTY", "India VIX": "INDIA VIX" };
@@ -133,6 +134,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const closeHomeSearch = useCallback(() => setHomeSearch(false), []);
   /** The bottom bar's five destinations show the stock search box in the phone header. */
   const searchTab = path === "/" || ["/watchlist", "/chart", "/positions", "/holdings"].some((href) => path.startsWith(href));
+  /**
+   * Academy is a full-screen learning mode: the trading header, sidebar and phone tab bar step aside on
+   * every /academy route and come back on any other route (the route decides, so back/forward work).
+   */
+  const immersive = path === "/academy" || path.startsWith("/academy/");
   const mobilePrefs = useMobilePrefs();
   useEffect(() => {
     document.documentElement.dataset.density = mobilePrefs.density;
@@ -323,8 +329,8 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <DeskContext.Provider value={value}>
       {/* While the Premium page is open the whole shell takes the Premium theme (tokens.css). */}
-      <div className="flex h-dvh min-h-0 bg-background text-text" data-premium-shell={path.startsWith("/premium") ? "" : undefined}>
-        <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft/60 bg-background lg:flex" aria-label="Primary">
+      <div className="flex h-dvh min-h-0 bg-background text-text" data-premium-shell={path.startsWith("/premium") ? "" : undefined} data-immersive={immersive ? "academy" : undefined}>
+        {immersive ? null : <aside className="hidden w-[var(--rail)] shrink-0 flex-col border-r border-border-soft/60 bg-background lg:flex" aria-label="Primary">
           <div className="flex h-[var(--topbar)] shrink-0 items-center justify-center">
             <BrandMark />
           </div>
@@ -364,10 +370,10 @@ export function Shell({ children }: { children: ReactNode }) {
               </button>
             </Tooltip>
           </div>
-        </aside>
+        </aside>}
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
+          {immersive ? null : <header className="relative z-30 flex h-[var(--topbar)] shrink-0 items-center gap-2 border-b border-border-soft/60 bg-background/72 px-2 backdrop-blur-xl backdrop-saturate-150 sm:gap-3 sm:px-4">
             <div className="lg:hidden"><BrandMark /></div>
             {/* Phones, on Home, Watchlist, Trade, Positions and Portfolio: one stock search box takes the ticker's place. */}
             {searchTab ? (
@@ -438,12 +444,12 @@ export function Shell({ children }: { children: ReactNode }) {
                 {unread ? <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-background bg-loss sm:hidden" aria-hidden /> : null}
               </button>
             </div>
-          </header>
+          </header>}
 
-          <main className="min-h-0 flex-1 overflow-hidden pb-[calc(var(--tabbar)+env(safe-area-inset-bottom))] lg:pb-0">{children}</main>
+          <main className={cx("min-h-0 flex-1 overflow-hidden", !immersive && "pb-[calc(var(--tabbar)+env(safe-area-inset-bottom))] lg:pb-0")}>{children}</main>
         </div>
 
-        <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[calc(var(--tabbar)+env(safe-area-inset-bottom))] border-t border-border-soft bg-panel/92 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
+        {immersive ? null : <nav className="fixed inset-x-0 bottom-0 z-30 flex h-[calc(var(--tabbar)+env(safe-area-inset-bottom))] border-t border-border-soft bg-panel/92 px-1 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden" aria-label="Main">
           {TAB_BAR.map((item) => {
             if (item.feature && user?.features && !user.features[item.feature]) return null;
             const Icon = item.icon;
@@ -456,7 +462,7 @@ export function Shell({ children }: { children: ReactNode }) {
               </Link>
             );
           })}
-        </nav>
+        </nav>}
 
         {menu ? (
           <div className="fixed inset-0 z-50 lg:hidden">

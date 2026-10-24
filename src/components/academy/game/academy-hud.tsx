@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Clapperboard, Flame, GraduationCap, Navigation, Target, Volume2, VolumeX, Zap } from "lucide-react";
-import { setFeedbackPrefs, useFeedbackPrefs } from "@/components/academy/feedback";
+import { setFeedbackPrefs, useFeedbackPrefs } from "@/components/academy/academy-sound";
 import { styles } from "./academy-game-classes";
 
 /** Counts from the previous value (or `initial`) to the new one, only when the value really changes. */

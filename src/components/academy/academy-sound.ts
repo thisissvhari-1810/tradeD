@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
  */
 
 export type FeedbackPrefs = { sound: boolean; haptics: boolean };
-export type Cue = "select" | "correct" | "wrong" | "complete";
+export type Cue = "select" | "check" | "correct" | "wrong" | "combo" | "unlock" | "complete";
 
 const KEY = "td-academy-feedback";
 const DEFAULT: FeedbackPrefs = { sound: false, haptics: true };
@@ -47,11 +47,16 @@ export function useFeedbackPrefs() {
 /** [frequency Hz, start s, duration s] per note. */
 const TONES: Record<Cue, { wave: OscillatorType; gain: number; notes: Array<[number, number, number]>; glide?: number }> = {
   select: { wave: "sine", gain: 0.05, notes: [[880, 0, 0.05]] },
+  check: { wave: "sine", gain: 0.04, notes: [[660, 0, 0.04], [990, 0.035, 0.05]] },
   correct: { wave: "triangle", gain: 0.09, notes: [[784, 0, 0.11], [1175, 0.09, 0.2]] },
   wrong: { wave: "triangle", gain: 0.08, notes: [[247, 0, 0.22]], glide: 196 },
+  combo: { wave: "triangle", gain: 0.08, notes: [[784, 0, 0.09], [988, 0.08, 0.09], [1319, 0.16, 0.24]] },
+  unlock: { wave: "sine", gain: 0.07, notes: [[587, 0, 0.12], [880, 0.1, 0.12], [1175, 0.2, 0.3]] },
   complete: { wave: "triangle", gain: 0.08, notes: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.12], [1047, 0.3, 0.32]] },
 };
-const VIBRATION: Record<Cue, number | number[]> = { select: 8, correct: 18, wrong: [30, 50, 30], complete: [20, 40, 20, 40, 60] };
+// Only meaningful moments vibrate (a pick and a press are too small to buzz).
+const VIBRATION: Record<Cue, number | number[] | null> = { select: null, check: null, correct: 18, wrong: [30, 50, 30], combo: [16, 30, 16, 30, 24], unlock: [20, 40, 40], complete: [20, 40, 20, 40, 60] };
+const lastPlayed = new Map<Cue, number>();
 
 let audio: AudioContext | null = null;
 
@@ -80,9 +85,14 @@ function play(kind: Cue) {
 /** Plays a cue the learner's settings allow. Call only from a user action or its direct result. */
 export function cue(kind: Cue) {
   if (typeof window === "undefined") return;
+  // One event plays once, even if a handler runs twice in quick succession (e.g. development double calls).
+  const now = performance.now();
+  if (now - (lastPlayed.get(kind) ?? -Infinity) < 90) return;
+  lastPlayed.set(kind, now);
   const prefs = read();
   try {
     if (prefs.sound) play(kind);
-    if (prefs.haptics && typeof navigator.vibrate === "function") navigator.vibrate(VIBRATION[kind]);
+    const pattern = VIBRATION[kind];
+    if (prefs.haptics && pattern && typeof navigator.vibrate === "function") navigator.vibrate(pattern);
   } catch { /* audio or vibration unavailable: the visual feedback still shows */ }
 }

@@ -20,9 +20,11 @@ export const StopNode = forwardRef<HTMLButtonElement, {
   stars: number;
   story: boolean;
   launching: boolean;
+  /** Just opened by a real completion: plays the unlock burst once. */
+  unlocked?: boolean;
   onOpen: () => void;
   onLocked: () => void;
-}>(function StopNode({ stop, theme, chapterName, position, left, top, order, stars, story, launching, onOpen, onLocked }, ref) {
+}>(function StopNode({ stop, theme, chapterName, position, left, top, order, stars, story, launching, unlocked = false, onOpen, onLocked }, ref) {
   // Short-lived flag restarts the wiggle without remounting (focus stays put).
   const [wiggle, setWiggle] = useState(false);
   const style = THEME[theme];
@@ -59,6 +61,7 @@ export const StopNode = forwardRef<HTMLButtonElement, {
         onClick={click}
       >
         <span className="mq-stop-ring" aria-hidden />
+        {unlocked ? <span className="mq-unlock" aria-hidden /> : null}
         <span className="mq-stop-face" aria-hidden>
           {state === "completed" ? <Check strokeWidth={3.5} /> : state === "locked" ? <Lock strokeWidth={2.6} /> : <Glyph strokeWidth={2.4} />}
         </span>

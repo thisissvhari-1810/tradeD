@@ -16,6 +16,7 @@ import { TutorDialogue } from "./tutor-dialogue";
 import { WindingRoad } from "./winding-road";
 import { THEME } from "./world-art";
 import { api } from "@/components/api";
+import { cue } from "@/components/academy/academy-sound";
 import { missionFor, type Line, type TikoMood } from "@/lib/academy/missions";
 import { DAILY_GOAL_XP } from "@/lib/academy/rules";
 import { journeyOf, type JourneyChapter, type JourneyStop, type JourneyUnit } from "@/lib/academy/world";
@@ -77,6 +78,8 @@ export function AcademyGameMap() {
   const [fresh, setFresh] = useState<string | null>(null);
   const [guide, setGuide] = useState<Guide | null>(null);
   const [walking, setWalking] = useState(false);
+  // The stop that just opened (after a real completion): it bursts open when Tiko arrives.
+  const [unlocked, setUnlocked] = useState<number | null>(null);
   const [hint, setHint] = useState<{ left: number; top: number; text: string; key: number } | null>(null);
   // Opening cinematic: road reveal, Tiko arrives, welcome, first mission. Null when not playing.
   const [intro, setIntro] = useState<null | "reveal" | "arrive" | "welcome" | "mission">(null);
@@ -152,6 +155,8 @@ export function AcademyGameMap() {
             setGuide({ at: doneAt, mood: "fly", line: null });
             scrollToStop(current, true);
             walk(doneAt, current, () => {
+              setUnlocked(current);
+              cue("unlock");
               setGuide({ at: current, mood: "point", line: newChapter ? `Welcome to ${newChapter}!` : nextLine });
               later(4200, () => setGuide({ at: current, mood: "idle", line: null }));
             });
@@ -326,6 +331,7 @@ export function AcademyGameMap() {
                       stars={starsFor(stop.score)}
                       story={Boolean(missionFor(stop.slug))}
                       launching={launching === stop.slug}
+                      unlocked={unlocked === index}
                       onOpen={() => { scrollToStop(index, false); setOpen(index); }}
                       onLocked={() => lockedStop(index)}
                     />
@@ -379,7 +385,7 @@ export function AcademyGameMap() {
 
       {/* Attached to the page itself, so it sits above the app's bottom bar (the map is its own layer). */}
       {intro ? createPortal(
-        <div className="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] lg:left-[var(--rail)]" role="dialog" aria-label="Welcome to the TradeD Academy">
+        <div className="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))]" role="dialog" aria-label="Welcome to the TradeD Academy">
           <button type="button" className="self-end rounded-full bg-black/45 px-4 py-2 text-[13px] font-bold hover:bg-black/60" style={{ color: "#fff" }} onClick={endIntro}>Skip intro</button>
           {intro === "welcome" || intro === "mission" ? (
             <div className="w-full max-w-xl">

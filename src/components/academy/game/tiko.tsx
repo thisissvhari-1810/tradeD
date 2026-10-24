@@ -6,7 +6,8 @@ import type { TikoMood } from "@/lib/academy/missions";
  * at a time; reduced-motion users see the still pose.
  */
 export function Tiko({ mood = "idle", size = 120, className, facing = "right" }: { mood?: TikoMood; size?: number; className?: string; facing?: "left" | "right" }) {
-  const happy = mood === "celebrate" || mood === "mission-complete" || mood === "encourage";
+  const happy = mood === "celebrate" || mood === "mission-complete" || mood === "encourage" || mood === "streak";
+  const wide = mood === "surprised";
   const puzzled = mood === "confused" || mood === "thinking";
   return (
     <span className={`mq-tiko ${className ?? ""}`} data-mood={mood} style={{ width: size, height: size * 1.15, transform: facing === "left" ? "scaleX(-1)" : undefined }} role="img" aria-label={`Tiko, your market guide (${mood.replace("-", " ")})`}>
@@ -52,15 +53,15 @@ export function Tiko({ mood = "idle", size = 120, className, facing = "right" }:
                 </>
               ) : (
                 <>
-                  <ellipse cx="48" cy={puzzled ? 46 : 47} rx="6" ry={puzzled ? 5 : 7} fill="#4ff0e0" />
-                  <ellipse cx="72" cy="47" rx="6" ry="7" fill="#4ff0e0" />
+                  <ellipse cx="48" cy={puzzled ? 46 : 47} rx={wide ? 7.5 : 6} ry={puzzled ? 5 : wide ? 9 : 7} fill="#4ff0e0" />
+                  <ellipse cx="72" cy="47" rx={wide ? 7.5 : 6} ry={wide ? 9 : 7} fill="#4ff0e0" />
                   <circle cx="50" cy="44" r="2" fill="#fff" />
                   <circle cx="74" cy="44" r="2" fill="#fff" />
                 </>
               )}
             </g>
             {puzzled ? <path d="M40 38 L 54 41" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" /> : null}
-            <path d={happy ? "M52 58 Q 60 64 68 58" : puzzled ? "M54 60 Q 60 58 66 60" : "M54 59 Q 60 62 66 59"} fill="none" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" />
+            {wide ? <ellipse cx="60" cy="60" rx="4" ry="3.5" fill="#4ff0e0" /> : <path d={happy ? "M52 58 Q 60 64 68 58" : puzzled ? "M54 60 Q 60 58 66 60" : "M54 59 Q 60 62 66 59"} fill="none" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" />}
           </g>
         </g>
       </svg>

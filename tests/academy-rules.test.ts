@@ -92,6 +92,10 @@ describe("grading and the questions the browser sees", () => {
     expect(grade(order, { kind: "order", steps: ["a", "b", "c"] })).toBe(true);
     expect(grade(order, { kind: "order", steps: ["b", "a", "c"] })).toBe(false);
     expect(grade(order, { kind: "order", steps: ["a", "b"] })).toBe(false);
+    const zone = q({ kind: "pricezone", chart, start: 2, step: 0.5, range: [0, 4], accept: [1, 1.5] });
+    expect(grade(zone, { kind: "pricezone", price: 1.5 })).toBe(true);
+    expect(grade(zone, { kind: "pricezone", price: 2 })).toBe(false);
+    expect(JSON.stringify(publicQuestion(zone))).not.toMatch(/accept/);
   });
 
   it("never includes the answer in what is sent to the browser", () => {
@@ -154,7 +158,8 @@ describe("the course content", async () => {
           : question.kind === "numeric" ? { kind: "numeric" as const, value: question.answer }
             : question.kind === "match" ? { kind: "match" as const, pairs: question.pairs }
               : question.kind === "tapcandle" ? { kind: "tapcandle" as const, index: question.answer }
-                : { kind: "order" as const, steps: question.steps };
+                : question.kind === "order" ? { kind: "order" as const, steps: question.steps }
+                  : { kind: "pricezone" as const, price: question.accept[0] };
 
   it("has 7 units with unique lesson slugs and question ids", () => {
     expect(UNITS.map((unit) => unit.number)).toEqual([1, 2, 3, 4, 5, 6, 7]);

@@ -6,7 +6,8 @@ import type { Candle } from "@/lib/academy/types";
  * educational examples (made-up candles), never presented as real market events.
  */
 
-export type TikoMood = "idle" | "enter" | "walk" | "fly" | "point" | "explain" | "celebrate" | "confused" | "encourage" | "thinking" | "mission-complete";
+/** Tiko's animation states (one plays at a time; see `.mq-tiko[data-mood]` in academy-game.css). */
+export type TikoMood = "idle" | "enter" | "walk" | "fly" | "point" | "explain" | "celebrate" | "confused" | "encourage" | "thinking" | "mission-complete" | "listening" | "hint" | "surprised" | "streak";
 export type Line = { mood: TikoMood; text: string; highlight?: "open" | "high" | "low" | "close" };
 
 export type DecisionChoice = { id: "buy" | "sell" | "wait"; label: string; feedback: string; mood: TikoMood };

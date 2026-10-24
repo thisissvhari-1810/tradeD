@@ -2,10 +2,11 @@
 
 import "./academy-lesson.css";
 import { useState } from "react";
-import { Check, Lightbulb, X } from "lucide-react";
+import { Check, Lightbulb, Minus, Plus, X } from "lucide-react";
 import { CandleSketch } from "@/components/academy/candle-sketch";
 import { EduChart } from "@/components/academy/game/edu-chart";
-import { cue } from "@/components/academy/feedback";
+import { PriceLineChart } from "./price-line-chart";
+import { cue } from "@/components/academy/academy-sound";
 import type { AnswerInput, PublicQuestion } from "@/lib/academy/types";
 
 /** The server's verdict on an answer (the browser never decides correctness). */
@@ -20,6 +21,9 @@ export type Draft = {
   pending?: { side: "left" | "right"; value: string } | null;
   order?: string[];
   candle?: number;
+  price?: number;
+  /** The left item of the pair joined last (its tiles play the lock-in animation). */
+  joined?: string;
 };
 
 const PAIR_COLOURS = ["#0ea5e9", "#8b5cf6", "#f59e0b", "#ec4899", "#10b981", "#ef4444", "#6366f1", "#14b8a6"];
@@ -40,12 +44,14 @@ export function inputOf(question: PublicQuestion, draft: Draft): AnswerInput | n
     }
     case "tapcandle": return draft.candle == null ? null : { kind: "tapcandle", index: draft.candle };
     case "order": return (draft.order?.length ?? 0) === question.items.length ? { kind: "order", steps: draft.order! } : null;
+    // The line must be moved at least once: its starting place is not an answer.
+    case "pricezone": return draft.price == null ? null : { kind: "pricezone", price: draft.price };
   }
 }
 
 /** Whether the exercise has a picture to look at (Tiko points at it). */
 export function hasVisual(question: PublicQuestion) {
-  return question.kind === "tapcandle" || Boolean(question.candles?.length);
+  return question.kind === "tapcandle" || question.kind === "pricezone" || Boolean(question.candles?.length);
 }
 
 /**
@@ -157,6 +163,25 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
     case "order":
       body = <OrderBoard question={question} draft={draft} onDraft={pick} locked={locked} feedback={feedback} />;
       break;
+    case "pricezone": {
+      const price = draft.price ?? question.start;
+      const tone = feedback ? (feedback.correct ? "correct" : "wrong") : "idle";
+      // After a wrong answer the server's verdict names the accepted zone ("Between ₹192 and ₹194.5").
+      const zone = feedback && !feedback.correct ? (feedback.answer.match(/[\d.]+/g)?.map(Number).slice(0, 2) as [number, number] | undefined) ?? null : null;
+      const move = (next: number) => { if (!locked && next !== draft.price) onDraft({ ...draft, price: next }); };
+      const nudge = (by: number) => move(Math.min(question.range[1], Math.max(question.range[0], Math.round((price + by) / question.step) * question.step)));
+      body = (
+        <div className="flex flex-col gap-2.5">
+          <PriceLineChart candles={question.chart} price={price} step={question.step} range={question.range} onChange={locked ? undefined : move} tone={tone} zone={zone && zone.length === 2 ? zone : null} />
+          <div className="flex items-center gap-2">
+            <button type="button" className="ax-btn-ghost w-14 px-0" disabled={locked} aria-label={`Lower the line by ₹${question.step}`} onClick={() => nudge(-question.step)}><Minus className="h-5 w-5" aria-hidden /></button>
+            <p className="flex-1 text-center text-[15px] font-bold tabular-nums" aria-live="polite">Stop-loss at ₹{price.toFixed(1)}{draft.price == null ? <span className="block text-[12px] font-semibold text-muted">Drag the line, tap the chart, or use − and +</span> : null}</p>
+            <button type="button" className="ax-btn-ghost w-14 px-0" disabled={locked} aria-label={`Raise the line by ₹${question.step}`} onClick={() => nudge(question.step)}><Plus className="h-5 w-5" aria-hidden /></button>
+          </div>
+        </div>
+      );
+      break;
+    }
   }
 
   return (
@@ -166,7 +191,7 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
       {body}
       {question.hint && !feedback ? (
         hint
-          ? <p className="flex gap-2 rounded-2xl bg-info-soft p-3 text-[14px] text-text-2" role="note"><Lightbulb className="h-5 w-5 shrink-0 text-info" aria-hidden />{question.hint}</p>
+          ? <p className="ax-hint-in flex gap-2 rounded-2xl bg-info-soft p-3 text-[14px] text-text-2" role="note"><Lightbulb className="h-5 w-5 shrink-0 text-info" aria-hidden />{question.hint}</p>
           : <button type="button" className="inline-flex items-center gap-1.5 self-start rounded-full px-1 text-[14px] font-bold" style={{ color: "var(--info)" }} onClick={() => setHint(true)}><Lightbulb className="h-4 w-4" aria-hidden />Show a hint</button>
       ) : null}
     </section>
@@ -182,7 +207,7 @@ function MatchBoard({ question, draft, onDraft, locked, feedback }: { question: 
     const next = { ...pairs };
     for (const key of Object.keys(next)) if (next[key] === right) delete next[key];
     next[left] = right;
-    onDraft({ ...draft, pairs: next, pending: null });
+    onDraft({ ...draft, pairs: next, pending: null, joined: left });
   };
   const tapLeft = (left: string) => {
     if (pending?.side === "right") return join(left, pending.value);
@@ -203,11 +228,12 @@ function MatchBoard({ question, draft, onDraft, locked, feedback }: { question: 
   const tileOf = (side: "left" | "right", value: string, number: number | null, onTap: () => void) => {
     const paired = number != null;
     const active = pending?.side === side && pending.value === value;
+    const justJoined = draft.joined != null && pairs[draft.joined] != null && (side === "left" ? value === draft.joined : value === pairs[draft.joined]);
     return (
       <button
-        key={`${side}-${value}`}
+        key={`${side}-${value}-${justJoined ? draft.joined : ""}`}
         type="button"
-        className="ax-option"
+        className={justJoined ? "ax-option ax-lock" : "ax-option"}
         disabled={locked}
         aria-pressed={active}
         data-result={tone}

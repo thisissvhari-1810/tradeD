@@ -47,7 +47,12 @@ export type Question =
   /** Tap the candle on an educational chart that meets the prompt's condition (`answer` is its index). */
   | (QuestionBase & { kind: "tapcandle"; chart: Candle[]; answer: number })
   /** Put the steps in order; `steps` are listed in the correct order and shuffled on screen. */
-  | (QuestionBase & { kind: "order"; steps: string[] });
+  | (QuestionBase & { kind: "order"; steps: string[] })
+  /**
+   * Drag a price line on an educational chart (e.g. a stop-loss) into the accepted zone. The line starts
+   * at `start`, moves in `step`s within `range`; `accept` is the inclusive zone that counts as right.
+   */
+  | (QuestionBase & { kind: "pricezone"; chart: Candle[]; start: number; step: number; range: [number, number]; accept: [number, number] });
 
 export type LessonCard = {
   title: string;
@@ -83,7 +88,8 @@ export type PublicQuestion =
   | { id: string; kind: "numeric"; prompt: string; unit?: string; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
   | { id: string; kind: "match"; prompt: string; left: string[]; right: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
   | { id: string; kind: "tapcandle"; prompt: string; chart: Candle[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
-  | { id: string; kind: "order"; prompt: string; items: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number };
+  | { id: string; kind: "order"; prompt: string; items: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
+  | { id: string; kind: "pricezone"; prompt: string; chart: Candle[]; start: number; step: number; range: [number, number]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number };
 
 /** An answer as the browser sends it. */
 export type AnswerInput =
@@ -95,4 +101,5 @@ export type AnswerInput =
   | { kind: "match"; pairs: Array<[string, string]> }
   | { kind: "tapcandle"; index: number }
   /** The steps in the order the user arranged them. */
-  | { kind: "order"; steps: string[] };
+  | { kind: "order"; steps: string[] }
+  | { kind: "pricezone"; price: number };

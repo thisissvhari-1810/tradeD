@@ -366,6 +366,7 @@ export function HoldingsScreen() {
       <PageHeader
         eyebrow={<><Badge tone="demo">Demo</Badge> Practice ledger</>}
         title="Portfolio"
+        actions={<div className="flex gap-2"><Link href="/positions" className="inline-flex h-9 items-center rounded-input border border-border px-3 text-data font-medium hover:bg-hover">Positions</Link><Link href="/orders" className="inline-flex h-9 items-center rounded-input border border-border px-3 text-data font-medium hover:bg-hover">Orders</Link></div>}
         description="One long delivery-style position per symbol. The ledger keeps no separate demat book, so this page shows those positions with their allocation. Performance beyond stored snapshots is not invented."
       />
       {error ? <Notice tone="loss">{error}</Notice> : null}

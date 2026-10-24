@@ -5,8 +5,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Check, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { useDesk } from "@/components/shell";
-import { cue } from "@/components/academy/feedback";
+import { cue } from "@/components/academy/academy-sound";
 import { ExerciseView, inputOf, type Draft, type Feedback } from "@/components/academy/lesson/exercise-view";
+import { AcademyFeedbackTray } from "@/components/academy/lesson/feedback-tray";
 import type { DecisionChoice, Line, Mission, Scene, TikoMood } from "@/lib/academy/missions";
 import type { AnswerInput, PublicQuestion } from "@/lib/academy/types";
 import { styles } from "./academy-game-classes";
@@ -232,7 +233,7 @@ function GradedQuestion({ question, mission, answer, onCorrect }: { question: Pu
   if (!question) return <p className="text-[14px] text-white/75">This question is not available.</p>;
   const value = draft.attempt === attempt ? draft.value : {};
   const input = inputOf(question, value);
-  const mood: TikoMood = busy ? "thinking" : !feedback ? "thinking" : feedback.correct ? "celebrate" : "encourage";
+  const mood: TikoMood = busy ? "thinking" : !feedback ? (input ? "listening" : "thinking") : feedback.correct ? "celebrate" : question.hint ? "hint" : "encourage";
   async function check() {
     if (!question || !input || busy || feedback) return;
     setBusy(true);
@@ -251,16 +252,7 @@ function GradedQuestion({ question, mission, answer, onCorrect }: { question: Pu
       </div>
       <div className={`rounded-3xl bg-panel p-4 text-text shadow-[0_6px_0_rgba(0,0,0,.25)] ${feedback && !feedback.correct ? "ax-shake" : ""}`}>
         <ExerciseView key={attempt} question={question} draft={value} onDraft={(next) => setDraft({ attempt, value: next })} locked={busy || Boolean(feedback)} feedback={feedback} onSubmit={() => void check()} />
-        {feedback ? (
-          <div className="ax-tray mt-4 rounded-2xl p-3" data-tone={feedback.correct ? "correct" : "wrong"} role="status">
-            <p className="flex items-center gap-2 text-[16px] font-black" style={{ color: feedback.correct ? "var(--profit)" : "var(--loss)" }}>
-              {feedback.correct ? <Check className="h-5 w-5" strokeWidth={3} aria-hidden /> : null}
-              {feedback.correct ? `Correct${feedback.xp ? ` · +${feedback.xp} XP` : ""}` : "Not quite"}
-            </p>
-            {!feedback.correct && feedback.answer ? <p className="mt-1 text-[14px] font-bold">Correct answer: {feedback.answer}</p> : null}
-            <p className="mt-1 text-[14px] text-text-2">{feedback.explanation}</p>
-          </div>
-        ) : null}
+        {feedback ? <div className="mt-4"><AcademyFeedbackTray feedback={feedback} praise={mission.correct.text} hint={question.hint ?? null} variant="inline" /></div> : null}
         {failed ? <p className="mt-3 text-[14px] font-semibold" style={{ color: "var(--loss)" }} role="alert">The answer could not be checked. Nothing was marked; try again.</p> : null}
       </div>
       {!feedback ? (
