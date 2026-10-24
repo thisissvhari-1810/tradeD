@@ -47,16 +47,17 @@ async function loadState(userId: string) {
   };
 }
 
-function lessonCard(lesson: Lesson, state: LessonState, unit: Unit) {
-  return { slug: lesson.slug, title: lesson.title, summary: lesson.summary, minutes: lesson.minutes, questions: lesson.questions.length, state, unit: unit.number };
+function lessonCard(lesson: Lesson, state: LessonState, unit: Unit, score = 0) {
+  return { slug: lesson.slug, title: lesson.title, summary: lesson.summary, minutes: lesson.minutes, questions: lesson.questions.length, state, unit: unit.number, score };
 }
 
 /** Everything the Academy home and learning path need, for the signed-in user. */
 export async function academyOverview(user: SessionUser) {
   const state = await loadState(user.id);
   const streak = streakFrom(state.days, state.today);
+  const scores = new Map(state.progress.map((row) => [row.lessonSlug, row.bestScore]));
   const units = UNITS.map((unit) => {
-    const lessons = unit.lessons.map((lesson) => lessonCard(lesson, state.states.get(lesson.slug) ?? "locked", unit));
+    const lessons = unit.lessons.map((lesson) => lessonCard(lesson, state.states.get(lesson.slug) ?? "locked", unit, scores.get(lesson.slug) ?? 0));
     const done = lessons.filter((lesson) => lesson.state === "completed" || lesson.state === "mastered").length;
     return { id: unit.id, number: unit.number, title: unit.title, description: unit.description, done, total: lessons.length, lessons };
   });
@@ -153,7 +154,7 @@ export async function academyComplete(user: SessionUser, slug: string) {
 
   const newBadges = await awardBadges(user.id, score === 100);
   const after = await loadState(user.id);
-  return { score, firstTime: result.firstTime, xp: result.xp, newBadges, streak: streakFrom(after.days, after.today), level: levelFor(after.xp.total) };
+  return { score, firstTime: result.firstTime, xp: result.xp, xpTotal: after.xp.total, newBadges, streak: streakFrom(after.days, after.today), level: levelFor(after.xp.total) };
 }
 
 /** Awards any Academy badges the stored progress now earns; returns the newly awarded ones. */

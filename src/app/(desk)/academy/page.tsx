@@ -1,7 +1,7 @@
 "use client";
 
-import { AcademyHome } from "@/components/academy/academy-home";
+import { AcademyGameMap } from "@/components/academy/game/academy-game-map";
 
 export default function Page() {
-  return <AcademyHome />;
+  return <AcademyGameMap />;
 }

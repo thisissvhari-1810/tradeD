@@ -3,9 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, Flame, Lightbulb, RefreshCw, Trophy, X, Zap } from "lucide-react";
+import { ArrowLeft, Check, Lightbulb, RefreshCw, Trophy, X, Zap } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { CandleSketch } from "@/components/academy/candle-sketch";
+import { styles } from "@/components/academy/game/academy-game-classes";
+import { FRESH_KEY } from "@/components/academy/game/academy-game-map";
+import { starsFor } from "@/components/academy/game/geometry";
+import { RewardCelebration } from "@/components/academy/game/reward-celebration";
 import { Button, cx, Skeleton } from "@/components/ui";
 import type { AnswerInput, LessonCard, PublicQuestion } from "@/lib/academy/types";
 
@@ -22,7 +26,7 @@ type LessonData = {
   passPercent: number;
 };
 type Feedback = { correct: boolean; explanation: string; mistake: string | null; answer: string; xp: number };
-type Completion = { score: number; firstTime: boolean; xp: number; newBadges: Array<{ name: string; description: string }>; streak: { current: number; todayDone: boolean }; level: { level: number; title: string } };
+type Completion = { score: number; firstTime: boolean; xp: number; xpTotal: number; newBadges: Array<{ name: string; description: string }>; streak: { current: number; todayDone: boolean }; level: { level: number; title: string } };
 
 /** One lesson: read the cards, answer the questions (graded on the server), then complete it. */
 export function LessonPlayer({ slug }: { slug: string }) {
@@ -87,6 +91,10 @@ export function LessonPlayer({ slug }: { slug: string }) {
       const result = await api<Completion>(`/api/academy/lessons/${encodeURIComponent(slug)}`, { action: "complete" });
       setCompletion(result);
       setStage("done");
+      // The map animates the newly travelled road and the XP once, on the way back.
+      if (result.firstTime) {
+        try { sessionStorage.setItem(FRESH_KEY, slug); } catch { /* storage unavailable */ }
+      }
     } catch (caught) {
       setCompleteError(caught instanceof Error ? caught.message : "The lesson could not be completed.");
     } finally {
@@ -114,7 +122,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
   const done = stage === "cards" ? card : stage === "questions" ? lesson.cards.length + (total - Math.max(0, queue.filter((id) => !correct.has(id)).length)) : steps;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={`${styles.lessonIn} flex h-full flex-col`}>
       <div className="flex items-center gap-3 border-b border-border-soft px-3 py-2 sm:px-5">
         <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-input text-muted hover:bg-hover hover:text-text" aria-label="Back to Academy" onClick={() => router.push("/academy")}><ArrowLeft className="h-5 w-5" aria-hidden /></button>
         <span className="h-2.5 flex-1 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-valuenow={Math.round((done / steps) * 100)} aria-valuemin={0} aria-valuemax={100} aria-label="Lesson progress">
@@ -151,21 +159,18 @@ export function LessonPlayer({ slug }: { slug: string }) {
           ) : null}
 
           {stage === "done" && completion ? (
-            <section className="surface flex flex-col items-center gap-3 p-6 text-center" aria-live="polite">
-              <span className="grid h-14 w-14 place-items-center rounded-full bg-profit-soft text-profit"><Check className="h-7 w-7" aria-hidden /></span>
-              <h1 className="text-section font-semibold">{completion.firstTime ? "Lesson complete" : "Lesson revised"}</h1>
-              <p className="num text-dense text-muted">Score {completion.score}% · Level {completion.level.level} {completion.level.title}</p>
-              <div className="flex flex-wrap justify-center gap-2">
-                <span className="num inline-flex items-center gap-1.5 rounded-pill bg-gold-soft px-3 py-1 text-data font-semibold text-gold"><Zap className="h-4 w-4" aria-hidden />+{xpEarned + completion.xp} XP</span>
-                <span className="num inline-flex items-center gap-1.5 rounded-pill bg-warning-soft px-3 py-1 text-data font-semibold text-warning"><Flame className="h-4 w-4" aria-hidden />{completion.streak.current}-day streak</span>
-              </div>
-              {completion.newBadges.length ? (
-                <ul className="w-full space-y-1.5">
-                  {completion.newBadges.map((badge) => <li key={badge.name} className="rounded-card border border-gold/40 bg-gold-soft px-3 py-2 text-data"><span className="font-semibold">New badge: {badge.name}</span> · {badge.description}</li>)}
-                </ul>
-              ) : null}
-              {!completion.firstTime ? <p className="text-micro text-muted">XP for a lesson is paid once; revising keeps your knowledge fresh.</p> : null}
-            </section>
+            <div className="surface overflow-hidden" style={{ background: "linear-gradient(180deg,#fffaf0,#fff1d6)", color: "#0d1726" }}>
+              <RewardCelebration
+                stars={starsFor(completion.score)}
+                xpBefore={completion.xpTotal - xpEarned - completion.xp}
+                xpAfter={completion.xpTotal}
+                xpGained={xpEarned + completion.xp}
+                badge={completion.newBadges[0]?.name ?? null}
+                firstTime={completion.firstTime}
+              >
+                <p className="text-[13px] text-[#0d1726]/70">Score {completion.score}% · Level {completion.level.level} {completion.level.title} · {completion.streak.current}-day streak</p>
+              </RewardCelebration>
+            </div>
           ) : null}
         </div>
       </div>
@@ -188,7 +193,7 @@ export function LessonPlayer({ slug }: { slug: string }) {
           ) : null}
           {stage === "done" ? (
             <>
-              <Link href="/academy" className="inline-flex h-12 flex-1 items-center justify-center rounded-input border border-border text-dense font-medium hover:bg-hover">Back to Academy</Link>
+              <button type="button" className={`${styles.play} flex-1`} onClick={() => router.push("/academy")}>BACK TO MAP</button>
             </>
           ) : null}
         </div>
@@ -270,7 +275,7 @@ function QuestionView({ question, feedback, busy, onSubmit }: { question: Public
       ) : null}
 
       {feedback ? (
-        <div className={cx("rounded-card border p-4", feedback.correct ? "border-profit/40 bg-profit-soft" : "border-loss/40 bg-loss-soft")} role="status">
+        <div className={cx("rounded-card border p-4", feedback.correct ? `border-profit/40 bg-profit-soft ${styles.celebrate}` : "border-loss/40 bg-loss-soft")} role="status">
           <p className={cx("flex items-center gap-2 text-dense font-semibold", feedback.correct ? "text-profit" : "text-loss")}>
             {feedback.correct ? <Check className="h-5 w-5" aria-hidden /> : <X className="h-5 w-5" aria-hidden />}
             {feedback.correct ? `Correct${feedback.xp ? ` · +${feedback.xp} XP` : ""}` : "Not quite"}
