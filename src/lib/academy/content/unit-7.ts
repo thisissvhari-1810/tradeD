@@ -165,6 +165,22 @@ export const unit7: Unit = {
           topic: "practice",
           difficulty: 1,
         },
+        {
+          id: "u7-trade-planning-q6",
+          kind: "order",
+          prompt: "Capital ₹1,00,000, risk 1%, entry ₹300, stop ₹294. Put the steps for sizing this trade in order.",
+          steps: [
+            "Decide the rupee risk: 1% of ₹1,00,000 = ₹1,000",
+            "Find the risk per share: ₹300 − ₹294 = ₹6",
+            "Divide the risk by the risk per share: ₹1,000 ÷ ₹6 = 166.7",
+            "Round down to whole shares: 166",
+          ],
+          hint: "You cannot size a trade until you know how much you are willing to lose.",
+          explanation: "Risk amount first, then the stop distance, then divide, then round down so the loss never exceeds the plan.",
+          mistake: "Choosing the number of shares first and working out the risk afterwards.",
+          topic: "practice",
+          difficulty: 2,
+        },
       ],
     },
     {

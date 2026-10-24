@@ -155,6 +155,13 @@ export function publicQuestion(question: Question): PublicQuestion {
       left: question.pairs.map(([left]) => left),
       right: seededShuffle(question.pairs.map(([, right]) => right), question.id),
     };
+    case "tapcandle": return { ...base, kind: "tapcandle", chart: question.chart };
+    case "order": {
+      // Never shown already in the right order (that would give the answer away).
+      let items = seededShuffle(question.steps, question.id);
+      if (items.every((step, index) => step === question.steps[index])) items = [...items.slice(1), items[0]];
+      return { ...base, kind: "order", items };
+    }
   }
 }
 
@@ -171,6 +178,8 @@ export function grade(question: Question, input: AnswerInput): boolean {
       const want = new Map(question.pairs);
       return input.pairs.every(([left, right]) => want.get(left) === right);
     }
+    case "tapcandle": return input.kind === "tapcandle" && input.index === question.answer;
+    case "order": return input.kind === "order" && input.steps.length === question.steps.length && input.steps.every((step, index) => step === question.steps[index]);
   }
 }
 
@@ -182,6 +191,8 @@ export function answerText(question: Question): string {
     case "fill": return question.accepted[0];
     case "numeric": return `${question.answer}${question.unit ? ` ${question.unit}` : ""}`;
     case "match": return question.pairs.map(([left, right]) => `${left} → ${right}`).join("; ");
+    case "tapcandle": return `Candle ${question.answer + 1}`;
+    case "order": return question.steps.join(" → ");
   }
 }
 

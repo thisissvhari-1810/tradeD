@@ -1,52 +1,88 @@
 /**
- * Market Quest map geometry: one model for both the road and the level platforms, so they can
- * never drift apart. Coordinates are in the map's viewBox units; the HTML platforms are placed by
- * percentage of the same box, so they stay on the road at every screen size.
+ * Roadmap geometry: one model for the road, the lesson stops, the chapter regions and Tiko's walk, in
+ * the world's own units (a fixed width, a height that grows with the chapters shown). The HTML stops
+ * and cards are placed by percentage of the same box, so nothing can drift off the road at any size.
  */
 
 export type MapLayout = "wide" | "tall";
+export type Point = { x: number; y: number };
 
-export type LevelDef = {
-  id: string;
-  number: number;
-  title: string;
-  description: string;
-  teaser: string;
-  theme: "market" | "candles" | "summit";
-  /** The Academy lesson this level plays (only Level 01 is playable in this release). */
-  lessonSlug: string | null;
+const METRICS = {
+  // Desktop and tablet: the road snakes through the middle; chapter cards and landmarks sit either side.
+  wide: { width: 1200, top: 70, header: 300, gap: 138, tail: 70, center: 600, amp: 230, gateY: 0.82, fogRow: 104, fogHead: 150, fogPerRow: 3, bottom: 60 },
+  // Phones: a narrower snake; the chapter card spans the top of each region.
+  tall: { width: 600, top: 70, header: 400, gap: 170, tail: 60, center: 300, amp: 150, gateY: 0.84, fogRow: 136, fogHead: 190, fogPerRow: 1, bottom: 80 },
+} as const;
+
+export type ChapterBox = {
+  index: number;
+  top: number;
+  height: number;
+  /** Which side the chapter's landmark stands on (its card is on the other side on wide maps). */
+  side: "left" | "right";
+  nodes: Point[];
 };
 
-export const LEVELS: LevelDef[] = [
-  { id: "l1", number: 1, title: "Market Explorer", description: "Learn what a stock is and how the stock market works.", teaser: "Discover how the stock market works.", theme: "market", lessonSlug: "m1-first-trading-day" },
-  { id: "l2", number: 2, title: "Candlestick Canyon", description: "Read the story inside every candle: open, high, low and close.", teaser: "Candles, wicks and the patterns traders watch.", theme: "candles", lessonSlug: null },
-  { id: "l3", number: 3, title: "Price Action Summit", description: "Climb through support, resistance and trend structure.", teaser: "Support, resistance and the shape of a trend.", theme: "summit", lessonSlug: null },
-];
-
-type Point = { x: number; y: number };
-
-export const VIEWBOX: Record<MapLayout, { width: number; height: number }> = {
-  wide: { width: 1600, height: 900 },
-  tall: { width: 600, height: 1180 },
+export type World = {
+  layout: MapLayout;
+  width: number;
+  height: number;
+  chapters: ChapterBox[];
+  /** The mist region for chapters not reached yet (null when every chapter is open). */
+  fog: { top: number; height: number; count: number } | null;
+  /** Every stop, in journey order. */
+  nodes: Point[];
+  /** The road's points (gates and stops) and where each stop sits in that list. */
+  points: Point[];
+  nodePoint: number[];
 };
 
-/** Platform centres, then the points where the road fades into the unexplored region. */
-const ROUTE: Record<MapLayout, { nodes: Point[]; start: Point; beyond: Point[] }> = {
-  // Bottom-left, up to the upper middle, then turning right towards the far zone.
-  wide: { start: { x: 120, y: 860 }, nodes: [{ x: 360, y: 640 }, { x: 760, y: 470 }, { x: 1080, y: 250 }], beyond: [{ x: 1340, y: 300 }, { x: 1560, y: 160 }] },
-  // Phones: bottom to top, swinging left and right.
-  tall: { start: { x: 300, y: 1180 }, nodes: [{ x: 190, y: 960 }, { x: 420, y: 660 }, { x: 200, y: 370 }], beyond: [{ x: 380, y: 170 }, { x: 300, y: -20 }] },
-};
-
-export function routeOf(layout: MapLayout) {
-  return ROUTE[layout];
+/** Lays out the reached chapters (with their stop counts) and the mist for the rest. */
+export function buildWorld(layout: MapLayout, expanded: number[], hidden: number): World {
+  const m = METRICS[layout];
+  const chapters: ChapterBox[] = [];
+  const points: Point[] = [];
+  const nodePoint: number[] = [];
+  const nodes: Point[] = [];
+  let y: number = m.top;
+  expanded.forEach((count, index) => {
+    const side = index % 2 === 0 ? "right" : "left";
+    const top = y;
+    const height = m.header + count * m.gap + m.tail;
+    // The road enters each chapter through a gate below its card, away from the landmark.
+    const gateX = layout === "wide" ? m.center : side === "right" ? m.center - m.amp : m.center + m.amp;
+    points.push({ x: gateX, y: top + m.header * m.gateY });
+    const phase = layout === "wide" ? (side === "right" ? Math.PI : 0) : side === "right" ? -Math.PI / 2 : Math.PI / 2;
+    const chapterNodes: Point[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const point = { x: Math.round(m.center + m.amp * Math.sin(phase + (i + (layout === "wide" ? 0.6 : 0)) * 1.1)), y: Math.round(top + m.header + i * m.gap + m.gap / 2) };
+      chapterNodes.push(point);
+      nodes.push(point);
+      nodePoint.push(points.length);
+      points.push(point);
+    }
+    chapters.push({ index, top, height, side, nodes: chapterNodes });
+    y += height;
+  });
+  let fog: World["fog"] = null;
+  if (hidden > 0) {
+    const height = m.fogHead + Math.ceil(hidden / m.fogPerRow) * m.fogRow + 40;
+    fog = { top: y, height, count: hidden };
+    // The road fades out into the mist.
+    points.push({ x: m.center, y: y + 10 });
+    y += height;
+  } else if (nodes.length) {
+    // Journey's end: a short stretch past the last stop to the summit flag.
+    const last = nodes[nodes.length - 1];
+    points.push({ x: m.center, y: last.y + m.gap * 0.9 });
+    y = Math.max(y, last.y + m.gap * 1.3);
+  }
+  return { layout, width: m.width, height: y + m.bottom, chapters, fog, nodes, points, nodePoint };
 }
 
-/** A node's position as a percentage of the map box (for the HTML platform). */
-export function nodePercent(layout: MapLayout, index: number) {
-  const point = ROUTE[layout].nodes[index];
-  const box = VIEWBOX[layout];
-  return { left: (point.x / box.width) * 100, top: (point.y / box.height) * 100 };
+/** A point of the world as a percentage of the map box (for HTML placed over the drawing). */
+export function percent(world: World, point: Point) {
+  return { left: (point.x / world.width) * 100, top: (point.y / world.height) * 100 };
 }
 
 type Segment = [Point, Point, Point, Point];
@@ -69,28 +105,38 @@ function toPath(segments: Segment[]) {
   return `M ${segments[0][0].x} ${segments[0][0].y}` + segments.map(([, c1, c2, end]) => ` C ${n(c1.x)} ${n(c1.y)}, ${n(c2.x)} ${n(c2.y)}, ${end.x} ${end.y}`).join("");
 }
 
-function allPoints(layout: MapLayout) {
-  const route = ROUTE[layout];
-  return [route.start, ...route.nodes, ...route.beyond];
+/** The whole road. */
+export function roadPath(world: World) {
+  return toPath(segmentsOf(world.points));
 }
 
-/** The whole road (start → every node → into the unexplored region). */
-export function roadPath(layout: MapLayout) {
-  return toPath(segmentsOf(allPoints(layout)));
+/** The road from the start to stop `upTo` (it lies exactly on the full road); empty before the first stop. */
+export function travelledPath(world: World, upTo: number) {
+  if (upTo < 0) return "";
+  return toPath(segmentsOf(world.points).slice(0, world.nodePoint[upTo]));
 }
 
-/** The travelled part of the road, from the start through node `upTo`; it lies exactly on the full road. */
-export function travelledPath(layout: MapLayout, upTo: number) {
-  return toPath(segmentsOf(allPoints(layout)).slice(0, upTo + 1));
+/** The stretch from stop `from` to stop `to`, for the route highlight to the next lesson. */
+export function stretchPath(world: World, from: number, to: number) {
+  const start = from < 0 ? 0 : world.nodePoint[from];
+  return toPath(segmentsOf(world.points).slice(start, world.nodePoint[to]));
 }
 
-/** Checkpoint markers on the road, halfway along each stretch before a node. */
-export function checkpoints(layout: MapLayout) {
-  const count = ROUTE[layout].nodes.length;
-  return segmentsOf(allPoints(layout)).slice(0, count).map(([p1, c1, c2, p2]) => ({ x: (p1.x + 3 * c1.x + 3 * c2.x + p2.x) / 8, y: (p1.y + 3 * c1.y + 3 * c2.y + p2.y) / 8 }));
+/** The position `t` (0–1) of the way along the road from stop `from` to stop `to` (Tiko's walk). */
+export function pointAlong(world: World, from: number, to: number, t: number): Point {
+  const segments = segmentsOf(world.points).slice(from < 0 ? 0 : world.nodePoint[from], world.nodePoint[to]);
+  if (!segments.length) return world.nodes[to];
+  const scaled = Math.min(0.9999, Math.max(0, t)) * segments.length;
+  const [p0, p1, p2, p3] = segments[Math.floor(scaled)];
+  const u = scaled - Math.floor(scaled);
+  const v = 1 - u;
+  return {
+    x: v * v * v * p0.x + 3 * v * v * u * p1.x + 3 * v * u * u * p2.x + u * u * u * p3.x,
+    y: v * v * v * p0.y + 3 * v * v * u * p1.y + 3 * v * u * u * p2.y + u * u * u * p3.y,
+  };
 }
 
-/** Stars earned on a level from its best score: 70% one, 85% two, 100% three. */
+/** Stars earned on a lesson from its best score: 70% one, 85% two, 100% three. */
 export function starsFor(score: number) {
   return score >= 100 ? 3 : score >= 85 ? 2 : score >= 70 ? 1 : 0;
 }

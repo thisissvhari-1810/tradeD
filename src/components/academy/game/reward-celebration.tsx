@@ -47,7 +47,7 @@ export function RewardCelebration({ stars, xpBefore, xpAfter, xpGained, badge, f
           />
         ))}
       </div>
-      <h2 className="text-[26px] font-black leading-tight">{firstTime ? "Level complete!" : "Level replayed"}</h2>
+      <h2 className="text-[26px] font-black leading-tight">{firstTime ? "Lesson complete!" : "Lesson reviewed"}</h2>
       <div className="flex flex-wrap justify-center gap-2">
         <span className="inline-flex items-center gap-1.5 rounded-full bg-[#ffc83d]/25 px-3 py-1.5 text-[15px] font-black text-[#8a5a00]">
           <Zap className="h-4 w-4" fill="currentColor" aria-hidden />{xpGained > 0 ? `+${xpGained} XP` : "No new XP"}
@@ -59,7 +59,7 @@ export function RewardCelebration({ stars, xpBefore, xpAfter, xpGained, badge, f
           <Award className="h-5 w-5" aria-hidden />New badge: {badge}
         </span>
       ) : null}
-      {!firstTime ? <p className="max-w-xs text-[13px] text-[#0d1726]/60">XP for a level is paid once. Replaying keeps your knowledge fresh.</p> : null}
+      {!firstTime ? <p className="max-w-xs text-[13px] text-[#0d1726]/60">XP for a lesson is paid once. Reviewing keeps your knowledge fresh.</p> : null}
       {children}
     </section>
   );

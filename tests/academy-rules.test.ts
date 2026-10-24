@@ -85,6 +85,13 @@ describe("grading and the questions the browser sees", () => {
     expect(grade(match, { kind: "match", pairs: [["Put", "Right to sell"], ["Call", "Right to buy"]] })).toBe(true);
     expect(grade(match, { kind: "match", pairs: [["Call", "Right to sell"], ["Put", "Right to buy"]] })).toBe(false);
     expect(grade(q({ kind: "choice", options: ["x"], answer: 0 }), { kind: "truefalse", value: true })).toBe(false);
+    const chart = [{ open: 1, high: 2, low: 0.5, close: 1.5 }, { open: 1.5, high: 3, low: 1, close: 1.2 }];
+    expect(grade(q({ kind: "tapcandle", chart, answer: 1 }), { kind: "tapcandle", index: 1 })).toBe(true);
+    expect(grade(q({ kind: "tapcandle", chart, answer: 1 }), { kind: "tapcandle", index: 0 })).toBe(false);
+    const order = q({ kind: "order", steps: ["a", "b", "c"] });
+    expect(grade(order, { kind: "order", steps: ["a", "b", "c"] })).toBe(true);
+    expect(grade(order, { kind: "order", steps: ["b", "a", "c"] })).toBe(false);
+    expect(grade(order, { kind: "order", steps: ["a", "b"] })).toBe(false);
   });
 
   it("never includes the answer in what is sent to the browser", () => {
@@ -96,6 +103,13 @@ describe("grading and the questions the browser sees", () => {
     ]) {
       const sent = JSON.stringify(publicQuestion(question));
       expect(sent).not.toMatch(/"answer"|"accepted"|"tolerance"|"explanation"|secret|123\.45/);
+    }
+    const tap = JSON.stringify(publicQuestion(q({ kind: "tapcandle", chart: [{ open: 1, high: 2, low: 0, close: 1 }], answer: 0 })));
+    expect(tap).not.toMatch(/"answer"/);
+    for (const id of ["o1", "o2", "o3", "o4", "o5"]) {
+      const order = publicQuestion(q({ kind: "order", steps: ["first", "second", "third"], id }));
+      expect(order.kind === "order" && order.items.join()).not.toBe("first,second,third");
+      expect(order.kind === "order" && [...order.items].sort()).toEqual(["first", "second", "third"]);
     }
     const match = publicQuestion(q({ kind: "match", pairs: [["a", "1"], ["b", "2"], ["c", "3"], ["d", "4"]] }));
     expect(match.kind === "match" && [...match.right].sort()).toEqual(["1", "2", "3", "4"]);
@@ -138,7 +152,9 @@ describe("the course content", async () => {
       : question.kind === "truefalse" ? { kind: "truefalse" as const, value: question.answer }
         : question.kind === "fill" ? { kind: "fill" as const, text: question.accepted[0] }
           : question.kind === "numeric" ? { kind: "numeric" as const, value: question.answer }
-            : { kind: "match" as const, pairs: question.pairs };
+            : question.kind === "match" ? { kind: "match" as const, pairs: question.pairs }
+              : question.kind === "tapcandle" ? { kind: "tapcandle" as const, index: question.answer }
+                : { kind: "order" as const, steps: question.steps };
 
   it("has 7 units with unique lesson slugs and question ids", () => {
     expect(UNITS.map((unit) => unit.number)).toEqual([1, 2, 3, 4, 5, 6, 7]);

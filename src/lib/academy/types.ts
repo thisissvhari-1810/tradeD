@@ -43,7 +43,11 @@ export type Question =
   /** A calculation; the answer is accepted within ± tolerance. */
   | (QuestionBase & { kind: "numeric"; answer: number; tolerance: number; unit?: string })
   /** Match each left item to its right item; pairs are listed in the correct order and shuffled on screen. */
-  | (QuestionBase & { kind: "match"; pairs: Array<[string, string]> });
+  | (QuestionBase & { kind: "match"; pairs: Array<[string, string]> })
+  /** Tap the candle on an educational chart that meets the prompt's condition (`answer` is its index). */
+  | (QuestionBase & { kind: "tapcandle"; chart: Candle[]; answer: number })
+  /** Put the steps in order; `steps` are listed in the correct order and shuffled on screen. */
+  | (QuestionBase & { kind: "order"; steps: string[] });
 
 export type LessonCard = {
   title: string;
@@ -77,7 +81,9 @@ export type PublicQuestion =
   | { id: string; kind: "truefalse"; prompt: string; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
   | { id: string; kind: "fill"; prompt: string; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
   | { id: string; kind: "numeric"; prompt: string; unit?: string; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
-  | { id: string; kind: "match"; prompt: string; left: string[]; right: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number };
+  | { id: string; kind: "match"; prompt: string; left: string[]; right: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
+  | { id: string; kind: "tapcandle"; prompt: string; chart: Candle[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number }
+  | { id: string; kind: "order"; prompt: string; items: string[]; hint?: string; candles?: Candle[]; topic: Topic; difficulty: number };
 
 /** An answer as the browser sends it. */
 export type AnswerInput =
@@ -86,4 +92,7 @@ export type AnswerInput =
   | { kind: "fill"; text: string }
   | { kind: "numeric"; value: number }
   /** The [left, right] pairs the user made. */
-  | { kind: "match"; pairs: Array<[string, string]> };
+  | { kind: "match"; pairs: Array<[string, string]> }
+  | { kind: "tapcandle"; index: number }
+  /** The steps in the order the user arranged them. */
+  | { kind: "order"; steps: string[] };

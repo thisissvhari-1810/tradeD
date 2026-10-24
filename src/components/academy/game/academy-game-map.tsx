@@ -1,43 +1,45 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { RefreshCw } from "lucide-react";
 import { styles } from "./academy-game-classes";
 import { AcademyHud } from "./academy-hud";
-import { LEVELS, VIEWBOX, nodePercent, starsFor, type MapLayout } from "./geometry";
-import { LevelNode, type LevelStatus } from "./level-node";
-import { LevelPanel } from "./level-panel";
+import { ChapterCard, RoadAhead } from "./chapter-card";
+import { buildWorld, percent, pointAlong, starsFor, type MapLayout, type World } from "./geometry";
 import { MapEnvironment } from "./map-environment";
-import { WindingRoad } from "./winding-road";
+import { StopNode } from "./stop-node";
+import { StopPanel } from "./stop-panel";
 import { Tiko } from "./tiko";
 import { TutorDialogue } from "./tutor-dialogue";
-import type { Line, TikoMood } from "@/lib/academy/missions";
+import { WindingRoad } from "./winding-road";
+import { THEME } from "./world-art";
 import { api } from "@/components/api";
-import { DAILY_GOAL_XP, XP_RULES } from "@/lib/academy/rules";
+import { missionFor, type Line, type TikoMood } from "@/lib/academy/missions";
+import { DAILY_GOAL_XP } from "@/lib/academy/rules";
+import { journeyOf, type JourneyChapter, type JourneyStop, type JourneyUnit } from "@/lib/academy/world";
 
-type LessonInfo = { slug: string; minutes: number; questions: number; state: "locked" | "available" | "in-progress" | "completed" | "mastered"; score: number };
 type Overview = {
-  level: { xp: number };
   xp: { total: number; today: number; dailyGoal: number };
   streak: { current: number };
-  units: Array<{ lessons: LessonInfo[] }>;
+  units: JourneyUnit[];
   introSeen: boolean;
 };
 
-/** Where the map was scrolled, and a level just completed (set by the lesson), for the return trip. */
+/** Where the map was scrolled, and a lesson just completed (set by the lesson), for the return trip. */
 const SCROLL_KEY = "td-academy-scroll";
 export const FRESH_KEY = "td-academy-fresh";
 
+const MEDIA = "(max-width: 767px), (max-aspect-ratio: 4/5)";
 function useLayout(): MapLayout {
   return useSyncExternalStore(
     (notify) => {
-      const query = window.matchMedia("(max-width: 767px), (max-aspect-ratio: 4/5)");
+      const query = window.matchMedia(MEDIA);
       query.addEventListener("change", notify);
       return () => query.removeEventListener("change", notify);
     },
-    () => (window.matchMedia("(max-width: 767px), (max-aspect-ratio: 4/5)").matches ? "tall" : "wide"),
+    () => (window.matchMedia(MEDIA).matches ? "tall" : "wide"),
     () => "wide",
   );
 }
@@ -48,217 +50,351 @@ function readSession(key: string) {
 function writeSession(key: string, value: string | null) {
   try { if (value == null) sessionStorage.removeItem(key); else sessionStorage.setItem(key, value); } catch { /* storage unavailable */ }
 }
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Tiko rests beside a stop, on the side with more room. */
+function besideStop(world: World, index: number) {
+  const node = world.nodes[Math.max(0, Math.min(world.nodes.length - 1, index))];
+  if (!node) return { left: 50, top: 10 };
+  const offset = world.layout === "wide" ? 96 : 96;
+  return percent(world, { x: node.x + (node.x > world.width / 2 ? -offset : offset), y: node.y - 6 });
+}
+
+type Guide = { at: number; mood: TikoMood; line: string | null };
 
 /**
- * TradeD Academy as a game: the Market Quest level map. Progress comes from /api/academy (the
- * server's record); this component only draws it and starts levels.
+ * TradeD Academy as a journey: seven chapter regions along one road, every stop a real lesson. Progress
+ * comes from /api/academy (the server's record); this component only draws it, guides with Tiko and
+ * starts lessons.
  */
 export function AcademyGameMap() {
   const router = useRouter();
   const layout = useLayout();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
   const [launching, setLaunching] = useState<string | null>(null);
   const [fresh, setFresh] = useState<string | null>(null);
+  const [guide, setGuide] = useState<Guide | null>(null);
+  const [walking, setWalking] = useState(false);
+  const [hint, setHint] = useState<{ left: number; top: number; text: string; key: number } | null>(null);
   // Opening cinematic: road reveal, Tiko arrives, welcome, first mission. Null when not playing.
   const [intro, setIntro] = useState<null | "reveal" | "arrive" | "welcome" | "mission">(null);
-  // The map's Tiko acts out the line he is saying in the intro.
   const [introMood, setIntroMood] = useState<TikoMood>("idle");
   const onIntroLine = useCallback((line: Line) => setIntroMood(line.mood), []);
   const worldRef = useRef<HTMLDivElement>(null);
-  const nodeRefs = useRef(new Map<string, HTMLButtonElement | null>());
+  const guideRef = useRef<HTMLDivElement>(null);
+  const nodeRefs = useRef(new Map<number, HTMLButtonElement | null>());
+  const timers = useRef<number[]>([]);
+  const frame = useRef(0);
+  const hintSeq = useRef(0);
+
+  const journey = useMemo(() => (data ? journeyOf(data.units) : null), [data]);
+  const expanded = useMemo(() => journey?.chapters.filter((chapter) => chapter.expanded) ?? [], [journey]);
+  const hidden = useMemo(() => journey?.chapters.filter((chapter) => !chapter.expanded) ?? [], [journey]);
+  const world = useMemo(() => buildWorld(layout, expanded.map((chapter) => chapter.total), hidden.length), [layout, expanded, hidden]);
+  const stops = useMemo(() => expanded.flatMap((chapter) => chapter.stops), [expanded]);
+  const worldNow = useRef(world);
+  useEffect(() => { worldNow.current = world; });
+
+  const later = useCallback((ms: number, run: () => void) => { timers.current.push(window.setTimeout(run, ms)); }, []);
+  useEffect(() => () => { timers.current.forEach((timer) => window.clearTimeout(timer)); cancelAnimationFrame(frame.current); }, []);
+
+  /** Moves the map so a stop sits in the middle of the view. */
+  const scrollToStop = useCallback((index: number, smooth: boolean) => {
+    const box = worldRef.current;
+    const node = nodeRefs.current.get(index);
+    if (!box || !node) return;
+    const top = node.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - box.clientHeight / 2;
+    box.scrollTo({ top: Math.max(0, top), behavior: smooth && !reducedMotion() ? "smooth" : "auto" });
+  }, []);
+
+  /** Tiko flies along the road from one stop to another, then rests beside it. */
+  const walk = useCallback((from: number, to: number, done: () => void) => {
+    const element = guideRef.current;
+    if (!element || reducedMotion()) { done(); return; }
+    setWalking(true);
+    const duration = 900 + Math.min(6, to - from) * 260;
+    const began = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - began) / duration);
+      const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+      const at = percent(worldNow.current, pointAlong(worldNow.current, from, to, eased));
+      element.style.left = `${at.left}%`;
+      element.style.top = `${at.top}%`;
+      if (t < 1) frame.current = requestAnimationFrame(step);
+      else { setWalking(false); done(); }
+    };
+    frame.current = requestAnimationFrame(step);
+  }, []);
 
   const load = useCallback(() => {
     api<Overview>("/api/academy")
       .then((next) => {
         setError("");
-        // A level completed just now (and only once): animate its road and XP on arrival.
+        // A lesson completed just now (and only once): animate its road, XP and Tiko on arrival.
         const justDone = readSession(FRESH_KEY);
         writeSession(FRESH_KEY, null);
         setFresh(justDone);
-        if (!next.introSeen) setIntro("reveal");
         setData(next);
+        const plan = journeyOf(next.units);
+        const visible = plan.chapters.filter((chapter) => chapter.expanded).flatMap((chapter) => chapter.stops);
+        const current = visible.findIndex((stop) => stop.stop === "current");
+        const target = current >= 0 ? current : visible.length - 1;
+        const nextLine = current >= 0 ? `Next stop: ${visible[current].title}` : "You have finished every chapter. Review any stop to keep it fresh.";
+        if (!next.introSeen) { setIntro("reveal"); return; }
+        const doneAt = justDone ? visible.findIndex((stop) => stop.slug === justDone) : -1;
+        if (doneAt >= 0 && current > doneAt) {
+          // Celebrate where the lesson was, then fly to the next stop (and greet a new chapter).
+          const newChapter = visible[current].chapter !== visible[doneAt].chapter ? plan.chapters[visible[current].chapter].def.name : null;
+          setGuide({ at: doneAt, mood: "celebrate", line: "Lesson complete!" });
+          later(1300, () => {
+            setGuide({ at: doneAt, mood: "fly", line: null });
+            scrollToStop(current, true);
+            walk(doneAt, current, () => {
+              setGuide({ at: current, mood: "point", line: newChapter ? `Welcome to ${newChapter}!` : nextLine });
+              later(4200, () => setGuide({ at: current, mood: "idle", line: null }));
+            });
+          });
+          return;
+        }
+        setGuide({ at: target, mood: doneAt >= 0 ? "celebrate" : "point", line: doneAt >= 0 ? "Every chapter complete!" : nextLine });
+        later(3600, () => setGuide({ at: target, mood: "idle", line: null }));
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "The Academy could not be loaded."));
-  }, []);
+  }, [later, scrollToStop, walk]);
   useEffect(() => { load(); }, [load]);
 
   // The cinematic's timed beats (each later step waits for the learner instead).
   useEffect(() => {
     if (intro !== "reveal" && intro !== "arrive") return;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const timer = window.setTimeout(() => setIntro(intro === "reveal" ? "arrive" : "welcome"), reduce ? 0 : intro === "reveal" ? 1300 : 1000);
+    const timer = window.setTimeout(() => setIntro(intro === "reveal" ? "arrive" : "welcome"), reducedMotion() ? 0 : intro === "reveal" ? 1300 : 1000);
     return () => window.clearTimeout(timer);
   }, [intro]);
 
-  // Coming back from a level: the map scrolls to where it was.
+  // Arriving: back where the map was when a lesson started, otherwise at the stop that matters.
+  const placed = useRef(false);
   useEffect(() => {
-    if (!data || !worldRef.current) return;
+    if (!data || placed.current || !worldRef.current) return;
+    placed.current = true;
     const saved = Number(readSession(SCROLL_KEY));
-    if (Number.isFinite(saved) && saved > 0) worldRef.current.scrollTop = saved;
-  }, [data]);
+    writeSession(SCROLL_KEY, null);
+    if (Number.isFinite(saved) && saved > 0) { worldRef.current.scrollTop = saved; return; }
+    const plan = journeyOf(data.units);
+    const visible = plan.chapters.filter((chapter) => chapter.expanded).flatMap((chapter) => chapter.stops);
+    const doneAt = fresh ? visible.findIndex((stop) => stop.slug === fresh) : -1;
+    const current = visible.findIndex((stop) => stop.stop === "current");
+    const target = doneAt >= 0 ? doneAt : current >= 0 ? current : visible.length - 1;
+    if (target > 0) requestAnimationFrame(() => scrollToStop(target, false));
+  }, [data, fresh, scrollToStop]);
 
-  // Background motion pauses while the tab is hidden; desktop pointers get a little parallax.
+  // Background motion pauses while the tab is hidden.
   useEffect(() => {
-    const world = worldRef.current;
-    if (!world) return;
-    const onVisibility = () => world.classList.toggle(styles.paused, document.hidden);
+    const box = worldRef.current;
+    if (!box) return;
+    const onVisibility = () => box.classList.toggle(styles.paused, document.hidden);
     document.addEventListener("visibilitychange", onVisibility);
-    const fine = window.matchMedia("(hover: hover) and (pointer: fine)").matches && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let frame = 0;
-    const onMove = (event: PointerEvent) => {
-      if (!fine) return;
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const box = world.getBoundingClientRect();
-        world.style.setProperty("--px", (((event.clientX - box.left) / box.width) * 2 - 1).toFixed(3));
-        world.style.setProperty("--py", (((event.clientY - box.top) / box.height) * 2 - 1).toFixed(3));
-      });
-    };
-    world.addEventListener("pointermove", onMove);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      world.removeEventListener("pointermove", onMove);
-      cancelAnimationFrame(frame);
-    };
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [data]);
 
   if (error && !data) {
     return (
       <div className={`${styles.world} grid h-full place-items-center p-6 text-center`}>
-        <div>
-          <p className="text-[15px] font-bold">{error}</p>
-          <button type="button" className="mt-3 inline-flex h-11 items-center gap-2 rounded-full bg-white/15 px-5 font-bold hover:bg-white/25" onClick={load}><RefreshCw className="h-4 w-4" aria-hidden />Retry</button>
+        <div className="flex flex-col items-center">
+          <Tiko mood="confused" size={88} />
+          <p className="mt-2 text-[15px] font-bold">{error}</p>
+          <button type="button" className="mt-3 inline-flex h-11 items-center gap-2 rounded-full bg-white/15 px-5 font-bold hover:bg-white/25" style={{ color: "#fff" }} onClick={load}><RefreshCw className="h-4 w-4" aria-hidden />Retry</button>
         </div>
       </div>
     );
   }
-  if (!data) return <div className={`${styles.world} h-full`} aria-busy="true" aria-label="Loading the Academy" />;
+  if (!data || !journey) return <div className={`${styles.world} h-full`} aria-busy="true" aria-label="Loading the Academy" />;
 
-  const lessons = new Map(data.units.flatMap((unit) => unit.lessons).map((lesson) => [lesson.slug, lesson]));
-  const first = lessons.get(LEVELS[0].lessonSlug ?? "");
-  const firstDone = first?.state === "completed" || first?.state === "mastered";
-  const statusOf = (index: number): LevelStatus => {
-    const slug = LEVELS[index].lessonSlug;
-    if (!slug) return "locked";
-    const lesson = lessons.get(slug);
-    return lesson?.state === "completed" || lesson?.state === "mastered" ? "completed" : lesson?.state === "locked" ? "locked" : "active";
-  };
-  const lockedNote = (index: number) => (index === 1 && !firstDone) || index > 1 && !firstDone
-    ? `Complete Level ${String(index).padStart(2, "0")} to unlock the next level.`
-    : `${LEVELS[index].title} opens in the next release.`;
-  const completedUpTo = LEVELS.reduce((last, _, index) => (statusOf(index) === "completed" ? index : last), -1);
-  const box = VIEWBOX[layout];
-  const openLevel = LEVELS.find((level) => level.id === open) ?? null;
-  const openIndex = openLevel ? LEVELS.indexOf(openLevel) : -1;
-  const openLesson = openLevel?.lessonSlug ? lessons.get(openLevel.lessonSlug) : undefined;
+  const motion = typeof window !== "undefined" && !reducedMotion();
+  const lead = stops.findIndex((stop) => stop.stop !== "completed");
+  const completedUpTo = lead < 0 ? stops.length - 1 : lead - 1;
+  const current = stops.findIndex((stop) => stop.stop === "current");
+  const currentChapter = current >= 0 ? journey.chapters[stops[current].chapter] : null;
+  const freshStop = fresh ? stops.find((stop) => stop.slug === fresh) : undefined;
+  const freshChapter = freshStop && currentChapter && currentChapter.index !== freshStop.chapter ? currentChapter.index : -1;
+  const wide = layout === "wide";
+  const positionOf = (stop: JourneyStop) => ({ index: journey.chapters[stop.chapter].stops.indexOf(stop) + 1, of: journey.chapters[stop.chapter].total });
+  const openStop = open != null ? stops[open] ?? null : null;
+
+  // One background for the whole journey: each region's colours, blended where regions meet.
+  const stopsCss: string[] = [];
+  world.chapters.forEach((box) => {
+    const [from, to] = THEME[expanded[box.index].def.theme].ground;
+    stopsCss.push(`${from} ${((box.top + 40) / world.height) * 100}%`, `${to} ${((box.top + box.height - 60) / world.height) * 100}%`);
+  });
+  if (world.fog) stopsCss.push(`#33476b ${((world.fog.top + 60) / world.height) * 100}%`, "#1c2740 100%");
+  const background = `linear-gradient(180deg, ${stopsCss.join(", ")})`;
 
   /** The intro was watched or skipped: remember it on the account (best effort). */
   function endIntro() {
     setIntro(null);
+    const target = current >= 0 ? current : 0;
+    setGuide({ at: target, mood: "idle", line: null });
     if (!data?.introSeen) void api("/api/academy", { action: "intro-seen" }).catch(() => undefined);
   }
 
-  function play(level = openLevel) {
-    if (!level?.lessonSlug || launching) return;
+  function play(index: number) {
+    const stop = stops[index];
+    if (!stop || stop.stop === "locked" || launching) return;
     writeSession(SCROLL_KEY, String(worldRef.current?.scrollTop ?? 0));
-    const target = level.lessonSlug;
     setOpen(null);
-    setLaunching(level.id);
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    window.setTimeout(() => router.push(`/academy/lesson/${target}`), reduce ? 0 : 360);
+    setLaunching(stop.slug);
+    window.setTimeout(() => router.push(`/academy/lesson/${stop.slug}`), reducedMotion() ? 0 : 360);
   }
   const close = () => {
-    const id = open;
+    const index = open;
     setOpen(null);
-    if (id) nodeRefs.current.get(id)?.focus();
+    if (index != null) nodeRefs.current.get(index)?.focus();
+  };
+  function showHint(at: { left: number; top: number }, text: string) {
+    const key = (hintSeq.current += 1);
+    setHint({ left: Math.max(wide ? 22 : 36, Math.min(wide ? 78 : 64, at.left)), top: at.top, text, key });
+    setGuide((value) => (value ? { ...value, mood: "explain" } : value));
+    later(3400, () => setHint((value) => (value?.key === key ? null : value)));
+  }
+  function lockedStop(index: number) {
+    const stop = stops[index];
+    const before = stops[index - 1];
+    const at = percent(world, world.nodes[index]);
+    const chapter = journey!.chapters[stop.chapter];
+    const previousChapter = journey!.chapters[stop.chapter - 1];
+    const text = chapter.status === "locked" && previousChapter
+      ? `${chapter.def.name} opens when you finish ${previousChapter.def.name}.`
+      : `Finish “${before?.title ?? "the lesson before"}” first to unlock this stop.`;
+    showHint({ left: at.left, top: at.top + (wide ? 9 : 5) }, text);
+  }
+  function aheadHint(chapter: JourneyChapter) {
+    const previous = journey!.chapters[chapter.index - 1];
+    const top = world.fog ? ((world.fog.top + 40) / world.height) * 100 : 50;
+    showHint({ left: 50, top }, `${chapter.def.name} opens after ${previous?.def.name ?? "the chapter before"}. Keep going: it is on this road.`);
+  }
+  const jump = () => {
+    const target = current >= 0 ? current : stops.length - 1;
+    scrollToStop(target, true);
+    setGuide({ at: target, mood: "point", line: current >= 0 ? `Next stop: ${stops[target].title}` : "You have finished every chapter!" });
+    later(3200, () => setGuide({ at: target, mood: "idle", line: null }));
   };
 
+  const guideAt = guide ? besideStop(world, guide.at) : null;
+  const introAt = besideStop(world, 0);
+  const width = wide ? "min(100%, 1180px)" : "min(100%, 560px)";
+
   return (
-    <div ref={worldRef} className={`${styles.world} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
-      <AcademyHud xp={data.xp.total} streak={data.streak.current} today={data.xp.today} goal={data.xp.dailyGoal || DAILY_GOAL_XP} bumpXp={Boolean(fresh)} onReplayIntro={intro ? undefined : () => setIntro("reveal")} />
-      <div
-        className="relative mx-auto"
-        style={layout === "wide"
-          ? { width: "min(100%, calc((100dvh - var(--topbar) - 64px) * 16 / 9))", aspectRatio: `${box.width} / ${box.height}`, marginTop: -8 }
-          : { width: "100%", aspectRatio: `${box.width} / ${box.height}` }}
-      >
-        <MapEnvironment layout={layout} />
-        <WindingRoad layout={layout} completedUpTo={completedUpTo} fresh={Boolean(fresh)} />
-        {LEVELS.map((level, index) => {
-          const at = nodePercent(layout, index);
-          const lesson = level.lessonSlug ? lessons.get(level.lessonSlug) : undefined;
-          return (
-            <LevelNode
-              key={level.id}
-              ref={(node) => { nodeRefs.current.set(level.id, node); }}
-              level={level}
-              status={statusOf(index)}
-              stars={starsFor(lesson?.score ?? 0)}
-              left={at.left}
-              top={at.top}
-              order={index}
-              launching={launching === level.id}
-              lockedNote={lockedNote(index)}
-              onOpen={() => setOpen(level.id)}
+    <div ref={worldRef} className={`${styles.world} ${wide ? "" : "mq-tall"} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
+      <AcademyHud
+        xp={data.xp.total}
+        streak={data.streak.current}
+        today={data.xp.today}
+        goal={data.xp.dailyGoal || DAILY_GOAL_XP}
+        bumpXp={Boolean(fresh)}
+        onReplayIntro={intro ? undefined : () => setIntro("reveal")}
+        chapter={currentChapter ? { name: currentChapter.def.name, done: currentChapter.done, total: currentChapter.total } : null}
+        onJump={stops.length ? jump : undefined}
+      />
+      <div className="relative -mt-14 w-full" style={{ background }}>
+        <div className="relative mx-auto" style={{ width, aspectRatio: `${world.width} / ${world.height}` }}>
+          <MapEnvironment world={world} chapters={expanded.map((chapter) => ({ theme: chapter.def.theme, complete: chapter.status === "complete" }))} />
+          <WindingRoad world={world} completedUpTo={completedUpTo} current={current} fresh={Boolean(freshStop)} motion={motion} />
+
+          {expanded.map((chapter, chapterIndex) => {
+            const box = world.chapters[chapterIndex];
+            const cardStyle: React.CSSProperties = wide
+              ? { top: `${((box.top + 36) / world.height) * 100}%`, width: "36%", ...(box.side === "right" ? { left: "3%" } : { right: "3%" }) }
+              : { top: `${((box.top + 18) / world.height) * 100}%`, left: "4%", width: "92%" };
+            return (
+              <section key={chapter.unit.id} aria-label={`Chapter ${chapter.unit.number}: ${chapter.def.name}`}>
+                <ChapterCard chapter={chapter} previous={journey.chapters[chapterIndex - 1]?.def.name ?? null} style={cardStyle} fresh={chapterIndex === freshChapter} />
+                {chapter.stops.map((stop) => {
+                  const index = stops.indexOf(stop);
+                  const at = percent(world, world.nodes[index]);
+                  return (
+                    <StopNode
+                      key={stop.slug}
+                      ref={(node) => { nodeRefs.current.set(index, node); }}
+                      stop={stop}
+                      theme={chapter.def.theme}
+                      chapterName={chapter.def.name}
+                      position={positionOf(stop)}
+                      left={at.left}
+                      top={at.top}
+                      order={index}
+                      stars={starsFor(stop.score)}
+                      story={Boolean(missionFor(stop.slug))}
+                      launching={launching === stop.slug}
+                      onOpen={() => { scrollToStop(index, false); setOpen(index); }}
+                      onLocked={() => lockedStop(index)}
+                    />
+                  );
+                })}
+              </section>
+            );
+          })}
+
+          {world.fog && currentChapter ? (
+            <RoadAhead chapters={hidden} current={currentChapter.def.name} onHint={aheadHint} style={{ top: `${((world.fog.top + 30) / world.height) * 100}%`, left: "4%", width: "92%" }} />
+          ) : null}
+
+          {openStop && open != null ? (
+            <StopPanel
+              stop={openStop}
+              theme={journey.chapters[openStop.chapter].def.theme}
+              chapter={{ number: journey.chapters[openStop.chapter].unit.number, name: journey.chapters[openStop.chapter].def.name }}
+              position={positionOf(openStop)}
+              stars={starsFor(openStop.score)}
+              story={Boolean(missionFor(openStop.slug))}
+              sheet={!wide}
+              anchor={percent(world, world.nodes[open])}
+              onPlay={() => play(open)}
+              onClose={close}
             />
-          );
-        })}
-        {openLevel && openLesson ? (
-          <LevelPanel
-            level={openLevel}
-            sheet={layout === "tall"}
-            anchor={nodePercent(layout, openIndex)}
-            info={{
-              minutes: openLesson.minutes,
-              questions: openLesson.questions,
-              xp: XP_RULES.lessonComplete + XP_RULES.quizComplete + openLesson.questions * XP_RULES.correctAnswer,
-              stars: starsFor(openLesson.score),
-              completed: openLesson.state === "completed" || openLesson.state === "mastered",
-            }}
-            onPlay={() => play()}
-            onClose={close}
-          />
-        ) : null}
-        {/* Tiko waits beside the next level (outside the cinematic, which places him itself). */}
-        {!intro && !launching ? (() => {
-          const target = LEVELS.findIndex((_, index) => statusOf(index) === "active");
-          const at = nodePercent(layout, target >= 0 ? target : Math.max(0, completedUpTo));
-          return (
-            <div className="pointer-events-none absolute z-[3]" style={{ left: `${at.left + (layout === "wide" ? 7 : 16)}%`, top: `${at.top - (layout === "wide" ? 4 : 2)}%`, transform: "translate(-50%, -50%)" }}>
-              <Tiko mood={fresh ? "celebrate" : "idle"} size={layout === "wide" ? 76 : 64} facing="left" />
+          ) : null}
+
+          {/* Tiko, the guide: beside the next stop, celebrating real completions, flying along the road. */}
+          {guide && guideAt && !intro ? (
+            <div ref={guideRef} className="mq-guide" data-walking={walking ? "true" : undefined} style={{ left: `${guideAt.left}%`, top: `${guideAt.top}%` }}>
+              {guide.line && !walking ? <span className="mq-guide-bubble" data-away={world.nodes[guide.at] && world.nodes[guide.at].x > world.width / 2 ? "left" : "right"} role="status">{guide.line}</span> : null}
+              <Tiko mood={walking ? "fly" : guide.mood} size={wide ? 78 : 62} facing={world.nodes[guide.at] && world.nodes[guide.at].x > world.width / 2 ? "right" : "left"} />
             </div>
-          );
-        })() : null}
-        {intro && intro !== "reveal" ? (() => {
-          const at = nodePercent(layout, 0);
-          return (
-            <div className="pointer-events-none absolute z-[9]" style={{ left: `${at.left + (layout === "wide" ? 7 : 16)}%`, top: `${at.top - (layout === "wide" ? 4 : 2)}%`, transform: "translate(-50%, -50%)" }}>
+          ) : null}
+          {intro && intro !== "reveal" ? (
+            <div className="pointer-events-none absolute z-[9]" style={{ left: `${introAt.left}%`, top: `${introAt.top}%`, transform: "translate(-50%, -62%)" }}>
               {intro === "arrive" ? <span className="mq-landing absolute left-1/2 top-[90%] block h-6 w-24 -translate-x-1/2 rounded-full border-4 border-[#38e1ff]/70" aria-hidden /> : null}
-              <Tiko mood={intro === "arrive" ? "enter" : introMood} size={layout === "wide" ? 96 : 76} facing="left" />
+              <Tiko mood={intro === "arrive" ? "enter" : introMood} size={wide ? 96 : 76} facing={world.nodes[0] && world.nodes[0].x > world.width / 2 ? "right" : "left"} />
             </div>
-          );
-        })() : null}
-        <div className={styles.veil} aria-hidden />
+          ) : null}
+          {hint ? (
+            <div key={hint.key} className="mq-hint" role="status" style={{ left: `${hint.left}%`, top: `${hint.top}%` }}>
+              <Tiko mood="explain" size={40} />
+              <span>{hint.text}</span>
+            </div>
+          ) : null}
+        </div>
       </div>
+      <div className={styles.veil} aria-hidden />
+
       {/* Attached to the page itself, so it sits above the app's bottom bar (the map is its own layer). */}
       {intro ? createPortal(
-        <div className="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] lg:left-[var(--rail)]" role="dialog" aria-label="Welcome to Market Quest">
+        <div className="fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-3 px-3 pb-[max(1rem,env(safe-area-inset-bottom))] lg:left-[var(--rail)]" role="dialog" aria-label="Welcome to the TradeD Academy">
           <button type="button" className="self-end rounded-full bg-black/45 px-4 py-2 text-[13px] font-bold hover:bg-black/60" style={{ color: "#fff" }} onClick={endIntro}>Skip intro</button>
           {intro === "welcome" || intro === "mission" ? (
             <div className="w-full max-w-xl">
               {intro === "welcome" ? (
                 <div className="mq-title-card mb-3 text-center">
                   <p className="text-[clamp(1.5rem,4vw,2.25rem)] font-black tracking-tight text-white drop-shadow-[0_3px_0_rgba(0,0,0,.35)]">Welcome to Market Quest</p>
-                  <p className="text-[14px] font-semibold text-white/85">Learn the market. Practise your decisions. Build your skills.</p>
+                  <p className="text-[14px] font-semibold text-white/85">Seven regions. One road. Learn the market one stop at a time.</p>
                 </div>
               ) : null}
               {intro === "welcome" ? (
                 <TutorDialogue
                   lines={[
-                    { mood: "enter", text: "Welcome to Market City! I\u2019m Tiko, your market guide." },
-                    { mood: "explain", text: "Each platform is a mission. Finish one to open the road to the next." },
+                    { mood: "enter", text: "Welcome to Market City! I’m Tiko, your market guide." },
+                    { mood: "explain", text: "Every stop on this road is a lesson. Finish one and the road to the next opens." },
+                    { mood: "point", text: "Seven regions lie ahead, from Candlestick Canyon to Strategy Summit." },
                   ]}
                   onDone={() => setIntro("mission")}
                   doneLabel="Show me"
@@ -267,15 +403,15 @@ export function AcademyGameMap() {
                 />
               ) : (
                 <div className="flex flex-col gap-2">
-                  <TutorDialogue lines={[{ mood: "point", text: "Your first mission is in Market City: learn how prices move and make your first plan." }]} onLine={onIntroLine} avatar={false} />
-                  <button type="button" className={styles.play} onClick={() => { endIntro(); play(LEVELS[0]); }}>START YOUR FIRST MISSION</button>
+                  <TutorDialogue lines={[{ mood: "point", text: "Your first stop is a story mission in Market City: learn how prices move and make your first plan." }]} onLine={onIntroLine} avatar={false} />
+                  <button type="button" className={styles.play} onClick={() => { endIntro(); play(0); }}>START YOUR FIRST MISSION</button>
                 </div>
               )}
             </div>
           ) : null}
         </div>
       , document.body) : null}
-      <p className="sr-only" aria-live="polite">{firstDone ? "Level 1 completed. Levels 2 and 3 open in a later release." : "Level 1, Market Explorer, is ready to play."}</p>
+      <p className="sr-only" aria-live="polite">{current >= 0 ? `Next lesson: ${stops[current].title}, in ${currentChapter?.def.name}.` : "Every chapter is complete."}</p>
     </div>
   );
 }

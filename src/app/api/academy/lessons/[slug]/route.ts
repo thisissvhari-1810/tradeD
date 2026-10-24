@@ -15,6 +15,8 @@ const answer = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("fill"), text: z.string().max(80) }).strict(),
   z.object({ kind: z.literal("numeric"), value: z.number().finite() }).strict(),
   z.object({ kind: z.literal("match"), pairs: z.array(z.tuple([z.string().max(200), z.string().max(200)])).max(8) }).strict(),
+  z.object({ kind: z.literal("tapcandle"), index: z.number().int().min(0).max(60) }).strict(),
+  z.object({ kind: z.literal("order"), steps: z.array(z.string().max(200)).max(8) }).strict(),
 ]);
 
 const body = z.discriminatedUnion("action", [

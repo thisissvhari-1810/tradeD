@@ -1,0 +1,137 @@
+/* Academy lesson player. Every class starts with ax- so nothing leaks into the trading app. Colours come
+   from the app's theme tokens, so the player follows light and dark mode. */
+
+.ax-shell { display: flex; flex-direction: column; height: 100%; background: var(--background); color: var(--text); }
+.ax-screen { animation: axScreenIn 280ms cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes axScreenIn { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+
+/* ---------- top bar: progress + combo ---------- */
+.ax-progress { position: relative; flex: 1; height: 14px; border-radius: 999px; background: var(--sunken); overflow: hidden; box-shadow: inset 0 1px 2px rgba(0, 0, 0, .08); }
+.ax-progress-fill {
+  position: relative;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--profit) 75%, #fff), var(--profit));
+  transition: width 520ms cubic-bezier(.3, 1.3, .5, 1);
+  min-width: 14px;
+}
+/* The light strip along the top of the bar, and a shine that sweeps across when it grows. */
+.ax-progress-fill::before { content: ""; position: absolute; left: 7px; right: 7px; top: 3px; height: 3px; border-radius: 999px; background: rgba(255, 255, 255, .45); }
+.ax-progress-fill[data-bump="true"]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .7) 50%, transparent 80%); animation: axShine 700ms ease-out; }
+@keyframes axShine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+.ax-combo { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 999px; background: color-mix(in srgb, #ff8a3d 16%, var(--panel)); color: #e0621a; font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; white-space: nowrap; animation: axPopIn 360ms cubic-bezier(.3, 1.6, .5, 1); }
+.ax-combo[data-milestone="true"] { animation: axPopIn 360ms cubic-bezier(.3, 1.6, .5, 1), axGlow 1.2s ease-out; }
+@keyframes axGlow { from { box-shadow: 0 0 0 0 rgba(255, 138, 61, .55); } to { box-shadow: 0 0 0 14px rgba(255, 138, 61, 0); } }
+@keyframes axPopIn { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+
+/* ---------- Tiko's prompt bubble ---------- */
+.ax-bubble { position: relative; flex: 1; min-width: 0; padding: 14px 16px; border-radius: 18px; border: 2px solid var(--border); background: var(--panel); }
+.ax-bubble::before { content: ""; position: absolute; left: -9px; top: 22px; width: 14px; height: 14px; background: var(--panel); border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); transform: rotate(45deg); }
+
+/* ---------- answer tiles ---------- */
+.ax-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 2px solid var(--border);
+  border-bottom-width: 4px;
+  border-radius: 16px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 110ms ease, border-color 140ms ease, background-color 140ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+@media (hover: hover) { .ax-option:hover:not(:disabled) { background: var(--hover); } }
+.ax-option:active:not(:disabled) { transform: translateY(2px) scale(.99); }
+.ax-option:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.ax-option:disabled { cursor: default; }
+.ax-option[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 11%, var(--panel)); animation: axPick 200ms cubic-bezier(.3, 1.6, .5, 1); }
+.ax-option[data-result="correct"] { border-color: var(--profit); background: var(--profit-soft); animation: axPick 260ms cubic-bezier(.3, 1.6, .5, 1); }
+.ax-option[data-result="wrong"] { border-color: var(--loss); background: var(--loss-soft); animation: axShake 380ms ease-in-out; }
+.ax-option[data-result="answer"] { border-color: var(--profit); border-style: dashed; }
+.ax-option[data-dim="true"] { opacity: .55; }
+@keyframes axPick { 0% { transform: scale(.97); } 60% { transform: scale(1.015); } 100% { transform: scale(1); } }
+@keyframes axShake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 80% { transform: translateX(2px); } }
+.ax-shake { animation: axShake 380ms ease-in-out; }
+
+.ax-key { display: grid; place-items: center; flex-shrink: 0; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 9px; border: 2px solid var(--border); color: var(--muted); font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; }
+.ax-option[aria-pressed="true"] .ax-key { border-color: var(--primary); color: var(--primary); }
+.ax-option[data-result="correct"] .ax-key, .ax-option[data-result="answer"] .ax-key { border-color: var(--profit); color: var(--profit); }
+.ax-option[data-result="wrong"] .ax-key { border-color: var(--loss); color: var(--loss); }
+
+/* Match pairs: each pair shares a colour (and a number, so colour is not the only cue). */
+.ax-option[data-pair] { border-color: var(--pair); background: color-mix(in srgb, var(--pair) 13%, var(--panel)); }
+.ax-option[data-pair] .ax-key { border-color: var(--pair); color: var(--pair); }
+
+/* Order: chosen steps in the answer line. */
+.ax-slots { display: flex; flex-direction: column; gap: 8px; min-height: 64px; padding: 10px; border-radius: 16px; border: 2px dashed var(--border-strong); }
+
+.ax-input { height: 56px; min-width: 0; flex: 1; padding: 0 16px; border-radius: 16px; border: 2px solid var(--border); background: var(--panel); color: var(--text); font-size: 1.05rem; font-weight: 600; }
+.ax-input:focus { outline: none; border-color: var(--primary); }
+.ax-input[data-result="correct"] { border-color: var(--profit); background: var(--profit-soft); }
+.ax-input[data-result="wrong"] { border-color: var(--loss); background: var(--loss-soft); animation: axShake 380ms ease-in-out; }
+
+/* ---------- buttons ---------- */
+.ax-btn {
+  --tone: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--tone);
+  color: #fff;
+  font: 800 15px/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  box-shadow: 0 4px 0 color-mix(in srgb, var(--tone) 65%, #000);
+  cursor: pointer;
+  transition: transform 90ms ease, box-shadow 90ms ease, filter 140ms ease;
+}
+.ax-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.ax-btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 color-mix(in srgb, var(--tone) 65%, #000); }
+.ax-btn:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+.ax-btn:disabled { background: var(--sunken); color: var(--disabled); box-shadow: 0 4px 0 var(--border); cursor: default; }
+.ax-btn[data-tone="success"] { --tone: var(--profit); }
+.ax-btn[data-tone="danger"] { --tone: var(--loss); }
+.ax-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 52px; padding: 0 18px; border: 2px solid var(--border); border-bottom-width: 4px; border-radius: 16px; background: var(--panel); color: var(--text-2); font: 800 14px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; }
+.ax-btn-ghost:hover { background: var(--hover); }
+.ax-btn-ghost:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.ax-spin { width: 18px; height: 18px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .35); border-top-color: #fff; animation: axSpin 700ms linear infinite; }
+@keyframes axSpin { to { transform: rotate(360deg); } }
+
+/* ---------- feedback tray (slides up after the server has checked the answer) ---------- */
+.ax-footer { border-top: 2px solid var(--border-soft); background: var(--panel); }
+.ax-tray { border-top: 0; animation: axTrayIn 300ms cubic-bezier(.2, .9, .3, 1.1); }
+.ax-tray[data-tone="correct"] { background: var(--profit-soft); }
+.ax-tray[data-tone="wrong"] { background: var(--loss-soft); }
+.ax-tray[data-tone="error"] { background: var(--warning-soft); }
+@keyframes axTrayIn { from { transform: translateY(100%); } to { transform: none; } }
+.ax-tray-icon { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border-radius: 50%; background: var(--panel); animation: axIconIn 420ms cubic-bezier(.3, 1.7, .5, 1) 80ms both; }
+@keyframes axIconIn { from { transform: scale(0) rotate(-40deg); } to { transform: none; } }
+.ax-tray-body { max-height: 32vh; overflow-y: auto; }
+
+/* ---------- tip cards ---------- */
+.ax-tip { border-radius: 20px; border: 2px solid var(--border); border-bottom-width: 5px; background: var(--panel); padding: 20px; }
+.ax-tip-label { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--info-soft); color: var(--info); font: 800 11px/1.2 ui-sans-serif, system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; }
+
+/* ---------- sound / vibration switches ---------- */
+.ax-toggle { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.ax-toggle:hover { background: var(--hover); color: var(--text); }
+.ax-toggle[aria-pressed="true"] { color: var(--primary); }
+.ax-toggle:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ax-screen, .ax-combo, .ax-tray, .ax-tray-icon, .ax-option, .ax-input, .ax-shake, .ax-progress-fill, .ax-progress-fill::after { animation: none !important; transition: none !important; }
+}

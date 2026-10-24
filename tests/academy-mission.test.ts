@@ -4,15 +4,18 @@ import { describe, expect, it } from "vitest";
 import { UNITS } from "@/lib/academy/content";
 import { MISSIONS } from "@/lib/academy/missions";
 import { lessonStates } from "@/lib/academy/rules";
-import { LEVELS } from "@/components/academy/game/geometry";
+import { journeyOf } from "@/lib/academy/world";
 
 describe("Market City mission", () => {
   const mission = MISSIONS["m1-first-trading-day"];
   const lesson = UNITS[0].lessons[0];
 
-  it("is the first lesson of Unit 1, open to every new learner, and Level 01 plays it", () => {
+  it("is the first lesson of Unit 1, open to every new learner, and the roadmap's first stop", () => {
     expect(lesson.slug).toBe(mission.slug);
-    expect(LEVELS[0].lessonSlug).toBe(mission.slug);
+    const states = lessonStates(UNITS, new Map());
+    const journey = journeyOf(UNITS.map((unit) => ({ id: unit.id, number: unit.number, title: unit.title, lessons: unit.lessons.map((item) => ({ slug: item.slug, title: item.title, summary: item.summary, minutes: item.minutes, questions: item.questions.length, state: states.get(item.slug)!, score: 0 })) })));
+    expect(journey.stops[0].slug).toBe(mission.slug);
+    expect(journey.current).toBe(mission.slug);
     expect(lessonStates(UNITS, new Map()).get(mission.slug)).toBe("available");
   });
 

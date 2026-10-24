@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Check, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { useDesk } from "@/components/shell";
-import { QuestionView, type Feedback } from "@/components/academy/lesson-player";
+import { cue } from "@/components/academy/feedback";
+import { ExerciseView, inputOf, type Draft, type Feedback } from "@/components/academy/lesson/exercise-view";
 import type { DecisionChoice, Line, Mission, Scene, TikoMood } from "@/lib/academy/missions";
 import type { AnswerInput, PublicQuestion } from "@/lib/academy/types";
 import { styles } from "./academy-game-classes";
@@ -58,13 +59,14 @@ export function MissionPlayer({ mission }: { mission: Mission }) {
   }
   if (!lesson) return <div className={`${styles.world} h-full`} aria-busy="true" aria-label="Loading the mission" />;
 
-  async function answer(questionId: string, input: AnswerInput): Promise<Feedback> {
+  /** The server's verdict, or null when it could not be reached (nothing is marked then). */
+  async function answer(questionId: string, input: AnswerInput): Promise<Feedback | null> {
     try {
       const result = await api<Feedback>(`/api/academy/lessons/${mission.slug}`, { action: "answer", questionId, answer: input });
       setXpEarned((value) => value + result.xp);
       return result;
-    } catch (caught) {
-      return { correct: false, explanation: caught instanceof Error ? caught.message : "The answer could not be checked.", mistake: null, answer: "", xp: 0 };
+    } catch {
+      return null;
     }
   }
 
@@ -114,7 +116,7 @@ function SceneView({ mission, scene, questions, answer, onNext, completion, comp
   mission: Mission;
   scene: Scene;
   questions: Map<string, PublicQuestion>;
-  answer: (questionId: string, input: AnswerInput) => Promise<Feedback>;
+  answer: (questionId: string, input: AnswerInput) => Promise<Feedback | null>;
   onNext: () => void;
   completion: Completion | null;
   complete: () => Promise<void>;
@@ -221,26 +223,51 @@ function SceneView({ mission, scene, questions, answer, onNext, completion, comp
 }
 
 /** A server-graded question with Tiko reacting; a wrong answer can be retried. */
-function GradedQuestion({ question, mission, answer, onCorrect }: { question: PublicQuestion | undefined; mission: Mission; answer: (questionId: string, input: AnswerInput) => Promise<Feedback>; onCorrect: () => void }) {
+function GradedQuestion({ question, mission, answer, onCorrect }: { question: PublicQuestion | undefined; mission: Mission; answer: (questionId: string, input: AnswerInput) => Promise<Feedback | null>; onCorrect: () => void }) {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [draft, setDraft] = useState<{ attempt: number; value: Draft }>({ attempt: 0, value: {} });
   if (!question) return <p className="text-[14px] text-white/75">This question is not available.</p>;
-  const mood: TikoMood = !feedback ? "thinking" : feedback.correct ? "celebrate" : "confused";
+  const value = draft.attempt === attempt ? draft.value : {};
+  const input = inputOf(question, value);
+  const mood: TikoMood = busy ? "thinking" : !feedback ? "thinking" : feedback.correct ? "celebrate" : "encourage";
+  async function check() {
+    if (!question || !input || busy || feedback) return;
+    setBusy(true);
+    setFailed(false);
+    const result = await answer(question.id, input);
+    setBusy(false);
+    if (!result) { setFailed(true); return; }
+    setFeedback(result);
+    cue(result.correct ? "correct" : "wrong");
+  }
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <Tiko mood={mood} size={64} />
-        <p className="text-[14px] font-semibold text-white/85" aria-live="polite">{!feedback ? "Take your time." : feedback.correct ? mission.correct.text : mission.wrong.text}</p>
+        <p className="text-[14px] font-semibold text-white/85" aria-live="polite">{busy ? "Checking…" : !feedback ? "Take your time." : feedback.correct ? mission.correct.text : mission.wrong.text}</p>
       </div>
-      <div className="rounded-3xl bg-[#fffaf0] p-4 text-[#0d1726] shadow-[0_6px_0_#d8b46a]">
-        <QuestionView key={attempt} question={question} feedback={feedback} busy={busy} onSubmit={async (input) => { setBusy(true); setFeedback(await answer(question.id, input)); setBusy(false); }} />
+      <div className={`rounded-3xl bg-panel p-4 text-text shadow-[0_6px_0_rgba(0,0,0,.25)] ${feedback && !feedback.correct ? "ax-shake" : ""}`}>
+        <ExerciseView key={attempt} question={question} draft={value} onDraft={(next) => setDraft({ attempt, value: next })} locked={busy || Boolean(feedback)} feedback={feedback} onSubmit={() => void check()} />
+        {feedback ? (
+          <div className="ax-tray mt-4 rounded-2xl p-3" data-tone={feedback.correct ? "correct" : "wrong"} role="status">
+            <p className="flex items-center gap-2 text-[16px] font-black" style={{ color: feedback.correct ? "var(--profit)" : "var(--loss)" }}>
+              {feedback.correct ? <Check className="h-5 w-5" strokeWidth={3} aria-hidden /> : null}
+              {feedback.correct ? `Correct${feedback.xp ? ` · +${feedback.xp} XP` : ""}` : "Not quite"}
+            </p>
+            {!feedback.correct && feedback.answer ? <p className="mt-1 text-[14px] font-bold">Correct answer: {feedback.answer}</p> : null}
+            <p className="mt-1 text-[14px] text-text-2">{feedback.explanation}</p>
+          </div>
+        ) : null}
+        {failed ? <p className="mt-3 text-[14px] font-semibold" style={{ color: "var(--loss)" }} role="alert">The answer could not be checked. Nothing was marked; try again.</p> : null}
       </div>
-      {feedback ? (
-        feedback.correct
-          ? <button type="button" className={styles.play} onClick={onCorrect} autoFocus>CONTINUE</button>
-          : <button type="button" className="h-[54px] rounded-2xl border border-white/25 bg-white/10 font-extrabold tracking-wide hover:bg-white/20" onClick={() => { setFeedback(null); setAttempt((value) => value + 1); }}>TRY AGAIN</button>
-      ) : null}
+      {!feedback ? (
+        <button type="button" className="ax-btn" data-tone="success" disabled={!input || busy} onClick={() => void check()}>{busy ? <><span className="ax-spin" aria-hidden />Checking</> : "Check"}</button>
+      ) : feedback.correct
+        ? <button type="button" className={styles.play} onClick={onCorrect} autoFocus>CONTINUE</button>
+        : <button type="button" className="h-[54px] rounded-2xl border border-white/25 bg-white/10 font-extrabold tracking-wide hover:bg-white/20" onClick={() => { setFeedback(null); setAttempt((value) => value + 1); }} autoFocus>TRY AGAIN</button>}
     </div>
   );
 }

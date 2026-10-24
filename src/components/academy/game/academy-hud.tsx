@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Clapperboard, Flame, GraduationCap, Target, Zap } from "lucide-react";
+import { ArrowLeft, Clapperboard, Flame, GraduationCap, Navigation, Target, Volume2, VolumeX, Zap } from "lucide-react";
+import { setFeedbackPrefs, useFeedbackPrefs } from "@/components/academy/feedback";
 import { styles } from "./academy-game-classes";
 
 /** Counts from the previous value (or `initial`) to the new one, only when the value really changes. */
@@ -38,7 +39,18 @@ function Counter({ icon, tone, label, value, suffix, bump }: { icon: React.React
 }
 
 /** The game's top bar: back to the app, title, and the real XP, streak and daily goal. */
-export function AcademyHud({ xp, streak, today, goal, bumpXp, onReplayIntro }: { xp: number; streak: number; today: number; goal: number; bumpXp: boolean; onReplayIntro?: () => void }) {
+export function AcademyHud({ xp, streak, today, goal, bumpXp, onReplayIntro, chapter, onJump }: {
+  xp: number;
+  streak: number;
+  today: number;
+  goal: number;
+  bumpXp: boolean;
+  onReplayIntro?: () => void;
+  /** The chapter of the next lesson, and a way to scroll back to it. */
+  chapter?: { name: string; done: number; total: number } | null;
+  onJump?: () => void;
+}) {
+  const prefs = useFeedbackPrefs();
   return (
     <div className={styles.hud}>
       <Link href="/" className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 text-white hover:bg-white/20" aria-label="Back to TradeD"><ArrowLeft className="h-4 w-4" aria-hidden /></Link>
@@ -46,8 +58,15 @@ export function AcademyHud({ xp, streak, today, goal, bumpXp, onReplayIntro }: {
         <GraduationCap className="h-5 w-5 shrink-0 text-[#ffc83d]" aria-hidden />
         <span className="truncate text-[15px] max-[380px]:hidden">Market Quest</span>
       </span>
+      {chapter && onJump ? (
+        <button type="button" className="ml-1 hidden h-9 min-w-0 items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 text-[12px] font-bold hover:bg-white/20 md:inline-flex" style={{ color: "#fff" }} onClick={onJump} title="Go to your next lesson">
+          <Navigation className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="truncate">{chapter.name}</span><span className="tabular-nums text-white/65">{chapter.done}/{chapter.total}</span>
+        </button>
+      ) : null}
       <span className="flex-1" />
-      {onReplayIntro ? <button type="button" className="hidden h-9 items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 text-[12px] font-bold hover:bg-white/20 sm:inline-flex" style={{ color: "#fff" }} onClick={onReplayIntro}><Clapperboard className="h-4 w-4" aria-hidden />Replay intro</button> : null}
+      {onJump ? <button type="button" className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20 md:hidden" style={{ color: "#fff" }} onClick={onJump} aria-label="Go to your next lesson"><Navigation className="h-4 w-4" aria-hidden /></button> : null}
+      <button type="button" className="grid h-9 w-9 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" style={{ color: "#fff" }} aria-pressed={prefs.sound} aria-label="Sound effects" title={prefs.sound ? "Sound on" : "Sound off"} onClick={() => setFeedbackPrefs({ sound: !prefs.sound })}>{prefs.sound ? <Volume2 className="h-4 w-4" aria-hidden /> : <VolumeX className="h-4 w-4" aria-hidden />}</button>
+      {onReplayIntro ? <button type="button" className="hidden h-9 items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 text-[12px] font-bold hover:bg-white/20 sm:inline-flex" style={{ color: "#fff" }} onClick={onReplayIntro} aria-label="Replay intro" title="Replay intro"><Clapperboard className="h-4 w-4" aria-hidden /><span className="max-lg:hidden">Replay intro</span></button> : null}
       <Counter icon={<Zap className="h-4 w-4 text-[#5a3b00]" fill="currentColor" />} tone="linear-gradient(180deg,#ffe07a,#ffb81f)" label="XP" value={xp} bump={bumpXp} />
       <Counter icon={<Flame className="h-4 w-4 text-white" fill="currentColor" />} tone="linear-gradient(180deg,#ff9a6b,#ff5a4a)" label="Day streak" value={streak} bump={false} />
       <span className="max-sm:hidden">
