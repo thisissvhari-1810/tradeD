@@ -6,7 +6,6 @@ import { Check, Lightbulb, Minus, Plus, X } from "lucide-react";
 import { CandleSketch } from "@/components/academy/candle-sketch";
 import { EduChart } from "@/components/academy/game/edu-chart";
 import { PriceLineChart } from "./price-line-chart";
-import { cue } from "@/components/academy/academy-sound";
 import type { AnswerInput, PublicQuestion } from "@/lib/academy/types";
 
 /** The server's verdict on an answer (the browser never decides correctness). */
@@ -58,20 +57,24 @@ export function hasVisual(question: PublicQuestion) {
  * One exercise, any kind. Controlled: the parent keeps the draft and checks it with the server; once
  * `feedback` arrives the tiles show the verdict (correct, wrong, and the right one where it is known).
  */
-export function ExerciseView({ question, draft, onDraft, locked, feedback, onSubmit, showPrompt = true }: {
+export function ExerciseView({ question, draft, onDraft, locked, feedback, onSubmit, showPrompt = true, onPick, hideHint = false }: {
   question: PublicQuestion;
   draft: Draft;
   onDraft: (draft: Draft) => void;
   locked: boolean;
   feedback: Feedback | null;
   onSubmit: () => void;
-  /** False when the prompt is already shown (in Tiko's bubble). */
+  /** False when the prompt is already shown elsewhere. */
   showPrompt?: boolean;
+  /** A tap that picks or places an answer (the lesson turns it into Tiko's reaction and a sound). */
+  onPick?: () => void;
+  /** True when the lesson shows the hint itself (in Tiko's bubble). */
+  hideHint?: boolean;
 }) {
   const [hint, setHint] = useState(false);
   const pick = (next: Draft) => {
     if (locked) return;
-    cue("select");
+    onPick?.();
     onDraft(next);
   };
   const verdict = (selected: boolean, label: string): "correct" | "wrong" | "answer" | undefined => {
@@ -96,6 +99,7 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
     >
       <span className="ax-key" aria-hidden>{result === "correct" || result === "answer" ? <Check className="h-4 w-4" /> : result === "wrong" ? <X className="h-4 w-4" /> : keyLabel}</span>
       <span className="min-w-0 flex-1 text-[15px] leading-snug">{label}</span>
+      {result === "correct" ? <span className="ax-sparks" aria-hidden>{Array.from({ length: 6 }, (_, index) => <i key={index} style={{ ["--a" as string]: `${index * 60 + 15}deg` }} />)}</span> : null}
     </button>
   );
 
@@ -189,7 +193,7 @@ export function ExerciseView({ question, draft, onDraft, locked, feedback, onSub
       {showPrompt ? <h2 className="text-[18px] font-bold leading-snug">{question.prompt}</h2> : null}
       {question.candles?.length ? <div className="grid place-items-center rounded-2xl border-2 border-border bg-panel p-3"><CandleSketch candles={question.candles} /></div> : null}
       {body}
-      {question.hint && !feedback ? (
+      {question.hint && !feedback && !hideHint ? (
         hint
           ? <p className="ax-hint-in flex gap-2 rounded-2xl bg-info-soft p-3 text-[14px] text-text-2" role="note"><Lightbulb className="h-5 w-5 shrink-0 text-info" aria-hidden />{question.hint}</p>
           : <button type="button" className="inline-flex items-center gap-1.5 self-start rounded-full px-1 text-[14px] font-bold" style={{ color: "var(--info)" }} onClick={() => setHint(true)}><Lightbulb className="h-4 w-4" aria-hidden />Show a hint</button>

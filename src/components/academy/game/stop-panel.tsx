@@ -3,7 +3,7 @@
 import "@/components/academy/lesson/academy-lesson.css";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { BookOpenText, CheckCircle2, Clock, ListChecks, Play, RotateCcw, Sparkles, Star, X, Zap } from "lucide-react";
+import { BookOpen, BookOpenText, CheckCircle2, Clock, ListChecks, Play, Sparkles, Star, X, Zap } from "lucide-react";
 import { XP_RULES } from "@/lib/academy/rules";
 import type { ChapterTheme, JourneyStop } from "@/lib/academy/world";
 import { THEME } from "./world-art";
@@ -68,7 +68,7 @@ export function StopPanel({ stop, theme, chapter, position, stars, story, sheet,
         Lesson {position.index} of {position.of} · {completed ? `Completed, best score ${stop.score}%.` : started ? "In progress: your correct answers are saved." : "Answer 70% correctly to complete it."}
       </p>
       <button ref={playRef} type="button" className="ax-btn mt-4 w-full" data-tone={completed ? undefined : "success"} onClick={onPlay}>
-        {completed ? <><RotateCcw className="h-5 w-5" aria-hidden />Review lesson</> : started ? <><Play className="h-5 w-5" fill="currentColor" aria-hidden />Continue</> : <><Play className="h-5 w-5" fill="currentColor" aria-hidden />Start lesson</>}
+        {completed ? <><BookOpen className="h-5 w-5" aria-hidden />Review lesson</> : started ? <><Play className="h-5 w-5" fill="currentColor" aria-hidden />Continue</> : <><Play className="h-5 w-5" fill="currentColor" aria-hidden />Start lesson</>}
       </button>
       {completed ? <p className="mt-2 flex items-center justify-center gap-1 text-[12px] text-muted"><BookOpenText className="h-3.5 w-3.5" aria-hidden />XP for a lesson is paid once; reviews keep it fresh.</p> : null}
     </>

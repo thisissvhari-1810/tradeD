@@ -5,12 +5,13 @@ import type { TikoMood } from "@/lib/academy/missions";
  * thrusters, animated per mood by CSS (academy-game.css, `.mq-tiko[data-mood=…]`). One mood plays
  * at a time; reduced-motion users see the still pose.
  */
-export function Tiko({ mood = "idle", size = 120, className, facing = "right" }: { mood?: TikoMood; size?: number; className?: string; facing?: "left" | "right" }) {
+/** `talking` animates the mouth on top of any mood (while a speech bubble is opening). */
+export function Tiko({ mood = "idle", size = 120, className, facing = "right", talking = false }: { mood?: TikoMood; size?: number; className?: string; facing?: "left" | "right"; talking?: boolean }) {
   const happy = mood === "celebrate" || mood === "mission-complete" || mood === "encourage" || mood === "streak";
   const wide = mood === "surprised";
   const puzzled = mood === "confused" || mood === "thinking";
   return (
-    <span className={`mq-tiko ${className ?? ""}`} data-mood={mood} style={{ width: size, height: size * 1.15, transform: facing === "left" ? "scaleX(-1)" : undefined }} role="img" aria-label={`Tiko, your market guide (${mood.replace("-", " ")})`}>
+    <span className={`mq-tiko ${className ?? ""}`} data-mood={mood} data-talking={talking ? "true" : undefined} style={{ width: size, height: size * 1.15, transform: facing === "left" ? "scaleX(-1)" : undefined }} role="img" aria-label={`Tiko, your market guide (${mood.replace("-", " ")})`}>
       <svg viewBox="0 0 120 138" width="100%" height="100%" aria-hidden>
         <defs>
           <linearGradient id="tiko-shell" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stopColor="#f6fbff" /><stop offset="1" stopColor="#c7dbe8" /></linearGradient>
@@ -61,7 +62,7 @@ export function Tiko({ mood = "idle", size = 120, className, facing = "right" }:
               )}
             </g>
             {puzzled ? <path d="M40 38 L 54 41" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" /> : null}
-            {wide ? <ellipse cx="60" cy="60" rx="4" ry="3.5" fill="#4ff0e0" /> : <path d={happy ? "M52 58 Q 60 64 68 58" : puzzled ? "M54 60 Q 60 58 66 60" : "M54 59 Q 60 62 66 59"} fill="none" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" />}
+            {wide ? <ellipse className="mq-tiko-mouth" cx="60" cy="60" rx="4" ry="3.5" fill="#4ff0e0" /> : <path className="mq-tiko-mouth" d={happy ? "M52 58 Q 60 64 68 58" : puzzled ? "M54 60 Q 60 58 66 60" : "M54 59 Q 60 62 66 59"} fill="none" stroke="#4ff0e0" strokeWidth="2.5" strokeLinecap="round" />}
           </g>
         </g>
       </svg>

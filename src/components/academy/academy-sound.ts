@@ -9,11 +9,12 @@ import { useSyncExternalStore } from "react";
  * kept on this device.
  */
 
-export type FeedbackPrefs = { sound: boolean; haptics: boolean };
-export type Cue = "select" | "check" | "correct" | "wrong" | "combo" | "unlock" | "complete";
+/** Sound, vibration and animation are switched independently (less sensory input when wanted). */
+export type FeedbackPrefs = { sound: boolean; haptics: boolean; motion: boolean };
+export type Cue = "select" | "check" | "correct" | "wrong" | "dialogue" | "hint" | "combo" | "unlock" | "complete";
 
 const KEY = "td-academy-feedback";
-const DEFAULT: FeedbackPrefs = { sound: false, haptics: true };
+const DEFAULT: FeedbackPrefs = { sound: false, haptics: true, motion: true };
 const listeners = new Set<() => void>();
 let cache: FeedbackPrefs | null = null;
 
@@ -22,7 +23,7 @@ function read(): FeedbackPrefs {
   try {
     const raw = localStorage.getItem(KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<FeedbackPrefs>) : {};
-    cache = { sound: parsed.sound === true, haptics: parsed.haptics !== false };
+    cache = { sound: parsed.sound === true, haptics: parsed.haptics !== false, motion: parsed.motion !== false };
   } catch {
     cache = DEFAULT;
   }
@@ -50,12 +51,14 @@ const TONES: Record<Cue, { wave: OscillatorType; gain: number; notes: Array<[num
   check: { wave: "sine", gain: 0.04, notes: [[660, 0, 0.04], [990, 0.035, 0.05]] },
   correct: { wave: "triangle", gain: 0.09, notes: [[784, 0, 0.11], [1175, 0.09, 0.2]] },
   wrong: { wave: "triangle", gain: 0.08, notes: [[247, 0, 0.22]], glide: 196 },
+  dialogue: { wave: "sine", gain: 0.035, notes: [[1046, 0, 0.05], [1318, 0.05, 0.07]] },
+  hint: { wave: "sine", gain: 0.05, notes: [[880, 0, 0.08], [1175, 0.07, 0.08], [1568, 0.14, 0.14]] },
   combo: { wave: "triangle", gain: 0.08, notes: [[784, 0, 0.09], [988, 0.08, 0.09], [1319, 0.16, 0.24]] },
   unlock: { wave: "sine", gain: 0.07, notes: [[587, 0, 0.12], [880, 0.1, 0.12], [1175, 0.2, 0.3]] },
   complete: { wave: "triangle", gain: 0.08, notes: [[523, 0, 0.12], [659, 0.1, 0.12], [784, 0.2, 0.12], [1047, 0.3, 0.32]] },
 };
 // Only meaningful moments vibrate (a pick and a press are too small to buzz).
-const VIBRATION: Record<Cue, number | number[] | null> = { select: null, check: null, correct: 18, wrong: [30, 50, 30], combo: [16, 30, 16, 30, 24], unlock: [20, 40, 40], complete: [20, 40, 20, 40, 60] };
+const VIBRATION: Record<Cue, number | number[] | null> = { select: null, check: null, dialogue: null, hint: null, correct: 18, wrong: [30, 50, 30], combo: [16, 30, 16, 30, 24], unlock: [20, 40, 40], complete: [20, 40, 20, 40, 60] };
 const lastPlayed = new Map<Cue, number>();
 
 let audio: AudioContext | null = null;

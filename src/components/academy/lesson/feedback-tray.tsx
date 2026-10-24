@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Flame, Lightbulb, RefreshCw, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Flame, Lightbulb, RefreshCw, X, Zap } from "lucide-react";
 import type { Feedback } from "./exercise-view";
 
 /**
@@ -47,7 +47,7 @@ export function AcademyFeedbackTray({ feedback, error, praise, combo = 0, hint, 
           </div>
         </div>
         {feedback && onContinue
-          ? <button type="button" className={dock ? "ax-btn w-full sm:w-auto sm:min-w-44" : "ax-btn w-full"} data-tone={feedback.correct ? "success" : "danger"} onClick={onContinue} autoFocus>{continueLabel}</button>
+          ? <button type="button" className={dock ? "ax-btn w-full sm:w-auto sm:min-w-44" : "ax-btn w-full"} data-tone={feedback.correct ? "success" : "danger"} onClick={onContinue} autoFocus>{continueLabel}<ArrowRight className="ax-arrow h-5 w-5" aria-hidden /></button>
           : !feedback && onRetry ? <button type="button" className={dock ? "ax-btn w-full sm:w-auto sm:min-w-44" : "ax-btn w-full"} disabled={retrying} onClick={onRetry} autoFocus>{retrying ? <><span className="ax-spin" aria-hidden />Checking</> : <><RefreshCw className="h-4 w-4" aria-hidden />Try again</>}</button> : null}
       </div>
     </div>

@@ -16,7 +16,7 @@ import { TutorDialogue } from "./tutor-dialogue";
 import { WindingRoad } from "./winding-road";
 import { THEME } from "./world-art";
 import { api } from "@/components/api";
-import { cue } from "@/components/academy/academy-sound";
+import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
 import { missionFor, type Line, type TikoMood } from "@/lib/academy/missions";
 import { DAILY_GOAL_XP } from "@/lib/academy/rules";
 import { journeyOf, type JourneyChapter, type JourneyStop, type JourneyUnit } from "@/lib/academy/world";
@@ -71,6 +71,7 @@ type Guide = { at: number; mood: TikoMood; line: string | null };
 export function AcademyGameMap() {
   const router = useRouter();
   const layout = useLayout();
+  const prefs = useFeedbackPrefs();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
@@ -215,7 +216,7 @@ export function AcademyGameMap() {
   }
   if (!data || !journey) return <div className={`${styles.world} h-full`} aria-busy="true" aria-label="Loading the Academy" />;
 
-  const motion = typeof window !== "undefined" && !reducedMotion();
+  const motion = typeof window !== "undefined" && !reducedMotion() && prefs.motion;
   const lead = stops.findIndex((stop) => stop.stop !== "completed");
   const completedUpTo = lead < 0 ? stops.length - 1 : lead - 1;
   const current = stops.findIndex((stop) => stop.stop === "current");
@@ -290,7 +291,7 @@ export function AcademyGameMap() {
   const width = wide ? "min(100%, 1180px)" : "min(100%, 560px)";
 
   return (
-    <div ref={worldRef} className={`${styles.world} ${wide ? "" : "mq-tall"} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
+    <div ref={worldRef} data-motion={prefs.motion ? undefined : "off"} className={`${styles.world} ${wide ? "" : "mq-tall"} h-full overflow-y-auto overflow-x-hidden ${launching ? styles.launching : ""}`}>
       <AcademyHud
         xp={data.xp.total}
         streak={data.streak.current}

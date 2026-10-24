@@ -451,6 +451,16 @@
 .mq-tiko[data-mood="streak"] .mq-tiko-flame { opacity: 1; animation: tikoFlame 160ms ease-in-out infinite alternate; }
 @keyframes tikoSpin { from { rotate: -360deg; scale: .8; } to { rotate: 0deg; scale: 1; } }
 
+/* look: eyes and head turn towards the question (down and to the side) */
+.mq-tiko[data-mood="look"] .mq-tiko-head { transform: rotate(5deg) translateY(1px); transition: transform 320ms cubic-bezier(.3, 1.4, .5, 1); }
+.mq-tiko[data-mood="look"] .mq-tiko-eyes, .mq-tiko[data-mood="listening"] .mq-tiko-eyes { translate: 4px 3px; transition: translate 260ms ease; }
+.mq-tiko[data-mood="look"] .mq-tiko-body { animation: tikoHover 3.2s ease-in-out infinite; }
+
+/* talking: the mouth moves while a bubble opens (any mood) */
+.mq-tiko-mouth { transform-origin: center; }
+.mq-tiko[data-talking="true"] .mq-tiko-mouth { animation: tikoTalk 220ms ease-in-out 5 alternate; }
+@keyframes tikoTalk { from { transform: scaleY(1); } to { transform: scaleY(2.2) scaleX(.85); } }
+
 /* ---------- tutor dialogue ---------- */
 .mq-bubble { position: relative; padding: 14px 16px; border-radius: 18px; background: var(--mq-bubble, #fffaf0); color: #0d1726; box-shadow: 0 4px 0 #d8b46a, 0 14px 30px rgba(0, 0, 0, .25); animation: pop2 240ms cubic-bezier(.2, .9, .3, 1.3); }
 .mq-bubble::before { content: ""; position: absolute; left: -9px; top: 26px; width: 18px; height: 18px; background: inherit; transform: rotate(45deg); border-radius: 3px; }

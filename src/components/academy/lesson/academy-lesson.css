@@ -1,6 +1,22 @@
 /* Academy lesson player. Every class starts with ax- so nothing leaks into the trading app. Colours come
    from the app's theme tokens, so the player follows light and dark mode. */
 
+/* Semantic interaction colours, built on the app's theme tokens (so light and dark both work). */
+.ax-shell, .ax-tokens, .mq-world {
+  --ax-accent: var(--primary);
+  --ax-accent-soft: color-mix(in srgb, var(--primary) 11%, var(--panel));
+  --ax-accent-glow: color-mix(in srgb, var(--primary) 26%, transparent);
+  --ax-correct: var(--profit);
+  --ax-correct-soft: var(--profit-soft);
+  --ax-correct-glow: color-mix(in srgb, var(--profit) 32%, transparent);
+  --ax-wrong: var(--loss);
+  --ax-wrong-soft: var(--loss-soft);
+  --ax-wrong-glow: color-mix(in srgb, var(--loss) 26%, transparent);
+  --ax-hint: var(--info);
+  --ax-hint-soft: var(--info-soft);
+  --ax-tutor-glow: color-mix(in srgb, var(--teal) 30%, transparent);
+  --ax-reward: #ffc83d;
+}
 .ax-shell { display: flex; flex-direction: column; height: 100%; background: var(--background); color: var(--text); }
 .ax-screen { animation: axScreenIn 300ms cubic-bezier(.2, .8, .3, 1) both; }
 @keyframes axScreenIn { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
@@ -55,13 +71,21 @@
   transition: transform 110ms ease, border-color 140ms ease, background-color 140ms ease;
   -webkit-tap-highlight-color: transparent;
 }
-@media (hover: hover) { .ax-option:hover:not(:disabled) { background: var(--hover); } }
+@media (hover: hover) { .ax-option:hover:not(:disabled) { background: var(--hover); border-color: color-mix(in srgb, var(--ax-accent) 35%, var(--border)); transform: translateY(-1px); } }
 .ax-option:active:not(:disabled) { transform: translateY(2px) scale(.99); }
 .ax-option:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
 .ax-option:disabled { cursor: default; }
-.ax-option[aria-pressed="true"] { border-color: var(--primary); background: color-mix(in srgb, var(--primary) 11%, var(--panel)); animation: axPick 200ms cubic-bezier(.3, 1.6, .5, 1); }
-.ax-option[data-result="correct"] { border-color: var(--profit); background: var(--profit-soft); animation: axPick 260ms cubic-bezier(.3, 1.6, .5, 1); }
-.ax-option[data-result="wrong"] { border-color: var(--loss); background: var(--loss-soft); animation: axShake 380ms ease-in-out; }
+.ax-option { transition: transform 110ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 220ms ease; }
+.ax-option[aria-pressed="true"] { border-color: var(--ax-accent); background: var(--ax-accent-soft); box-shadow: 0 0 0 4px var(--ax-accent-glow); animation: axPick 200ms cubic-bezier(.3, 1.6, .5, 1); }
+.ax-option[data-result="correct"] { border-color: var(--ax-correct); background: var(--ax-correct-soft); animation: axPick 260ms cubic-bezier(.3, 1.6, .5, 1), axGlowGood 900ms ease-out; }
+.ax-option[data-result="wrong"] { border-color: var(--ax-wrong); background: var(--ax-wrong-soft); animation: axShake 380ms ease-in-out, axGlowBad 700ms ease-out; }
+@keyframes axGlowGood { 0% { box-shadow: 0 0 0 0 var(--ax-correct-glow); } 40% { box-shadow: 0 0 0 8px var(--ax-correct-glow); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@keyframes axGlowBad { 0% { box-shadow: 0 0 0 0 var(--ax-wrong-glow); } 40% { box-shadow: 0 0 0 6px var(--ax-wrong-glow); } 100% { box-shadow: 0 0 0 0 transparent; } }
+/* A correct tile throws a few sparks from its tick. */
+.ax-sparks { position: absolute; left: 28px; top: 50%; width: 0; height: 0; pointer-events: none; }
+.ax-sparks i { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--ax-correct); animation: axSpark2 650ms cubic-bezier(.2, .7, .3, 1) forwards; }
+.ax-sparks i:nth-child(2n) { background: var(--ax-reward); }
+@keyframes axSpark2 { from { opacity: 1; transform: rotate(var(--a)) translateY(0); } to { opacity: 0; transform: rotate(var(--a)) translateY(-26px); } }
 .ax-option[data-result="answer"] { border-color: var(--profit); border-style: dashed; }
 .ax-option[data-dim="true"] { opacity: .55; }
 @keyframes axPick { 0% { transform: scale(.97); } 60% { transform: scale(1.015); } 100% { transform: scale(1); } }
@@ -87,7 +111,8 @@
 .ax-slots { display: flex; flex-direction: column; gap: 8px; min-height: 64px; padding: 10px; border-radius: 16px; border: 2px dashed var(--border-strong); }
 
 .ax-input { height: 56px; min-width: 0; flex: 1; padding: 0 16px; border-radius: 16px; border: 2px solid var(--border); background: var(--panel); color: var(--text); font-size: 1.05rem; font-weight: 600; }
-.ax-input:focus { outline: none; border-color: var(--primary); }
+.ax-input { transition: border-color 160ms ease, box-shadow 220ms ease, background-color 160ms ease; }
+.ax-input:focus { outline: none; border-color: var(--ax-accent); box-shadow: 0 0 0 4px var(--ax-accent-glow); }
 .ax-input[data-result="correct"] { border-color: var(--profit); background: var(--profit-soft); }
 .ax-input[data-result="wrong"] { border-color: var(--loss); background: var(--loss-soft); animation: axShake 380ms ease-in-out; }
 
@@ -111,7 +136,22 @@
   cursor: pointer;
   transition: transform 90ms ease, box-shadow 90ms ease, filter 140ms ease;
 }
-.ax-btn:hover:not(:disabled) { filter: brightness(1.06); }
+.ax-btn:hover:not(:disabled) { filter: brightness(1.06); box-shadow: 0 4px 0 color-mix(in srgb, var(--tone) 65%, #000), 0 0 0 5px color-mix(in srgb, var(--tone) 22%, transparent); }
+.ax-btn { transition: transform 90ms ease, box-shadow 160ms ease, filter 140ms ease, background-color 220ms ease, color 220ms ease; }
+/* Check keeps its size while its label changes; the spinner slides in beside the word. */
+.ax-check-label { display: inline-flex; align-items: center; gap: 0; }
+.ax-check-label .ax-spin { width: 0; opacity: 0; border-width: 0; transition: width 160ms ease, opacity 160ms ease; }
+.ax-check-label[data-busy="true"] { gap: 8px; }
+.ax-check-label[data-busy="true"] .ax-spin { width: 18px; opacity: 1; border-width: 3px; }
+.ax-arrow { transition: transform 160ms ease; }
+.ax-btn:not(:disabled) .ax-arrow { animation: axNudge 1.6s ease-in-out 600ms infinite; }
+@keyframes axNudge { 0%, 70%, 100% { transform: translateX(0); } 80% { transform: translateX(4px); } 90% { transform: translateX(0); } }
+.ax-hint-btn { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border-radius: 999px; border: 2px solid color-mix(in srgb, var(--ax-hint) 35%, var(--border)); background: var(--ax-hint-soft); color: var(--ax-hint); font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: transform 120ms ease, box-shadow 200ms ease; }
+.ax-hint-btn:hover { box-shadow: 0 0 0 4px color-mix(in srgb, var(--ax-hint) 18%, transparent); }
+.ax-hint-btn:hover svg, .ax-hint-btn[aria-expanded="true"] svg { animation: axWiggle 500ms ease-in-out; }
+.ax-hint-btn:active { transform: scale(.95); }
+.ax-hint-btn:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+@keyframes axWiggle { 25% { transform: rotate(-14deg); } 60% { transform: rotate(10deg); } }
 .ax-btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 color-mix(in srgb, var(--tone) 65%, #000); }
 .ax-btn:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
 .ax-btn:disabled { background: var(--sunken); color: var(--disabled); box-shadow: 0 4px 0 var(--border); cursor: default; }
@@ -169,11 +209,79 @@
 .ax-line-handle[data-tone="wrong"] .ax-line-grip { background: #ff6b7a; }
 .ax-line-handle[aria-disabled="true"] .ax-line-grip { cursor: default; }
 
+/* ---------- the question card ---------- */
+.ax-question { padding: 16px 18px; border-radius: 20px; border: 2px solid var(--border); border-bottom-width: 4px; background: var(--panel); }
+
+/* ---------- Tiko's stage and speech bubble ---------- */
+.ax-stage { display: flex; align-items: flex-end; gap: 10px; min-height: 92px; }
+.ax-tiko-wrap { position: relative; flex-shrink: 0; display: grid; place-items: center; }
+.ax-halo { position: absolute; inset: -18%; border-radius: 50%; background: radial-gradient(circle, var(--ax-tutor-glow), transparent 68%); opacity: 0; transform: scale(.85); transition: opacity 320ms ease, transform 420ms cubic-bezier(.3, 1.4, .5, 1); pointer-events: none; }
+.ax-stage[data-glow="talk"] .ax-halo { opacity: .8; transform: scale(1); }
+.ax-stage[data-glow="good"] .ax-halo { opacity: 1; transform: scale(1.08); background: radial-gradient(circle, var(--ax-correct-glow), transparent 68%); }
+.ax-stage[data-glow="soft"] .ax-halo { opacity: .7; transform: scale(1); background: radial-gradient(circle, color-mix(in srgb, var(--ax-hint) 24%, transparent), transparent 68%); }
+.ax-particles { position: absolute; left: 50%; top: 45%; width: 0; height: 0; pointer-events: none; }
+.ax-particles i { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: var(--ax-correct); animation: axParticle 760ms cubic-bezier(.2, .7, .3, 1) forwards; }
+.ax-particles i:nth-child(3n) { background: var(--ax-reward); }
+.ax-particles i:nth-child(3n + 1) { background: var(--ax-accent); width: 5px; height: 5px; }
+@keyframes axParticle { from { opacity: 1; transform: rotate(var(--a)) translateY(0) scale(1); } to { opacity: 0; transform: rotate(var(--a)) translateY(-58px) scale(.4); } }
+.ax-particles[data-size="big"] i { animation: axParticleBig 1050ms cubic-bezier(.2, .7, .3, 1) forwards; }
+@keyframes axParticleBig { from { opacity: 1; transform: rotate(var(--a)) translateY(0) scale(1.2); } to { opacity: 0; transform: rotate(var(--a)) translateY(-90px) scale(.4); } }
+
+.ax-speech {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 18px;
+  padding: 12px 15px;
+  border-radius: 18px 18px 18px 6px;
+  border: 2px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .06);
+  transform-origin: 0% 100%;
+  transition: opacity 200ms ease, transform 260ms cubic-bezier(.3, 1.35, .5, 1), border-color 200ms ease, background-color 200ms ease;
+}
+/* The tail points at Tiko, so the bubble grows out of him and shrinks back into him. */
+.ax-speech::before { content: ""; position: absolute; left: -9px; bottom: 10px; width: 14px; height: 14px; background: inherit; border-left: 2px solid; border-bottom: 2px solid; border-color: inherit; transform: rotate(45deg); }
+.ax-speech[data-open="false"] { opacity: 0; transform: scale(.55) translateX(-14px); pointer-events: none; transition-duration: 160ms, 180ms, 200ms, 200ms; }
+.ax-speech[data-tone="good"] { border-color: color-mix(in srgb, var(--ax-correct) 55%, var(--border)); background: var(--ax-correct-soft); }
+.ax-speech[data-tone="soft"] { border-color: color-mix(in srgb, var(--ax-wrong) 35%, var(--border)); }
+.ax-speech[data-tone="hint"] { border-color: color-mix(in srgb, var(--ax-hint) 45%, var(--border)); background: var(--ax-hint-soft); }
+.ax-speech-inner { position: relative; min-height: 1.4em; }
+.ax-typing { position: absolute; left: 0; top: 4px; display: inline-flex; gap: 4px; animation: axTypingOut 1ms linear 300ms forwards; }
+.ax-typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: axDot 600ms ease-in-out infinite; }
+.ax-typing i:nth-child(2) { animation-delay: 100ms; }
+.ax-typing i:nth-child(3) { animation-delay: 200ms; }
+@keyframes axDot { 0%, 100% { transform: translateY(0); opacity: .5; } 50% { transform: translateY(-3px); opacity: 1; } }
+@keyframes axTypingOut { to { opacity: 0; visibility: hidden; } }
+.ax-speech-text { font-size: 15px; font-weight: 700; line-height: 1.4; color: var(--text); animation: axReveal 320ms cubic-bezier(.2, .8, .3, 1) 280ms both; }
+@keyframes axReveal { from { opacity: 0; transform: translateY(4px); clip-path: inset(0 100% 0 0); } to { opacity: 1; transform: none; clip-path: inset(0 0 0 0); } }
+.ax-speech-dismiss { margin-top: 8px; height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--ax-hint); color: #fff; font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; cursor: pointer; animation: axReveal 280ms ease 420ms both; }
+.ax-speech-dismiss:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+@media (max-width: 639px) {
+  .ax-stage { min-height: 76px; gap: 8px; }
+  .ax-stage .ax-tiko { width: 58px !important; height: 66px !important; }
+  .ax-speech { padding: 10px 12px; margin-bottom: 12px; }
+  .ax-speech-text { font-size: 14px; }
+}
+
+/* ---------- settings menu ---------- */
+.ax-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 41; width: 260px; padding: 6px; border-radius: 16px; border: 1px solid var(--border); background: var(--panel); box-shadow: var(--shadow-3); animation: axMenuIn 200ms cubic-bezier(.2, .9, .3, 1.2); transform-origin: top right; }
+@keyframes axMenuIn { from { opacity: 0; transform: scale(.92) translateY(-4px); } to { opacity: 1; transform: none; } }
+.ax-menu-row { display: flex; width: 100%; align-items: center; gap: 10px; padding: 10px; border: 0; border-radius: 12px; background: transparent; color: var(--text); cursor: pointer; }
+.ax-menu-row:hover { background: var(--hover); }
+.ax-menu-row:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: -3px; }
+.ax-switch { position: relative; flex-shrink: 0; width: 40px; height: 24px; border-radius: 999px; background: var(--border-strong); transition: background-color 180ms ease; }
+.ax-switch i { position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform 200ms cubic-bezier(.3, 1.4, .5, 1); }
+.ax-switch[data-on="true"] { background: var(--ax-correct); }
+.ax-switch[data-on="true"] i { transform: translateX(16px); }
+
 /* ---------- Tiko in the lesson ---------- */
 .ax-tutor-in { animation: axTutorIn 420ms cubic-bezier(.3, 1.5, .5, 1) both; }
 @keyframes axTutorIn { from { opacity: 0; transform: translateY(10px) scale(.85); } to { opacity: 1; transform: none; } }
 /* A pick: Tiko nods. */
-.ax-nod { animation: axNod 420ms ease-in-out; transform-origin: 50% 90%; }
+.ax-nod, .ax-nod-b { animation: axNod 420ms ease-in-out; transform-origin: 50% 90%; }
+.ax-nod-b { animation-name: axNodB; }
+@keyframes axNodB { 30% { transform: rotate(-6deg) translateY(2px); } 65% { transform: rotate(4deg); } }
 @keyframes axNod { 30% { transform: rotate(-6deg) translateY(2px); } 65% { transform: rotate(4deg); } }
 .ax-react {
   position: absolute;
@@ -214,7 +322,15 @@
 
 .ax-perfect { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; background: linear-gradient(180deg, #fff2c2, #ffd96b); color: #5a3b00; font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; box-shadow: 0 3px 0 #d8b46a; animation: axPopIn 420ms cubic-bezier(.3, 1.6, .5, 1) 400ms both; }
 
+/* Animations switched off by the learner: everything still works, nothing moves. */
+[data-motion="off"] *, [data-motion="off"] *::before, [data-motion="off"] *::after { animation: none !important; transition: none !important; }
+[data-motion="off"] .ax-speech-text, [data-motion="off"] .ax-speech-dismiss { opacity: 1; clip-path: none; transform: none; }
+[data-motion="off"] .ax-typing, [data-motion="off"] .ax-particles, [data-motion="off"] .ax-sparks, [data-motion="off"] .ax-burst { display: none; }
+[data-motion="off"] .ax-check-draw { stroke-dashoffset: 0; }
+
 @media (prefers-reduced-motion: reduce) {
+  .ax-speech-text, .ax-speech-dismiss { animation: none !important; }
+  .ax-typing, .ax-particles, .ax-sparks { display: none; }
   .ax-tutor-in, .ax-nod, .ax-react, .ax-ready, .ax-check-draw, .ax-xp, .ax-pop, .ax-burst i, .ax-perfect, .ax-screen-out, .ax-lock, .ax-hint-in { animation: none !important; }
   .ax-check-draw { stroke-dashoffset: 0; }
   .ax-screen, .ax-combo, .ax-tray, .ax-tray-icon, .ax-option, .ax-input, .ax-shake, .ax-progress-fill, .ax-progress-fill::after { animation: none !important; transition: none !important; }

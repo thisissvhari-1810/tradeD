@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Check, RefreshCw } from "lucide-react";
 import { api, ApiError } from "@/components/api";
 import { useDesk } from "@/components/shell";
-import { cue } from "@/components/academy/academy-sound";
+import { cue, useFeedbackPrefs } from "@/components/academy/academy-sound";
 import { ExerciseView, inputOf, type Draft, type Feedback } from "@/components/academy/lesson/exercise-view";
 import { AcademyFeedbackTray } from "@/components/academy/lesson/feedback-tray";
 import type { DecisionChoice, Line, Mission, Scene, TikoMood } from "@/lib/academy/missions";
@@ -27,6 +27,7 @@ type Completion = { score: number; firstTime: boolean; xp: number; xpTotal: numb
  */
 export function MissionPlayer({ mission }: { mission: Mission }) {
   const router = useRouter();
+  const prefs = useFeedbackPrefs();
   const [lesson, setLesson] = useState<LessonData | null>(null);
   const [error, setError] = useState<{ message: string; locked: boolean } | null>(null);
   const [scene, setScene] = useState(0);
@@ -80,7 +81,7 @@ export function MissionPlayer({ mission }: { mission: Mission }) {
   }
 
   return (
-    <div className={`${styles.world} ${styles.lessonIn} h-full overflow-y-auto`}>
+    <div data-motion={prefs.motion ? undefined : "off"} className={`${styles.world} ${styles.lessonIn} h-full overflow-y-auto`}>
       <div className="sticky top-0 z-10 flex items-center gap-3 bg-gradient-to-b from-[#0b1f3a] to-transparent px-3 py-2.5 sm:px-5">
         <button type="button" className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-white/20 bg-white/10 hover:bg-white/20" aria-label="Back to map" onClick={() => router.push("/academy")}><ArrowLeft className="h-5 w-5" aria-hidden /></button>
         <div className="min-w-0 flex-1">
@@ -251,7 +252,7 @@ function GradedQuestion({ question, mission, answer, onCorrect }: { question: Pu
         <p className="text-[14px] font-semibold text-white/85" aria-live="polite">{busy ? "Checking…" : !feedback ? "Take your time." : feedback.correct ? mission.correct.text : mission.wrong.text}</p>
       </div>
       <div className={`rounded-3xl bg-panel p-4 text-text shadow-[0_6px_0_rgba(0,0,0,.25)] ${feedback && !feedback.correct ? "ax-shake" : ""}`}>
-        <ExerciseView key={attempt} question={question} draft={value} onDraft={(next) => setDraft({ attempt, value: next })} locked={busy || Boolean(feedback)} feedback={feedback} onSubmit={() => void check()} />
+        <ExerciseView key={attempt} question={question} draft={value} onPick={() => cue("select")} onDraft={(next) => setDraft({ attempt, value: next })} locked={busy || Boolean(feedback)} feedback={feedback} onSubmit={() => void check()} />
         {feedback ? <div className="mt-4"><AcademyFeedbackTray feedback={feedback} praise={mission.correct.text} hint={question.hint ?? null} variant="inline" /></div> : null}
         {failed ? <p className="mt-3 text-[14px] font-semibold" style={{ color: "var(--loss)" }} role="alert">The answer could not be checked. Nothing was marked; try again.</p> : null}
       </div>
