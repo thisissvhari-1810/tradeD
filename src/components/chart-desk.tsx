@@ -18,10 +18,11 @@ import { loadDrawings, saveDrawings } from "@/components/drawing-model";
 import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
-import { AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
+import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
+import { algoChartMarkers } from "@/components/algo/algo-markers";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
@@ -787,6 +788,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   // replay plays, each completed minute is processed on the server and orders go to the demo ledger.
   const [algoDialog, setAlgoDialog] = useState(false);
   const [algoHistory, setAlgoHistory] = useState(false);
+  // The completed session's summary (shown once, when its last trade has closed), and the history view's tab.
+  const [algoDone, setAlgoDone] = useState<NonNullable<ReturnType<typeof useChartAlgo>["run"]> | null>(null);
+  const [historyTab, setHistoryTab] = useState<"chart" | "sessions">("chart");
   // Exit Replay or a date change waiting for the Algo session to be archived.
   const [algoEnd, setAlgoEnd] = useState<{ then: "exit" | { date: string } } | null>(null);
   const algoAllowed = replay.active && !live && !optionView && canPaperTrade;
@@ -801,6 +805,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     onLedger: () => { window.dispatchEvent(new Event("td-ledger")); setLedgerTick((value) => value + 1); },
     onPause: () => setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current)),
     notify,
+    // All trades done: the replay stops where the last one closed (no further minute is processed).
+    onComplete: (run) => {
+      setReplay((current) => ({ ...current, status: current.status === "completed" ? "completed" : "paused", cursor: current.cursor != null && current.cursor > run.processedThrough ? run.processedThrough : current.cursor }));
+      setAlgoDone(run);
+    },
   });
   const algoRun = algoAllowed ? algo.run : null;
   const algoPosition = algoRun?.position ?? null;
@@ -814,22 +823,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [algoRun, symbol, replay.cursor, algoOpen?.entryKey, algoOpen?.exitPending, algoOpen?.unrealized],
   );
-  const algoMarkers = useMemo<ChartMarker[]>(() => {
-    const { profit, loss } = desk.appearance.tokens;
-    return algoTrades.map((marker) => {
-      // The trade picked in the panel is drawn larger, both its entry and its exit.
-      const size = marker.entryKey === selectedTrade ? 2 : 1;
-      return marker.kind === "entry"
-        ? { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "belowBar" : "aboveBar", shape: marker.side === "CALL" ? "arrowUp" : "arrowDown", color: marker.side === "CALL" ? profit : loss, text: marker.text, size }
-        : { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: (marker.pnl ?? 0) >= 0 ? profit : loss, text: marker.text, size };
-    });
-  }, [algoTrades, desk.appearance.tokens, selectedTrade]);
+  const algoMarkers = useMemo<ChartMarker[]>(() => algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade), [algoTrades, desk.appearance.tokens, selectedTrade]);
+  // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).
+  const [markerTip, setMarkerTip] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   // The trade shown in the detail view, and a strategy line highlighted from it.
   const [openTrade, setOpenTrade] = useState<string | null>(null);
   const [lineFocus, setLineFocus] = useState<{ prices: number[]; label: string } | null>(null);
   const closeTrade = useCallback(() => { setOpenTrade(null); setLineFocus(null); }, []);
   const focusChart = useCallback((from: number, to: number) => handleRef.current?.focus?.(from, to), []);
-  /** Opens a trade (card, slot, activity row or chart marker): selects it, highlights its markers and shows it on the chart. */
+  /** A chart marker was clicked: the trade is selected in the panel (its card scrolls into view). */
+  const selectTrade = useCallback((entryKey: string) => {
+    setSelectedTrade(entryKey);
+    window.requestAnimationFrame(() => document.querySelector(`[data-trade="${CSS.escape(entryKey)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }, []);
+  /** Opens a trade (card, slot or activity row): selects it, highlights its markers and shows it on the chart. */
   const showTrade = useCallback((entryKey: string) => {
     setSelectedTrade(entryKey);
     setOpenTrade(entryKey);
@@ -838,13 +845,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     const exit = algoTrades.find((marker) => marker.entryKey === entryKey && marker.kind === "exit");
     if (entry) handleRef.current?.focus?.(entry.time, exit?.time ?? entry.time);
   }, [algoTrades]);
-  const algoEntryLevel = useMemo<ChartReference | null>(() => {
-    if (!algoPosition || !algoRun || algoRun.underlying !== symbol) return null;
-    const signal = algoRun.events.find((event) => event.evaluation && event.evaluation.time === algoPosition.signalTime);
-    const price = signal?.evaluation?.candle.close;
-    if (price == null) return null;
-    return { price, title: `Algo ${algoPosition.side} entry`, color: algoPosition.side === "CALL" ? desk.appearance.tokens.profit : desk.appearance.tokens.loss, style: "dotted" };
-  }, [algoPosition, algoRun, symbol, desk.appearance.tokens]);
 
   /** Play / resume: with the algo enabled, playback waits for "Start Algo & Replay". */
   function toggleReplay() {
@@ -853,6 +853,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       return;
     }
     if (replay.status !== "ready" && replay.status !== "paused") return;
+    // A finished session does not play on: its summary offers a new replay.
+    if (algoAllowed && algo.run?.status === "ENDED" && algo.run.endReason === "COMPLETED") {
+      setAlgoDone(algo.run);
+      return;
+    }
     if (algoAllowed && algo.gate && algo.gate.kind !== "free") {
       setAlgoDialog(true);
       return;
@@ -1430,14 +1435,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 scheme={desk.theme}
                 paint={desk.appearance.chart}
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
-                references={[...sessionLevels, ...(algoEntryLevel ? [algoEntryLevel] : []), ...(lineFocus ? lineFocus.prices.map((price) => ({ price, title: lineFocus.label || "Strategy line", color: desk.appearance.tokens.warning, style: "dashed" as const })) : [])]}
+                references={[...sessionLevels, ...(lineFocus ? lineFocus.prices.map((price) => ({ price, title: lineFocus.label || "Strategy line", color: desk.appearance.tokens.warning, style: "dashed" as const })) : [])]}
                 markers={algoMarkers}
                 onMarkerClick={(ids) => {
                   const entryKey = algoTrades.find((marker) => ids.includes(marker.id))?.entryKey;
-                  if (entryKey) showTrade(entryKey);
+                  if (entryKey) selectTrade(entryKey);
                 }}
+                onMarkerHover={setMarkerTip}
                 pageScroll={variant === "positions" && phoneLayout}
               />
+            ) : null}
+            {markerTip ? (
+              <div role="tooltip" className="pointer-events-none absolute z-30 max-w-[16rem] rounded-md border border-border bg-panel/95 px-2 py-1 text-[0.75rem] text-text shadow-e2" style={{ left: Math.min(markerTip.x + 12, (chartAreaRef.current?.clientWidth ?? 600) - 260), top: Math.max(4, markerTip.y - 34) }}>
+                {algoTrades.filter((marker) => markerTip.ids.includes(marker.id)).map((marker) => <p key={marker.id} className={cx("num whitespace-nowrap", marker.kind === "entry" ? (marker.side === "CALL" ? "text-profit" : "text-loss") : (marker.pnl ?? 0) > 0 ? "text-profit" : (marker.pnl ?? 0) < 0 ? "text-loss" : "text-muted")}>{marker.tip}</p>)}
+              </div>
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
             {shown.length > 0 ? (
@@ -1693,7 +1704,23 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           lineShown={lineFocus != null}
         />
       ) : null}
-      {algoHistory && algo.data ? <AlgoHistory data={algo.data} initial="chart" onClose={() => setAlgoHistory(false)} /> : null}
+      {algoDone && algoAllowed ? (
+        <AlgoCompleteDialog
+          run={algoDone}
+          onClose={() => setAlgoDone(null)}
+          onHistory={() => { setAlgoDone(null); setHistoryTab("sessions"); setAlgoHistory(true); }}
+          onNewReplay={() => {
+            setAlgoDone(null);
+            setOpenTrade(null);
+            setSelectedTrade(null);
+            setLineFocus(null);
+            algo.startNew();
+            returnToStart();
+            setAlgoDialog(true);
+          }}
+        />
+      ) : null}
+      {algoHistory && algo.data ? <AlgoHistory data={algo.data} initial={historyTab} onClose={() => { setAlgoHistory(false); setHistoryTab("chart"); }} /> : null}
       {pendingDate ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-panel p-4 text-sm">

@@ -4,7 +4,8 @@ import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
 import { ALGO_DEFAULTS, initialState, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
-import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
+import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
+import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
 import { tradeSummary } from "../src/components/algo/algo-trade-drawer";
 import { algoConfigProblems, switchToChartReplay } from "../src/lib/algo/config";
@@ -750,21 +751,23 @@ describe("replay clock, validation and the trade pipeline end to end", () => {
 
   it("diagnostics count candles, crossings, signals, accepted and rejected orders and the last rejection", async () => {
     feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
-    const result = await run(twoCrossings(30, 60), { cursor: m(70), config: { ...config, maxTrades: 1 } });
+    // A long cooldown rejects the second signal (29 minutes after the first entry).
+    const result = await run(twoCrossings(30, 60), { cursor: m(70), config: { ...config, cooldownMinutes: 60 } });
     const diagnostics = runDiagnostics(result.events, 1);
     expect(diagnostics).toMatchObject({ enabledLines: 1, crossings: 2, signals: 2, accepted: 1, rejected: 1 });
     expect(diagnostics.candlesEvaluated).toBeGreaterThan(60);
-    expect(diagnostics.lastRejection?.reason).toMatch(/Daily trade limit reached \(1\)/);
+    expect(diagnostics.lastRejection?.reason).toMatch(/Cooling down \(60 min between entries\)/);
   });
 
-  it("the entry limit is enforced: a signal after the limit is rejected and listed, never filled", async () => {
+  it("the entry limit is enforced: once its trades are all closed the session completes and nothing more is processed", async () => {
     feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
     const result = await run(twoCrossings(30, 60), { cursor: m(70), config: { ...config, maxTrades: 1 } });
     expect(buys()).toHaveLength(1);
-    const trades = algoTrades(result.events, null);
-    expect(trades).toHaveLength(1);
-    const skipped = skippedSignals(result.events);
-    expect(skipped).toEqual([expect.objectContaining({ side: "CALL", time: m(61), lines: ["Test line ↑"] })]);
+    expect(algoTrades(result.events, null)).toHaveLength(1);
+    expect(result.completed).toBe(true);
+    // Stopped at the minute the trade closed: the later crossing is never evaluated, so no further entry.
+    expect(result.processedThrough).toBe(m(37));
+    expect(result.events.some((event) => event.key === `eval:${m(60)}`)).toBe(false);
   });
 
   it("each accepted entry becomes a numbered trade with its line, premiums, exit and realized P&L, and gets markers", async () => {
@@ -923,7 +926,7 @@ describe("trade dashboard and trade detail view", () => {
 
   it("opening, closing and using the trade view never touches the replay clock, and it reads the live run", () => {
     const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
-    const show = desk.slice(desk.indexOf("const showTrade = useCallback"), desk.indexOf("const showTrade = useCallback") + 700);
+    const show = desk.slice(desk.indexOf("const showTrade = useCallback"), desk.indexOf("}, [algoTrades]);", desk.indexOf("const showTrade = useCallback")));
     expect(show).not.toMatch(/setReplay/);
     expect(desk).toMatch(/const closeTrade = useCallback\(\(\) => \{ setOpenTrade\(null\); setLineFocus\(null\); \}, \[\]\);/);
     expect(desk).toMatch(/onClose=\{closeTrade\}/);
@@ -937,7 +940,7 @@ describe("trade dashboard and trade detail view", () => {
   it("cards, slots, activity rows and chart markers all open the same trade; Focus moves the chart", () => {
     const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
     const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
-    expect(desk).toMatch(/onMarkerClick=\{\(ids\) => \{[\s\S]{0,200}showTrade\(entryKey\)/);
+    expect(desk).toMatch(/onMarkerClick=\{\(ids\) => \{[\s\S]{0,200}selectTrade\(entryKey\)/);
     expect(panel.match(/onOpenTrade\(/g)?.length).toBeGreaterThanOrEqual(4);
     expect(readFileSync("src/components/chart-panel.tsx", "utf8")).toMatch(/focus: \(from, to\) => \{[\s\S]{0,900}setVisibleLogicalRange/);
   });
@@ -1043,7 +1046,8 @@ describe("replay session lifecycle: archive on exit, fresh session on the next r
   it("the chart clears its session only after the archive succeeded, and ignores late responses from an old session", () => {
     const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
     const end = hook.slice(hook.indexOf("const endSession = useCallback"), hook.indexOf("const gate: PlayGate"));
-    expect(end.indexOf("if (!ok) return false;")).toBeLessThan(end.indexOf("rememberSession(date, null)"));
+    expect(end.indexOf("if (!ok) return false;")).toBeGreaterThan(-1);
+    expect(end.indexOf("if (!ok) return false;")).toBeLessThan(end.indexOf("forgetSession();"));
     expect(hook).toMatch(/if \(sessionRef\.current !== asked\) return;/);
     expect(hook).toMatch(/next\.chart && next\.chart\.replaySession !== sessionRef\.current \? \{ \.\.\.next, chart: null \}/);
     expect(hook).toMatch(/id = newReplaySession\(date\);/);
@@ -1060,5 +1064,98 @@ describe("replay session lifecycle: archive on exit, fresh session on the next r
     const history = server.slice(server.indexOf("export async function algoHistory"));
     expect(history).not.toMatch(/\.(update|create|upsert|delete)\w*\(/);
     expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/params\.get\("history"\) === "1"/);
+  });
+});
+
+describe("minimal chart markers, completion after the last trade, Algo on by default", () => {
+  function threeTrades(): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < 30 ? LINE + 10 : index < 60 ? LINE - 10 : index < 90 ? LINE + 10 : index < 120 ? LINE - 10 : LINE + 10;
+      const open = index === 30 || index === 90 ? LINE + 8 : index === 60 || index === 120 ? LINE - 8 : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+  // Trade 1 wins (target at 36), trade 2 loses (stop at 66), trade 3 wins (target at 96).
+  const outcomes = (index: number) => (index === 36 || index === 96 ? { low: 100, high: 150, close: 145 } : index === 66 ? { low: 60, high: 100, close: 70 } : null);
+  const tokens = { profit: "#0f0", loss: "#f00", muted: "#888" };
+
+  it("entries are small triangles and exits small outcome-coloured dots, with no text and no duplicates", async () => {
+    feed.premiums = premiums(outcomes);
+    const result = await run(threeTrades(), { cursor: m(110) });
+    const trades = tradeMarkers(result.events, m(110));
+    const markers = algoChartMarkers([...trades, ...trades], tokens, null);
+    expect(markers).toHaveLength(6);
+    expect(markers.every((marker) => marker.text === "" && marker.size === MARKER_SIZE)).toBe(true);
+    const entries = markers.filter((marker) => marker.shape !== "circle");
+    expect(entries.map((marker) => [marker.shape, marker.color])).toEqual([["arrowDown", "#f00"], ["arrowUp", "#0f0"], ["arrowDown", "#f00"]]);
+    const exits = markers.filter((marker) => marker.shape === "circle");
+    expect(exits.map((marker) => marker.color)).toEqual(["#0f0", "#f00", "#0f0"]);
+    // Break-even exits are grey; the selected trade's markers are a little larger.
+    const even = algoChartMarkers([{ ...trades[1], pnl: 0 }], tokens, null);
+    expect(even[0].color).toBe("#888");
+    expect(algoChartMarkers(trades, tokens, trades[0].entryKey).filter((marker) => marker.size === SELECTED_MARKER_SIZE)).toHaveLength(2);
+    expect(trades[0].tip).toMatch(/^PUT entry · \d\d:\d\d · ₹/);
+    expect(trades[1].tip).toMatch(/^PUT exit \(Target\) · \d\d:\d\d · \+₹/);
+  });
+
+  it("trades 1 and 2 completing do not stop the replay; trade 3 open does not either", async () => {
+    feed.premiums = premiums(outcomes);
+    const two = await run(threeTrades(), { cursor: m(80) });
+    expect(algoTrades(two.events, null).filter((trade) => trade.status === "COMPLETED")).toHaveLength(2);
+    expect(two.completed).toBe(false);
+    const third = await run(threeTrades(), { state: two.state, processedThrough: two.processedThrough, cursor: m(93) });
+    expect(third.state.position).not.toBeNull();
+    expect(third.completed).toBe(false);
+    expect(sessionComplete(third.state, 3)).toBe(false);
+  });
+
+  it("when the third trade exits, processing stops at that minute and no fourth entry can happen", async () => {
+    feed.premiums = premiums(outcomes);
+    const result = await run(threeTrades(), { cursor: m(200) });
+    expect(result.completed).toBe(true);
+    expect(result.state.position).toBeNull();
+    expect(result.processedThrough).toBe(m(97));
+    expect(buys()).toHaveLength(3);
+    expect(sells()).toHaveLength(3);
+    // The crossing at minute 120 is never evaluated; another step later does nothing at all.
+    expect(result.events.some((event) => event.key === `eval:${m(120)}`)).toBe(false);
+    const again = await run(threeTrades(), { state: result.state, processedThrough: result.processedThrough, cursor: m(250) });
+    expect(again).toMatchObject({ completed: true, processedThrough: m(97), events: [] });
+    expect(buys()).toHaveLength(3);
+  });
+
+  it("the server archives the completed session once (COMPLETED) and keeps its figures for the summary", () => {
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    expect(server).toMatch(/if \(ran\.completed\) await completeRun\(user, existing\.id, wallet\);/);
+    expect(server).toMatch(/async function completeRun[\s\S]{0,300}if \(run\.status === "ENDED" && run\.summary\) return;[\s\S]{0,200}"COMPLETED"/);
+    expect(server).toMatch(/if \(wallet === "ALGO" && reason !== "COMPLETED"\) await startAlgoPeriod/);
+    expect(server).toMatch(/!command\.emergency && sessionComplete\(current, runConfig\.maxTrades\)/);
+    expect(readFileSync("src/server/algo-replay.ts", "utf8")).toMatch(/if \(sessionComplete\(state, input\.config\.maxTrades\)\) \{\s*completed = true;\s*break;/);
+  });
+
+  it("the chart pauses on completion, shows the summary once, and Close keeps the replay paused", () => {
+    const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
+    expect(hook).toMatch(/run\.status === "ENDED" && run\.endReason === "COMPLETED"/);
+    expect(hook).toMatch(/if \(!shown\.includes\(run\.id\)\)/);
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    expect(desk).toMatch(/onComplete: \(run\) => \{\s*setReplay\(\(current\) => \(\{ \.\.\.current, status: current\.status === "completed" \? "completed" : "paused"/);
+    expect(desk).toMatch(/onClose=\{\(\) => setAlgoDone\(null\)\}/);
+    expect(desk).toMatch(/algo\.run\?\.status === "ENDED" && algo\.run\.endReason === "COMPLETED"\) \{\s*setAlgoDone\(algo\.run\);\s*return;/);
+    const dialog = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    expect(dialog).toMatch(/title="Algo Session Completed"/);
+    expect(dialog).toMatch(/All \{max\} trades are completed\. Replay has been paused\./);
+    expect(dialog).toMatch(/View Trade History/);
+    expect(dialog).toMatch(/Start New Replay/);
+  });
+
+  it("Algo starts enabled; an explicit switch-off is kept for the session and a new session turns it on again", () => {
+    const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
+    expect(hook).toMatch(/return localStorage\.getItem\(enabledKey\(user\)\) !== "0";/);
+    expect(hook).toMatch(/const forgetSession = useCallback\(\(\) => \{[\s\S]{0,300}remember\(true\);/);
+    expect(hook).toMatch(/queueMicrotask\(\(\) => void command\("mode", \{ action: "chartMode" \}\)\)/);
+    // Never switched to chart replay while a live-price session or position is active.
+    expect(hook).toMatch(/if \(data\.state\.running \|\| data\.state\.position \|\| data\.state\.pending\) return;/);
   });
 });

@@ -17,7 +17,7 @@ import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/opt
 import { ensurePracticeAccount } from "@/server/practice-account";
 import { FILL_STALE_SECONDS, replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
-import { algoTrades, positionValuation, runStats, skippedSignals } from "@/lib/algo/chart-replay";
+import { algoTrades, positionValuation, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
 import { startAlgoPeriod } from "@/server/trading";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
@@ -719,6 +719,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
       state: ran.state as unknown as Prisma.InputJsonValue, processedThrough: ran.processedThrough,
       ...(ran.ended ? { status: ran.state.position ? "ACTIVE" : "ENDED", armed: false, endedAt: ran.state.position ? null : new Date(), endReason: "SESSION_END", endCashPaise: await walletCash(user.id, wallet) } : {}),
     }, [...ran.events, ...(ran.ended ? [{ key: "session-end", time: close, kind: "INFO" as const, message: ran.state.position ? "Replay reached the session close but the square-off is not confirmed: the position is still open on the demo ledger." : "Replay reached the session close: the algo session ended." }] : [])]);
+    if (ran.completed) await completeRun(user, existing.id, wallet);
     return;
   }
 
@@ -747,6 +748,8 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
   }
   current.status = current.recovery ? "RECOVERY_REQUIRED" : current.position?.exit ? "EXIT_PENDING" : current.position ? "POSITION_OPEN" : current.running ? (current.entries ? "MONITORING" : "READY") : "DISABLED";
   await saveChartRun(existing, { state: current as unknown as Prisma.InputJsonValue, processedThrough: through, ...(command.emergency ? { armed: false } : {}) }, events);
+  // A manual exit of the last trade completes the session just as a stop-loss or target would.
+  if (!command.emergency && sessionComplete(current, runConfig.maxTrades)) await completeRun(user, existing.id, wallet);
 }
 
 /** The run for the chart's replay session, the run history, and the demo wallet. */
@@ -774,6 +777,7 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
     run = {
       id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, armed: current.armed, status: current.status, endReason: current.endReason,
       processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: events.slice(-400), stats: runStats(events), config: readAlgoConfig(current.config),
+      summary: (current.summary ?? null) as { account?: Awaited<ReturnType<typeof algoWallet>> | null; stats?: ReturnType<typeof runStats>; completed?: number; maxTrades?: number; startCapital?: number; status?: string; finalizedAt?: string } | null,
       // The strategy lines this run compares (fixed for its date) and how many of them are switched on.
       lineCount: runLines.length,
       enabledLines: runLines.filter((line) => !readAlgoConfig(current.config).disabledLines.includes(line.type)).length,
@@ -817,7 +821,18 @@ async function cacheReplayMark(session: string, contract: ContractRef, premium: 
  * counts and settings) and the run's end in one transaction, and only after that opens a fresh period on
  * the Algo wallet for the next session. The archived period, its orders and closed trades stay as they are.
  */
-async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<object>, state: AlgoState, wallet: "ALGO" | "DEMO", reason: "EXIT_REPLAY" | "RESET", ctx: ChartRunInput | null) {
+/**
+ * All of the session's trades are done (the entry limit used, every trade closed): the session is archived
+ * as COMPLETED at the minute it finished. The next replay opens its own fresh period, so the finished
+ * session's account figures stay on screen in its completion summary.
+ */
+async function completeRun(user: SessionUser, runId: string, wallet: "ALGO" | "DEMO") {
+  const run = await prisma.algoRun.findUniqueOrThrow({ where: { id: runId } });
+  if (run.status === "ENDED" && run.summary) return;
+  await archiveRun(user, run, runStateOf(run), wallet, "COMPLETED", null);
+}
+
+async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<object>, state: AlgoState, wallet: "ALGO" | "DEMO", reason: "EXIT_REPLAY" | "RESET" | "COMPLETED", ctx: ChartRunInput | null) {
   const now = Math.floor(Date.now() / 1000);
   let current: AlgoState = { ...state, running: false, entries: false };
   const events: AlgoEvent[] = [];
@@ -856,7 +871,9 @@ async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<objec
     reason,
     finalizedAt: new Date().toISOString(),
   };
-  const message = reason === "RESET"
+  const message = reason === "COMPLETED"
+    ? `All ${summary.maxTrades} trades are completed. The session is saved to Algo History; the replay stops here.`
+    : reason === "RESET"
     ? "Replay session reset and saved to Algo History. The next session starts fresh."
     : `Replay session ended and saved to Algo History${unresolved ? " (an open position could not be closed and is kept as unresolved)" : ""}.`;
   await saveChartRun(run, {
@@ -865,7 +882,7 @@ async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<objec
     summary: summary as unknown as Prisma.InputJsonValue,
   }, [...events, { key: `archived:${now}`, time: run.processedThrough, kind: "INFO", message }]);
   // The next session starts on a fresh ₹1,00,000 period (an unresolved position stays with this one).
-  if (wallet === "ALGO") await startAlgoPeriod(user.id, `Algo replay session ${run.replaySession} ended (${reason}).`).catch(() => undefined);
+  if (wallet === "ALGO" && reason !== "COMPLETED") await startAlgoPeriod(user.id, `Algo replay session ${run.replaySession} ended (${reason}).`).catch(() => undefined);
 }
 
 /** Home → Algo History: every archived (and the running) replay session, newest first. Read-only. */

@@ -151,6 +151,8 @@ export type TradeMarker = {
   text: string;
   /** Plain-language details for the marker's popover. */
   detail: string[];
+  /** One short line for the chart's hover tooltip (the chart itself draws no text). */
+  tip: string;
   pnl: number | null;
 };
 
@@ -173,6 +175,7 @@ export function tradeMarkers(events: AlgoEvent[], cursor: number | null, options
     const status = trade.status === "OPEN" ? `Open · running P&L ${open?.unrealized == null ? "—" : signedRupee(open.unrealized)}` : trade.status === "EXIT_PENDING" ? "Exit pending" : `Completed · realized ${trade.realized == null ? "—" : signedRupee(trade.realized)}`;
     list.push({
       id: `marker:${trade.entryKey}:entry`, entryKey: trade.entryKey, time: trade.entryTime, kind: "entry", side: trade.side, pnl: null,
+      tip: `${trade.side} entry · ${ist(trade.entryTime)} · ${rupee(trade.entryPremium)}${trade.status === "OPEN" && open?.unrealized != null ? ` · ${signedRupee(open.unrealized)} open` : ""}`,
       text: `${label} ${trade.side} BUY ${trade.strike ?? ""}${trade.right} @${rupee(trade.entryPremium)}`,
       detail: [
         `Trade ${trade.number}/${max} · BUY ${trade.side}`,
@@ -187,6 +190,7 @@ export function tradeMarkers(events: AlgoEvent[], cursor: number | null, options
     if (trade.exitTime != null && trade.realized != null) {
       list.push({
         id: `marker:${trade.entryKey}:exit`, entryKey: trade.entryKey, time: trade.exitTime, kind: "exit", side: trade.side, pnl: trade.realized,
+        tip: `${trade.side} exit (${trade.exitReason ?? "Exit"}) · ${ist(trade.exitTime)} · ${signedRupee(trade.realized)}`,
         text: `${label} EXIT ${trade.exitReason ?? ""} ${signedRupee(trade.realized)}${trade.returnPercent == null ? "" : ` (${trade.returnPercent >= 0 ? "+" : ""}${trade.returnPercent.toFixed(1)}%)`}`,
         detail: [
           `Trade ${trade.number}/${max} · exit (${trade.exitReason ?? "Exit"})`,
@@ -431,4 +435,13 @@ export function activityFeed(events: AlgoEvent[]): ActivityItem[] {
   // Newest first; within one minute the later step first (a fill above the signal that caused it).
   const rank: Record<ActivityItem["kind"], number> = { closed: 4, opened: 3, rejected: 2, signal: 1, info: 0 };
   return list.sort((a, b) => b.time - a.time || rank[b.kind] - rank[a.kind] || (a.id < b.id ? 1 : -1));
+}
+
+/**
+ * A replay session is complete once its entry limit is used up and every one of those trades has closed
+ * (exit filled, P&L booked): no open position and no pending order. Reaching the limit with a trade still
+ * open is not complete; that trade's stop-loss, target or exit still runs.
+ */
+export function sessionComplete(state: { tradesToday: number; position: unknown; pending: unknown }, maxTrades: number) {
+  return maxTrades > 0 && state.tradesToday >= maxTrades && !state.position && !state.pending;
 }

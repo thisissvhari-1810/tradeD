@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { AppError } from "@/lib/http";
 import { walletKey } from "@/server/practice-account";
-import { minuteEnds } from "@/lib/algo/chart-replay";
+import { minuteEnds, sessionComplete } from "@/lib/algo/chart-replay";
 import type { AlgoLine, Candle } from "@/lib/algo/lines";
 import { advance, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ExecutionAdapter, type Fill } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
@@ -110,15 +110,21 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
   let state = input.state;
   const events: AlgoEvent[] = [];
   let processedThrough = input.processedThrough;
-  for (const end of minuteEnds(processedThrough, input.cursor, input.sessionOpen, input.sessionClose)) {
+  // Once the session's trades are all done nothing more is processed: the replay stops at that minute.
+  let completed = sessionComplete(state, input.config.maxTrades);
+  for (const end of completed ? [] : minuteEnds(processedThrough, input.cursor, input.sessionOpen, input.sessionClose)) {
     adapter.setClock(end);
     const result = await advance(state, { sessionId: input.runId, sessionDate: input.date, config: input.config, candles: input.candles, lines: input.lines, now: end, adapter });
     state = result.state;
     events.push(...result.events);
     processedThrough = end;
+    if (sessionComplete(state, input.config.maxTrades)) {
+      completed = true;
+      break;
+    }
   }
   let ended = false;
-  if (processedThrough >= input.sessionClose) {
+  if (!completed && processedThrough >= input.sessionClose) {
     ended = true;
     if (state.position && !state.position.exit) {
       const mark = await adapter.mark(state.position.contract, input.sessionClose).catch(() => null);
@@ -128,7 +134,7 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
     state.running = false;
     state.entries = false;
   }
-  return { state, events, processedThrough, ended };
+  return { state, events, processedThrough, ended, completed };
 }
 
 function runInput(input: ChartRunInput, adapter: ExecutionAdapter, now: number) {

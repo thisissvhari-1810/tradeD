@@ -207,7 +207,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
             <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">Completed trades</p>
             <ol className="space-y-1.5">
               {completed.map((trade) => (
-                <li key={trade.entryKey}>
+                <li key={trade.entryKey} data-trade={trade.entryKey}>
                   <button type="button" aria-pressed={selectedTrade === trade.entryKey} className={cx("w-full rounded-lg border px-3 py-2 text-left hover:bg-hover", selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft")} onClick={() => onOpenTrade(trade.entryKey)}>
                     <span className="flex items-baseline gap-2">
                       <span className="text-xs font-semibold text-muted">T{trade.number}</span>
@@ -269,7 +269,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 function TradeCard({ trade, max, position, selected, onOpen, onExit, exiting }: { trade: AlgoTrade; max: number; position: LivePosition | null; selected: boolean; onOpen: () => void; onExit: () => void; exiting: boolean }) {
   const call = trade.side === "CALL";
   return (
-    <section className={cx("rounded-xl border-2 bg-gradient-to-br p-3 shadow-e1", call ? "from-profit-soft/30 to-panel" : "from-loss-soft/30 to-panel", selected ? "border-primary" : "border-border")} aria-label={`Trade ${trade.number} of ${max}`}>
+    <section data-trade={trade.entryKey} className={cx("rounded-xl border-2 bg-gradient-to-br p-3 shadow-e1", call ? "from-profit-soft/30 to-panel" : "from-loss-soft/30 to-panel", selected ? "border-primary" : "border-border")} aria-label={`Trade ${trade.number} of ${max}`}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-base font-semibold">T{trade.number} · <span className={call ? "text-profit" : "text-loss"}>BUY {trade.side}</span></p>
         <span className="inline-flex items-center gap-1 text-xs font-semibold"><CircleDot className={cx("h-3 w-3", trade.status === "OPEN" ? "text-profit" : "text-warning")} aria-hidden />{trade.status === "OPEN" ? "OPEN" : "EXIT PENDING"}</span>
@@ -513,6 +513,42 @@ export function AlgoEndDialog({ algo, cursor, onCancel, onConfirm, action }: { a
       <div className="mt-4 flex justify-end gap-2">
         <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover disabled:opacity-50" disabled={saving} onClick={onCancel}>Cancel</button>
         <button type="button" className="h-8 rounded-md bg-primary px-3 font-semibold text-on-primary disabled:opacity-60" disabled={saving || cursor == null} onClick={onConfirm}>{saving ? "Saving session history…" : algo.error ? "Retry" : action === "exit" ? "Save & exit replay" : "Save & change date"}</button>
+      </div>
+    </Dialog>
+  );
+}
+
+/**
+ * The session's trades are all done: the replay is paused and this summary (the server's archived
+ * figures for the session, not a separate calculation) is shown once.
+ */
+export function AlgoCompleteDialog({ run, onClose, onHistory, onNewReplay }: { run: NonNullable<ChartAlgo["run"]>; onClose: () => void; onHistory: () => void; onNewReplay: () => void }) {
+  const summary = run.summary;
+  const stats = summary?.stats ?? run.stats;
+  const max = summary?.maxTrades ?? run.config.maxTrades;
+  const completed = summary?.completed ?? stats.trades;
+  const equity = summary?.account?.equity ?? null;
+  return (
+    <Dialog title="Algo Session Completed" onClose={onClose}>
+      <p className="text-sm text-text-2">All {max} trades are completed. Replay has been paused.</p>
+      <div className="mt-3 rounded-xl bg-elevated p-3">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted">Total realized P&amp;L</p>
+        <p className={cx("num text-[1.75rem] font-semibold leading-tight", tone(stats.realized))}>{inr(stats.realized, true)}</p>
+        <dl className="mt-2 grid grid-cols-3 gap-2">
+          <Item label="Completed trades" value={`${completed}/${max}`} />
+          <Item label="Winning" value={String(stats.wins)} tone="text-profit" />
+          <Item label="Losing" value={String(stats.losses)} tone="text-loss" />
+          <Item label="Starting capital" value={inr(summary?.startCapital ?? null)} />
+          <Item label="Final equity" value={equity ?? "—"} />
+          <Item label="Replay date" value={run.date} />
+        </dl>
+        <p className="num mt-2 text-xs text-muted">Completed at {ist(run.processedThrough)} IST (replay time)</p>
+      </div>
+      <p className="mt-2 text-xs text-muted">Saved to Home → Algo History. No further signals or entries are processed in this session.</p>
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onClose}>Close</button>
+        <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onHistory}>View Trade History</button>
+        <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 font-semibold text-on-primary" onClick={onNewReplay}><Play className="h-3.5 w-3.5" aria-hidden />Start New Replay</button>
       </div>
     </Dialog>
   );

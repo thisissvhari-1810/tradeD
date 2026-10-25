@@ -30,11 +30,23 @@ function describe(caught: unknown, fallback: string) {
   return `${message}${field}`;
 }
 
+/** Algo is on unless the user switched it off (an explicit "0"); a new session turns it on again. */
 function readEnabled(user: string) {
   try {
-    return localStorage.getItem(enabledKey(user)) === "1";
+    return localStorage.getItem(enabledKey(user)) !== "0";
   } catch {
-    return false;
+    return true;
+  }
+}
+
+/** Completed sessions whose summary was already shown (once per session, also across refreshes). */
+const completedKey = (user: string) => `td-algo-completed:${user}`;
+function readShown(user: string): string[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(completedKey(user)) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string").slice(-50) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -60,6 +72,8 @@ export function useChartAlgo(input: {
   onLedger: () => void;
   onPause: () => void;
   notify: (message: string, options?: { tone?: "success" | "warning" | "info" }) => void;
+  /** The session's trades are all done (archived as COMPLETED): called once per session. */
+  onComplete?: (run: NonNullable<AlgoData["chart"]>) => void;
 }) {
   const { user, active, date, cursor, advancing } = input;
   const [enabled, setEnabledState] = useState(false);
@@ -103,6 +117,15 @@ export function useChartAlgo(input: {
       callbacks.current.onLedger();
     }
     trades.current = { session: run?.replaySession ?? null, count };
+    // The authoritative completion: the server archived the session as COMPLETED. Shown once per session.
+    if (run && run.status === "ENDED" && run.endReason === "COMPLETED") {
+      const user = callbacks.current.user;
+      const shown = readShown(user);
+      if (!shown.includes(run.id)) {
+        try { localStorage.setItem(completedKey(user), JSON.stringify([...shown, run.id].slice(-50))); } catch { /* Storage is optional. */ }
+        callbacks.current.onComplete?.(run);
+      }
+    }
   }, [forActive]);
 
   const load = useCallback(async () => {
@@ -155,6 +178,17 @@ export function useChartAlgo(input: {
     if (sessionRef.current) void command("disarm", { action: "chartDisarm", session: sessionRef.current });
   }, [command, data?.config.mode, remember]);
 
+  // Algo on in the chart's replay means it trades the replay: an idle Algo still set to live-price paper
+  // trading is switched to chart replay once (never while a live-price session or position is active).
+  const switched = useRef(false);
+  useEffect(() => {
+    if (!active || !enabled || !data || switched.current || data.config.mode === "REPLAY") return;
+    if (data.state.running || data.state.position || data.state.pending) return;
+    switched.current = true;
+    // Run after this effect (the request updates state).
+    queueMicrotask(() => void command("mode", { action: "chartMode" }));
+  }, [active, enabled, data, command]);
+
   // One step at a time: each sends the replay time; the server processes every minute completed since.
   const stepping = useRef(false);
   const failures = useRef(0);
@@ -195,18 +229,25 @@ export function useChartAlgo(input: {
       });
   }, [tracking, advancing, minute, session, cursor, run, apply, retry]);
 
+  /** Drops the active session on this device (it is already archived): the next Play starts a new one, with Algo on. */
+  const forgetSession = useCallback(() => {
+    if (!date) return;
+    sessionRef.current = null;
+    rememberSession(date, null);
+    setData((current) => (current ? { ...current, chart: null } : current));
+    trades.current = { session: null, count: 0 };
+    remember(true);
+    void load();
+  }, [date, load, remember, rememberSession]);
+
   const endSession = useCallback(async (label: string, action: "chartFinalize" | "chartReset") => {
     const id = sessionRef.current;
     if (!id || !date) return true;
     const ok = await command(label, { action, session: id });
     if (!ok) return false;
-    sessionRef.current = null;
-    rememberSession(date, null);
-    setData((current) => (current ? { ...current, chart: null } : current));
-    trades.current = { session: null, count: 0 };
-    void load();
+    forgetSession();
     return true;
-  }, [command, date, load, rememberSession]);
+  }, [command, date, forgetSession]);
 
   const gate: PlayGate | null = cursor == null ? null : playGate({
     algoEnabled: enabled && data?.config.mode === "REPLAY",
@@ -245,5 +286,7 @@ export function useChartAlgo(input: {
      * kept as unresolved), then forgets it. The data stays on screen until the archive has succeeded.
      */
     finalize: () => endSession("finalize", "chartFinalize"),
+    /** After a completed session (already archived on the server): start over with a brand-new session. */
+    startNew: forgetSession,
   };
 }
