@@ -1,0 +1,474 @@
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { AppError } from "@/lib/http";
+import { mayPractice } from "@/lib/auth/permissions";
+import { kolkataParts } from "@/lib/market/clock";
+import { optionCharges } from "@/lib/options/engine";
+import { algoConfigProblems, readAlgoConfig } from "@/lib/algo/config";
+import { strategyLines, type Candle } from "@/lib/algo/lines";
+import { atmStrike, type ChainInput, type Right } from "@/lib/algo/options";
+export { liveAdapter } from "@/lib/algo/live";
+import { advance, initialState, startExit, ALGO_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import type { SessionUser } from "@/server/auth";
+import { gateFor } from "@/server/live-gate";
+import { getS1Data, sessionMinuteTape } from "@/server/market";
+import { loadOptionChain } from "@/server/option-chain";
+import { sessionTape, type ReplayContract } from "@/server/option-replay";
+import { paperCapitalPaise } from "@/server/options-paper";
+
+/**
+ * The Strategy Algo on the server: settings, the runner state, the signal / order log and the execution
+ * adapters. Paper trading uses the options paper ledger (the same cash, orders and positions as the
+ * options desk, tagged source "algo"); historical replay simulates a past session from real 1-minute
+ * option premiums without touching any account; live execution stays unavailable (see liveAvailability).
+ */
+
+const paise = (rupees: number) => BigInt(Math.round(rupees * 100));
+const rupees = (value: bigint) => Number(value) / 100;
+const contractKeyOf = (contract: Pick<ContractRef, "underlying" | "expiry" | "strike" | "right">) => `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}`;
+const todayIst = () => kolkataParts(new Date()).dateKey;
+const LEASE_MS = 45_000;
+
+function assertAllowed(user: SessionUser) {
+  if (!mayPractice(user) || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Algo trading practice is available on active accounts with trading enabled.", 403);
+}
+
+/* ---------------- live: honest availability ---------------- */
+
+/**
+ * Live algo orders need the live gate (static IP, own account, broker token, live switch), a separate
+ * server switch for automatic orders, and broker-side protective exits with order-status reconciliation.
+ * The last is not validated yet, so live algo execution stays unavailable and says why.
+ */
+export async function liveAvailability(user: SessionUser, env: NodeJS.ProcessEnv = process.env) {
+  const reasons: string[] = [];
+  if (env.ALGO_LIVE_ENABLED !== "1") reasons.push("Automatic live orders are switched off on the server (ALGO_LIVE_ENABLED is not set).");
+  const gate = await gateFor(user, env).catch(() => null);
+  if (!gate) reasons.push("The live trading gate could not be checked.");
+  else for (const item of gate.requirements) if (!item.met) reasons.push(`${item.label}: not met.`);
+  reasons.push("Broker-side protective stop / target orders and order-status reconciliation for automatic trading are not validated yet, so live algo orders stay off.");
+  return { available: false as const, reasons };
+}
+
+/* ---------------- session store ---------------- */
+
+async function loadSession(userId: string) {
+  return prisma.algoSession.upsert({
+    where: { userId },
+    update: {},
+    create: { userId, config: ALGO_DEFAULTS as unknown as Prisma.InputJsonValue, state: initialState(todayIst()) as unknown as Prisma.InputJsonValue },
+  });
+}
+
+/** Runs `task` while holding the session's short lease (two ticks never run one session at once). */
+async function withLease<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+  const now = new Date();
+  const taken = await prisma.algoSession.updateMany({ where: { id: sessionId, lockedUntil: { lt: now } }, data: { lockedUntil: new Date(now.getTime() + LEASE_MS) } });
+  if (taken.count === 0) throw new AppError("The algo is busy with another update. Try again in a moment.", 409, "ALGO_BUSY");
+  try {
+    return await task();
+  } finally {
+    await prisma.algoSession.update({ where: { id: sessionId }, data: { lockedUntil: new Date() } }).catch(() => undefined);
+  }
+}
+
+async function saveRun(sessionId: string, state: AlgoState, events: AlgoEvent[], mode: string, runId = "") {
+  await prisma.$transaction([
+    prisma.algoSession.update({ where: { id: sessionId }, data: { state: state as unknown as Prisma.InputJsonValue } }),
+    ...(events.length ? [prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode, runId, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true })] : []),
+  ]);
+}
+
+/* ---------------- paper adapter (the options paper ledger) ---------------- */
+
+async function paperAccountId(userId: string) {
+  const account = await prisma.optionPaperAccount.upsert({ where: { userId }, update: {}, create: { userId, cashPaise: paperCapitalPaise(), dayKey: todayIst() } });
+  return account.id;
+}
+
+function fillOf(order: { status: string; reason: string; quantity: number; fillPremiumPaise: bigint | null; chargesPaise: bigint }): Fill {
+  if (order.status === "FILLED" && order.fillPremiumPaise != null) return { status: "FILLED", quantity: order.quantity, price: rupees(order.fillPremiumPaise), charges: rupees(order.chargesPaise) };
+  if (order.status === "REJECTED") return { status: "REJECTED", reason: order.reason || "Rejected." };
+  return { status: "PENDING" };
+}
+
+function chainInput(view: Awaited<ReturnType<typeof loadOptionChain>>): ChainInput {
+  return { underlying: view.symbol, spot: view.spot, expiry: view.expiry, asOf: view.asOf, lotSize: view.lotSize, strikes: view.strikes.map((row) => ({ strike: row.strike, ce: row.ce, pe: row.pe })) };
+}
+
+/**
+ * Simulated execution on the options paper ledger. Fills use the real option-chain quote: a buy pays the
+ * ask plus the configured slippage, a sell gets the bid less it (the runner sets the price), with the
+ * educational charges model. Cash, the order and the position change in one transaction, keyed by the
+ * order's idempotency key, so a repeated request returns the first result.
+ */
+export function paperAdapter(userId: string, config: AlgoConfig): ExecutionAdapter {
+  let accountId: string | null = null;
+  const account = async () => (accountId ??= await paperAccountId(userId));
+  return {
+    kind: "paper",
+    async health() {
+      return { ok: true };
+    },
+    async cash() {
+      const row = await prisma.optionPaperAccount.findUnique({ where: { id: await account() } });
+      return row ? rupees(row.cashPaise) : 0;
+    },
+    charges(side, premium, quantity) {
+      return rupees(optionCharges(side, paise(premium), quantity).total);
+    },
+    async chain(_right: Right, expiry: string) {
+      return chainInput(await loadOptionChain(config.underlying, expiry === "nearest" ? null : expiry));
+    },
+    async mark(contract) {
+      const view = await loadOptionChain(contract.underlying, contract.expiry);
+      const row = view.strikes.find((item) => item.strike === contract.strike);
+      const side = contract.right === "CE" ? row?.ce : row?.pe;
+      const age = (Date.now() - new Date(view.asOf).getTime()) / 1000;
+      if (!side || side.bid == null || age > config.maxQuoteAgeSeconds) return null;
+      return { bid: side.bid, ask: side.ask, candle: null, asOf: Math.floor(new Date(view.asOf).getTime() / 1000) } satisfies Mark;
+    },
+    async enter(order) {
+      const id = await account();
+      const chargesPaise = optionCharges("BUY", paise(order.price), order.quantity).total;
+      const costPaise = paise(order.price) * BigInt(order.quantity) + chargesPaise;
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const again = await tx.optionPaperOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: id, idempotencyKey: order.key } } });
+          if (again) return fillOf(again);
+          const current = await tx.optionPaperAccount.findUnique({ where: { id } });
+          const base = { accountId: id, idempotencyKey: order.key, source: "algo", action: "BUY", contractKey: contractKeyOf(order.contract), lots: Math.round(order.quantity / order.contract.lotSize), quantity: order.quantity, simulated: true };
+          if (!current || current.cashPaise < costPaise) {
+            await tx.optionPaperOrder.create({ data: { ...base, status: "REJECTED", reason: "Insufficient simulated buying power." } });
+            return { status: "REJECTED", reason: "Insufficient simulated buying power." } satisfies Fill;
+          }
+          await tx.optionPaperOrder.create({ data: { ...base, status: "FILLED", reason: "Algo entry (simulated)", fillPremiumPaise: paise(order.price), chargesPaise } });
+          await tx.optionPaperPosition.create({
+            data: {
+              accountId: id, source: "algo", contractKey: contractKeyOf(order.contract), side: "LONG", strike: Math.round(order.contract.strike), expiry: order.contract.expiry, right: order.contract.right,
+              lots: base.lots, lotSize: order.contract.lotSize, quantity: order.quantity, avgPremiumPaise: paise(order.price), stopPremiumPaise: 0n, targetPremiumPaise: 0n, chargesPaise, status: "OPEN",
+            },
+          });
+          await tx.optionPaperAccount.update({ where: { id }, data: { cashPaise: { decrement: costPaise } } });
+          return { status: "FILLED", quantity: order.quantity, price: order.price, charges: rupees(chargesPaise) } satisfies Fill;
+        });
+      } catch (error) {
+        // A concurrent request with the same key already wrote the order: report that one.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return (await this.lookup(order.key)) ?? { status: "UNKNOWN", reason: "Duplicate request." };
+        throw error;
+      }
+    },
+    async exit(order) {
+      const id = await account();
+      return prisma.$transaction(async (tx) => {
+        const again = await tx.optionPaperOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: id, idempotencyKey: order.key } } });
+        if (again) return fillOf(again);
+        const position = await tx.optionPaperPosition.findFirst({ where: { accountId: id, source: "algo", status: "OPEN", contractKey: contractKeyOf(order.contract) }, orderBy: { openedAt: "desc" } });
+        const base = { accountId: id, idempotencyKey: order.key, source: "algo", action: "SELL", contractKey: contractKeyOf(order.contract), lots: Math.max(1, Math.round(order.quantity / order.contract.lotSize)), quantity: order.quantity, simulated: true };
+        if (!position) {
+          await tx.optionPaperOrder.create({ data: { ...base, status: "REJECTED", reason: "No open algo position for this contract." } });
+          return { status: "REJECTED", reason: "No open algo position for this contract." } satisfies Fill;
+        }
+        const quantity = Math.min(order.quantity, position.quantity);
+        const chargesPaise = optionCharges("SELL", paise(order.price), quantity).total;
+        const share = (position.chargesPaise * BigInt(quantity)) / BigInt(Math.max(1, position.quantity));
+        const realized = (paise(order.price) - position.avgPremiumPaise) * BigInt(quantity) - share - chargesPaise;
+        await tx.optionPaperOrder.create({ data: { ...base, quantity, status: "FILLED", reason: `Algo exit: ${order.reason} (simulated)`, fillPremiumPaise: paise(order.price), chargesPaise } });
+        const left = position.quantity - quantity;
+        await tx.optionPaperPosition.update({
+          where: { id: position.id },
+          data: { quantity: left, chargesPaise: position.chargesPaise - share, realizedPaise: { increment: realized }, ...(left === 0 ? { status: "CLOSED", exitPremiumPaise: paise(order.price), closedAt: new Date() } : {}) },
+        });
+        await tx.optionPaperAccount.update({ where: { id }, data: { cashPaise: { increment: paise(order.price) * BigInt(quantity) - chargesPaise } } });
+        return { status: "FILLED", quantity, price: order.price, charges: rupees(chargesPaise) } satisfies Fill;
+      });
+    },
+    async lookup(key) {
+      const order = await prisma.optionPaperOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: await account(), idempotencyKey: key } } });
+      return order ? fillOf(order) : null;
+    },
+  };
+}
+
+/* ---------------- historical replay adapter ---------------- */
+
+/**
+ * Replays a past session with real data only: the underlying's 1-minute candles drive the signals and
+ * each option's own 1-minute premium candles price it. Fill model: the signal is known when its candle
+ * closes, so the entry uses that minute's option close (plus slippage); exits use each later option
+ * candle (gaps fill at the open; a candle reaching both stop and target takes the stop). Historical bid /
+ * ask are not available, so the candle close stands for both and the spread check cannot apply. A virtual
+ * account is used: nothing is written to the paper ledger, and no order goes anywhere.
+ */
+export function replayAdapter(input: { underlying: string; date: string; candles: Candle[]; chain: Awaited<ReturnType<typeof loadOptionChain>>; config: AlgoConfig; capital: number }): ExecutionAdapter & { setClock: (now: number) => void } {
+  const orders = new Map<string, Fill>();
+  let cash = input.capital;
+  // The simulated clock: the close of the candle being replayed.
+  let clock = 0;
+  const tapes = new Map<string, Promise<Candle[]>>();
+  const tapeOf = (contract: Pick<ContractRef, "underlying" | "expiry" | "strike" | "right" | "securityId" | "lotSize">) => {
+    const key = contract.securityId;
+    if (!tapes.has(key)) {
+      const replay: ReplayContract = { underlying: contract.underlying, name: contract.underlying, expiry: contract.expiry, strike: contract.strike, right: contract.right, securityId: contract.securityId, kind: input.chain.kind, lotSize: contract.lotSize };
+      tapes.set(key, sessionTape(replay, input.date, new Date()).catch(() => []));
+    }
+    return tapes.get(key)!;
+  };
+  const candleAt = (tape: Candle[], time: number) => tape.find((candle) => candle.time === time) ?? null;
+  return {
+    kind: "replay",
+    setClock: (now) => { clock = now; },
+    health: async () => ({ ok: true }),
+    cash: async () => cash,
+    charges: (side, premium, quantity) => rupees(optionCharges(side, paise(premium), quantity).total),
+    async chain(right) {
+      // The underlying's close at the signal minute is the spot; only the ATM contract's premium is loaded.
+      const view = input.chain;
+      const now = clock;
+      const spotCandle = [...input.candles].filter((candle) => candle.time + 60 <= now).at(-1);
+      const spot = spotCandle?.close ?? null;
+      const strikes = view.strikes.map((row) => ({ strike: row.strike, ce: null as ChainInput["strikes"][number]["ce"], pe: null as ChainInput["strikes"][number]["pe"] }));
+      const strike = spot != null ? atmStrike(view.strikes.map((row) => row.strike), spot, input.config.rounding) : null;
+      const row = view.strikes.find((item) => item.strike === strike);
+      const side = right === "CE" ? row?.ce : row?.pe;
+      if (row && side?.securityId && view.lotSize && spotCandle) {
+        const tape = await tapeOf({ underlying: view.symbol, expiry: view.expiry!, strike: row.strike, right, securityId: side.securityId, lotSize: view.lotSize });
+        const premium = candleAt(tape, spotCandle.time);
+        const quote = premium ? { ltp: premium.close, bid: premium.close, ask: premium.close, securityId: side.securityId } : { ltp: null, bid: null, ask: null, securityId: side.securityId };
+        const target = strikes.find((item) => item.strike === row.strike)!;
+        if (right === "CE") target.ce = quote; else target.pe = quote;
+      }
+      return { underlying: view.symbol, spot, expiry: view.expiry, asOf: new Date(now * 1000).toISOString(), lotSize: view.lotSize, strikes };
+    },
+    async mark(contract, now) {
+      const tape = await tapeOf(contract);
+      const candle = candleAt(tape, now - 60);
+      if (!candle) return null;
+      return { bid: candle.close, ask: candle.close, candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close }, asOf: now };
+    },
+    async enter(order) {
+      if (orders.has(order.key)) return orders.get(order.key)!;
+      const charges = rupees(optionCharges("BUY", paise(order.price), order.quantity).total);
+      const cost = order.price * order.quantity + charges;
+      const fill: Fill = cost > cash ? { status: "REJECTED", reason: "Insufficient virtual buying power." } : { status: "FILLED", quantity: order.quantity, price: order.price, charges };
+      if (fill.status === "FILLED") cash -= cost;
+      orders.set(order.key, fill);
+      return fill;
+    },
+    async exit(order) {
+      if (orders.has(order.key)) return orders.get(order.key)!;
+      const charges = rupees(optionCharges("SELL", paise(order.price), order.quantity).total);
+      const fill: Fill = { status: "FILLED", quantity: order.quantity, price: order.price, charges };
+      cash += order.price * order.quantity - charges;
+      orders.set(order.key, fill);
+      return fill;
+    },
+    lookup: async (key) => orders.get(key) ?? null,
+  };
+}
+
+/* ---------------- view ---------------- */
+
+function stateOf(row: { state: Prisma.JsonValue }): AlgoState {
+  const raw = (row.state && typeof row.state === "object" ? row.state : {}) as Partial<AlgoState>;
+  return { ...initialState(todayIst()), ...raw };
+}
+
+/** Everything the Algo panel shows, for the signed-in user. */
+export async function algoView(user: SessionUser) {
+  assertAllowed(user);
+  const session = await loadSession(user.id);
+  const config = readAlgoConfig(session.config);
+  const state = stateOf(session);
+  const live = await liveAvailability(user);
+  let lines: ReturnType<typeof strategyLines> = [];
+  let levelsMessage = "";
+  try {
+    const data = await getS1Data(config.underlying);
+    lines = strategyLines(data, config.custom);
+    levelsMessage = data.message;
+  } catch (error) {
+    levelsMessage = error instanceof Error ? error.message : "The strategy levels could not be loaded.";
+  }
+  let mark: Mark | null = null;
+  if (state.position) mark = await paperAdapter(user.id, config).mark(state.position.contract, Math.floor(Date.now() / 1000)).catch(() => null);
+  const unrealized = state.position && mark?.bid != null ? Math.round(((mark.bid - state.position.avg) * state.position.quantity - state.position.entryCharges) * 100) / 100 : null;
+  const [events, replays, account] = await Promise.all([
+    prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "PAPER" }, orderBy: [{ time: "desc" }, { createdAt: "desc" }], take: 150 }),
+    prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "REPLAY" }, orderBy: [{ createdAt: "desc" }], take: 400 }),
+    prisma.optionPaperAccount.findUnique({ where: { userId: user.id } }),
+  ]);
+  const latestRun = replays[0]?.runId ?? null;
+  return {
+    config,
+    problems: algoConfigProblems(config),
+    state,
+    live,
+    lines: lines.map((line) => ({ ...line, enabled: !config.disabledLines.includes(line.type) })),
+    levelsMessage,
+    position: state.position ? { ...state.position, bid: mark?.bid ?? null, ask: mark?.ask ?? null, unrealized, markedAt: mark?.asOf ?? null } : null,
+    events: events.map((event) => event.payload as unknown as AlgoEvent),
+    replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
+    paper: { cash: account ? rupees(account.cashPaise) : rupees(paperCapitalPaise()) },
+    monitoring: "The algo checks completed candles and its open position each time TradeD runs a check: while this page is open (every 15 seconds), or from the server scheduler when one is configured. Stop-loss and target are watched by TradeD, not held at a broker, so they are not guaranteed protection; exits fill at the quote available when checked.",
+  };
+}
+
+/* ---------------- commands ---------------- */
+
+export type AlgoCommand =
+  | { action: "save"; config: unknown }
+  | { action: "start" }
+  | { action: "stop" }
+  | { action: "entries"; enabled: boolean }
+  | { action: "exit" }
+  | { action: "emergency" }
+  | { action: "acknowledge" }
+  | { action: "tick" }
+  | { action: "replay"; date: string };
+
+export async function algoCommand(user: SessionUser, command: AlgoCommand) {
+  assertAllowed(user);
+  const session = await loadSession(user.id);
+  if (command.action === "replay") return withLease(session.id, () => runReplay(user, session.id, command.date)).then(() => algoView(user));
+  await withLease(session.id, async () => {
+    const config = readAlgoConfig(session.config);
+    const state = stateOf(session);
+    const events: AlgoEvent[] = [];
+    const now = Math.floor(Date.now() / 1000);
+    const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
+    switch (command.action) {
+      case "save": {
+        const next = readAlgoConfig(command.config);
+        const problems = algoConfigProblems(next);
+        if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+        if (next.mode === "LIVE") throw new AppError(`Live algo trading is unavailable: ${(await liveAvailability(user)).reasons.join(" ")}`, 409, "LIVE_UNAVAILABLE");
+        if (state.position && next.underlying !== config.underlying) throw new AppError("Exit the open position before changing the underlying.", 409);
+        await prisma.algoSession.update({ where: { id: session.id }, data: { config: next as unknown as Prisma.InputJsonValue } });
+        note("settings", "Settings saved.");
+        break;
+      }
+      case "start": {
+        const problems = algoConfigProblems(config);
+        if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+        if (config.mode !== "PAPER") throw new AppError(config.mode === "LIVE" ? "Live algo trading is unavailable." : "Historical replay runs from the Replay button, not as a session.", 409);
+        // Starting mid-session never trades history: evaluation begins from the next completed candle.
+        Object.assign(state, { running: true, entries: true, sessionDate: todayIst(), lastCandle: null });
+        note("start", "Session started (paper trading). Monitoring completed 1-minute candles.");
+        break;
+      }
+      case "stop":
+        if (state.position) throw new AppError("Exit the open position first, or keep the session running to protect it. Use Disable new entries to stop new trades.", 409, "POSITION_OPEN");
+        Object.assign(state, { running: false, entries: false });
+        note("stop", "Session stopped.");
+        break;
+      case "entries":
+        state.entries = command.enabled && state.running;
+        note("entries", command.enabled ? "New entries enabled." : "New entries disabled. An open position stays protected by its stop-loss and target.");
+        break;
+      case "exit":
+      case "emergency": {
+        if (command.action === "emergency") { state.entries = false; note("emergency", "Emergency stop: new entries blocked; exiting any open position.", "ERROR"); }
+        if (state.position) {
+          await startExit(state, { sessionId: session.id, sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: paperAdapter(user.id, config) }, command.action === "emergency" ? "EMERGENCY" : "MANUAL", null, (event) => events.push({ time: now, ...event }));
+        } else if (command.action === "exit") throw new AppError("There is no open algo position.", 409);
+        break;
+      }
+      case "acknowledge":
+        if (state.pending || state.position?.exit) throw new AppError("An order is still being reconciled; it cannot be acknowledged yet.", 409);
+        state.recovery = null;
+        note("ack", "Recovery acknowledged.");
+        break;
+      case "tick":
+        break;
+    }
+    if (command.action === "tick" || command.action === "start") {
+      const ran = await runTick(user.id, session.id, config, state);
+      await saveRun(session.id, ran.state, [...events, ...ran.events], "PAPER");
+      await syncPaperLevels(user.id, ran.state);
+      return;
+    }
+    state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : state.running ? (state.entries ? "MONITORING" : "READY") : "DISABLED";
+    await saveRun(session.id, state, events, "PAPER");
+    await syncPaperLevels(user.id, state);
+  });
+  return algoView(user);
+}
+
+/** One paper tick: today's strategy levels and 1-minute candles through the runner. */
+async function runTick(userId: string, sessionId: string, config: AlgoConfig, state: AlgoState) {
+  if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
+  const today = todayIst();
+  const data = await getS1Data(config.underlying);
+  // Before today's session (or on a closed day) the levels belong to an earlier day: nothing is evaluated.
+  const candles = data.date === today ? await sessionMinuteTape(config.underlying, today) : [];
+  const lines = data.date === today ? strategyLines(data, config.custom) : [];
+  return advance(state, { sessionId, sessionDate: today, config, candles, lines, now: Math.floor(Date.now() / 1000), adapter: paperAdapter(userId, config) });
+}
+
+/** Keeps the paper position's stored stop and target equal to the runner's. */
+async function syncPaperLevels(userId: string, state: AlgoState) {
+  const position = state.position;
+  if (!position) return;
+  const account = await prisma.optionPaperAccount.findUnique({ where: { userId } });
+  if (!account) return;
+  await prisma.optionPaperPosition.updateMany({ where: { accountId: account.id, source: "algo", status: "OPEN", contractKey: contractKeyOf(position.contract) }, data: { stopPremiumPaise: paise(position.stop), targetPremiumPaise: paise(position.target) } });
+}
+
+/** Ticks every running paper session (for a server scheduler; see /api/algo/cron). */
+export async function tickAllSessions() {
+  const sessions = await prisma.algoSession.findMany({ include: { user: true } });
+  let ran = 0;
+  for (const session of sessions) {
+    const state = stateOf(session);
+    if (!state.running && !state.position) continue;
+    try {
+      await withLease(session.id, async () => {
+        const result = await runTick(session.userId, session.id, readAlgoConfig(session.config), state);
+        await saveRun(session.id, result.state, result.events, "PAPER");
+        await syncPaperLevels(session.userId, result.state);
+      });
+      ran += 1;
+    } catch {
+      // A busy or failing session is retried on the next run.
+    }
+  }
+  return { ran };
+}
+
+/* ---------------- historical replay ---------------- */
+
+async function runReplay(user: SessionUser, sessionId: string, date: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date for the replay.", 400);
+  const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
+  const config = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
+  const problems = algoConfigProblems(config);
+  if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+  const data = await getS1Data(config.underlying, date);
+  if (!data.previous) throw new AppError(data.message || "No strategy levels for that date.", 409);
+  const candles = await sessionMinuteTape(config.underlying, date);
+  if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date}.`, 409);
+  const chain = await loadOptionChain(config.underlying, config.expiry === "nearest" ? null : config.expiry);
+  if (!chain.available || !chain.expiry) throw new AppError(`No option chain for ${config.underlying}: ${chain.message}`, 409);
+  if (chain.expiry < date) throw new AppError(`The expiry ${chain.expiry} is before ${date}.`, 409);
+  const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain, config, capital: rupees(paperCapitalPaise()) });
+  if (adapter.kind !== "replay") throw new AppError("Replay must use the replay adapter.", 500);
+  const runId = `replay:${date}:${Date.now()}`;
+  const lines = strategyLines(data, config.custom);
+  let state: AlgoState = { ...initialState(date), running: true, entries: true };
+  const events: AlgoEvent[] = [{ key: "start", time: candles[0].time, kind: "INFO", message: `Replay of ${date} with expiry ${chain.expiry} (the nearest still-listed expiry; expired contracts cannot be replayed). Premiums: real 1-minute option candles. Virtual account; no orders are sent anywhere.` }];
+  for (const candle of candles) {
+    const clock = candle.time + 60;
+    adapter.setClock(clock);
+    const result = await advance(state, { sessionId, sessionDate: date, config, candles, lines, now: clock, adapter });
+    state = result.state;
+    events.push(...result.events);
+  }
+  if (state.position) {
+    const last = candles.at(-1)!.time + 60;
+    const mark = await adapter.mark(state.position.contract, last);
+    await startExit(state, { sessionId, sessionDate: date, config, candles, lines, now: last, adapter }, "SESSION_END", mark ? { price: mark.bid ?? state.position.avg, note: "Closed at the end of the replayed session." } : null, (event) => events.push({ time: last, ...event }));
+  }
+  await prisma.algoEvent.deleteMany({ where: { sessionId, mode: "REPLAY", NOT: { runId: { in: (await prisma.algoEvent.findMany({ where: { sessionId, mode: "REPLAY" }, distinct: ["runId"], orderBy: { createdAt: "desc" }, take: 2, select: { runId: true } })).map((row) => row.runId) } } } });
+  await prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode: "REPLAY", runId, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true });
+}

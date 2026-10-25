@@ -32,7 +32,8 @@ export async function optionsDesk(user: SessionUser) {
   if (!mayPractice(user) || user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Options practice is available on active accounts with trading enabled.", 403);
   const snapshot = await loadOptionsSnapshot();
   const account = await freshAccount(user.id);
-  const open = account.positions.find((position) => position.status === "OPEN") ?? null;
+  // The options desk shows and closes its own (manual) position; Strategy Algo positions are managed by the Algo.
+  const open = account.positions.find((position) => position.status === "OPEN" && position.source === "manual") ?? null;
   const openContract = open ? snapshot.chain.find((contract) => contractKey(contract) === open.contractKey) ?? null : null;
   const signal = buildSignal(snapshot);
   const marked = markPaise(open, openContract);
@@ -120,7 +121,7 @@ export async function placeOptionPaper(user: SessionUser, input: { action: "BUY"
   const replay = account.orders.find((order) => order.idempotencyKey === input.idempotencyKey);
   if (replay) return { replayed: true, order: presentOrder(replay) };
   const signal = buildSignal(snapshot);
-  const open = account.positions.find((position) => position.status === "OPEN") ?? null;
+  const open = account.positions.find((position) => position.status === "OPEN" && position.source === "manual") ?? null;
   const contract = input.action === "CLOSE"
     ? snapshot.chain.find((item) => open != null && contractKey(item) === open.contractKey) ?? null
     : signal.contract;
@@ -155,7 +156,7 @@ export async function placeOptionPaper(user: SessionUser, input: { action: "BUY"
     const again = await tx.optionPaperOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: account.id, idempotencyKey: input.idempotencyKey } } });
     if (again) return again;
     const current = await tx.optionPaperAccount.findUnique({ where: { id: account.id } });
-    const live = await tx.optionPaperPosition.findFirst({ where: { accountId: account.id, status: "OPEN" } });
+    const live = await tx.optionPaperPosition.findFirst({ where: { accountId: account.id, status: "OPEN", source: "manual" } });
     if (!current) throw new AppError("Simulated options account is missing.", 409);
     if (!decision.ok) {
       return tx.optionPaperOrder.create({

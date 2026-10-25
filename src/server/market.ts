@@ -683,6 +683,23 @@ export async function getS1Data(symbol: string, date?: string | null, previousDa
   return value;
 }
 
+/**
+ * One session's 1-minute candles of an index or stock (IST date), sorted and de-duplicated: the feed the
+ * Strategy Algo evaluates, whatever timeframe the chart is showing. Empty when the data source is not Dhan.
+ */
+export async function sessionMinuteTape(symbol: string, date: string): Promise<Candle[]> {
+  if (configuredProvider() !== "dhan") return [];
+  const key = symbol.trim().toUpperCase();
+  const index = findIndex(key);
+  const instrument = index ? null : await prisma.instrument.findUnique({ where: { symbol: key } });
+  if (!index && !instrument) throw new AppError("Instrument is not available.", 404);
+  const holidays = await getHolidays();
+  const session = describeSession(date, holidays, kolkataParts(new Date()).dateKey);
+  if (!session.ok) return [];
+  const tape = await dhanSessionTape(index?.symbol ?? instrument!.symbol, instrument?.dhanSecurityId ?? "", session.open, session.close);
+  return normalizeTape(tape.filter((bar) => istDay(bar.time) === date && bar.time >= session.open && bar.time < session.close));
+}
+
 /** The calendar day after an IST date key. */
 function nextDay(dateKey: string) {
   const [year, month, day] = dateKey.split("-").map(Number);

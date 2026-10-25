@@ -153,6 +153,7 @@ model User {
   academyAnswers       AcademyAnswer[]
   xpEvents             XpEvent[]
   academyDays          AcademyDay[]
+  algoSession          AlgoSession?
 }
 
 /// TradeD Academy: one row per user and lesson (lesson content lives in code, identified by slug).
@@ -887,6 +888,8 @@ model OptionPaperOrder {
   accountId        String
   account          OptionPaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   idempotencyKey   String
+  /// manual (the options desk) or algo (the Strategy Algo).
+  source           String   @default("manual")
   action           String
   contractKey      String
   lots             Int
@@ -907,6 +910,8 @@ model OptionPaperPosition {
   accountId          String
   account            OptionPaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   contractKey        String
+  /// manual (the options desk) or algo (the Strategy Algo).
+  source             String    @default("manual")
   side               String
   strike             Int
   expiry             String
@@ -1106,3 +1111,35 @@ model BrokerConsent {
 
   @@index([accountId, createdAt])
 }
+
+/// The Strategy Algo of one user: its settings and its runner state (see src/lib/algo/runner.ts).
+model AlgoSession {
+  id          String      @id @default(cuid())
+  userId      String      @unique
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  config      Json
+  state       Json
+  /// A short lease so two ticks never run the same session at once.
+  lockedUntil DateTime    @default(now())
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  events      AlgoEvent[]
+}
+
+/// The Algo's signal and order log: one row per event key (per replay run for replays).
+model AlgoEvent {
+  id        String      @id @default(cuid())
+  sessionId String
+  session   AlgoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  mode      String
+  runId     String      @default("")
+  key       String
+  time      Int
+  kind      String
+  payload   Json
+  createdAt DateTime    @default(now())
+
+  @@unique([sessionId, runId, key])
+  @@index([sessionId, mode, time])
+}
+

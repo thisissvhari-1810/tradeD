@@ -83,7 +83,8 @@ export async function resolveReplayContract(input: { underlying: string; expiry:
   return { underlying: chain.symbol, name: chain.name || chain.symbol, expiry: input.expiry, strike: row.strike, right: input.right, securityId: side.securityId, kind: chain.kind, lotSize: chain.lotSize };
 }
 
-async function sessionTape(contract: ReplayContract, date: string, now: Date) {
+/** One contract's 1-minute premium candles for a session (cached). Used by option replay and the Algo replay. */
+export async function sessionTape(contract: ReplayContract, date: string, now: Date) {
   const bounds = sessionBounds(date);
   if (!bounds) return [];
   const key = `${contract.securityId}|${date}`;

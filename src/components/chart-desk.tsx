@@ -1329,6 +1329,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 manualRectangles={drawings.filter((drawing) => drawing.kind === "rect" || drawing.kind === "rrect").length}
                 onClose={() => setStrategyOpen(false)}
                 left={strategyLeft}
+                symbol={symbol}
               />
             ) : null}
             {chainOpen ? (
