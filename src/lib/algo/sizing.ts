@@ -33,7 +33,7 @@ export type RiskSettings = {
   targetMode: "multiple" | "level" | "trail";
 };
 
-export const RISK_DEFAULTS: RiskSettings = { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2, minStopPercent: 0.03, targetMode: "multiple" };
+export const RISK_DEFAULTS: RiskSettings = { capital: 100_000, perTradePercent: 1, dailyTarget: 3_000, stopAtTarget: true, minRewardRisk: 2, minStopPercent: 0.03, targetMode: "multiple" };
 
 export type TradePlan = {
   direction: Direction;
@@ -137,4 +137,67 @@ export function planTrade(input: PlanInput): { ok: true; plan: TradePlan } | { o
   if (lotReward <= 0) reasons.push("The planned reward does not cover the charges.");
   if (score.score < input.minScore) reasons.push(`Setup score ${score.score} is below the minimum ${input.minScore} (${score.parts.filter((part) => part.points < part.max).map((part) => `${part.label} ${part.points}/${part.max}`).join(", ")}).`);
   return reasons.length ? { ok: false, plan, reasons } : { ok: true, plan };
+}
+
+/** Capital-allocation sizing (Algo - Primary Strategy): how much of the Algo account one trade may commit. */
+export type AllocationSettings = {
+  /** Share of the capital to commit to one trade, % (100 = all of it). */
+  percent: number;
+  /** The most capital (₹) the allocation is taken from; available cash caps it further. */
+  maxCapital: number;
+  /** When the allocation is more than the account can pay: buy the affordable whole lots, or skip the trade. */
+  policy: "reduce" | "reject";
+};
+
+export const ALLOCATION_DEFAULTS: AllocationSettings = { percent: 100, maxCapital: 100_000, policy: "reduce" };
+
+export type CapitalPlan = {
+  /** Cash available on the Algo account when the order was planned. */
+  available: number;
+  /** The allocation: percent × min(maximum capital, available cash would allow under "reduce"). */
+  allocation: number;
+  percent: number;
+  lots: number;
+  quantity: number;
+  price: number;
+  lotSize: number;
+  /** Premium × quantity + entry charges: what the order takes from the account. */
+  committed: number;
+  entryCharges: number;
+  /** Lots the allocation alone would buy (before the available-cash check). */
+  wantedLots: number;
+  /** Why the quantity is what it is. */
+  note: string;
+};
+
+/**
+ * The largest whole number of lots whose premium and entry charges fit the allocation and the cash
+ * actually available (never more than `maxLots`). Rounded down: a part lot is never bought. If the
+ * allocation asks for more than the account can pay, "reduce" buys what is affordable and "reject" skips.
+ */
+export function allocateLots(input: { price: number; lotSize: number; cash: number; settings: AllocationSettings; maxLots: number; charges: (side: "BUY" | "SELL", premium: number, quantity: number) => number }): { ok: true; plan: CapitalPlan } | { ok: false; plan: CapitalPlan; reason: string } {
+  const { price, lotSize, cash, settings } = input;
+  const allocation = money((settings.maxCapital * settings.percent) / 100);
+  const cost = (lots: number) => price * lots * lotSize + input.charges("BUY", price, lots * lotSize);
+  const fit = (limit: number) => {
+    let lots = Math.min(input.maxLots, Math.floor(limit / (price * lotSize)));
+    while (lots > 0 && cost(lots) > limit) lots -= 1;
+    return Math.max(0, lots);
+  };
+  const wantedLots = fit(allocation);
+  const affordable = fit(Math.min(allocation, cash));
+  const lots = settings.policy === "reject" && affordable < wantedLots ? 0 : affordable;
+  const plan: CapitalPlan = {
+    available: money(cash), allocation, percent: settings.percent, lots, quantity: lots * lotSize, price, lotSize,
+    committed: lots ? money(cost(lots)) : 0, entryCharges: lots ? money(input.charges("BUY", price, lots * lotSize)) : 0, wantedLots, note: "",
+  };
+  const perLot = money(cost(1));
+  if (wantedLots < 1) return { ok: false, plan: { ...plan, note: "allocation below one lot" }, reason: `One lot costs ₹${perLot.toFixed(2)} (premium ₹${price.toFixed(2)} × ${lotSize} + charges), more than the ₹${allocation.toFixed(2)} allocation (${settings.percent}% of ₹${settings.maxCapital.toFixed(2)}): no trade.` };
+  if (affordable < 1) return { ok: false, plan: { ...plan, note: "cash below one lot" }, reason: `Insufficient buying power: one lot needs ₹${perLot.toFixed(2)} including charges, ₹${money(cash).toFixed(2)} is available: no trade.` };
+  if (affordable < wantedLots) {
+    const why = `The ${settings.percent}% allocation (₹${allocation.toFixed(2)}) would buy ${wantedLots} lot${wantedLots === 1 ? "" : "s"}, but only ₹${money(cash).toFixed(2)} is available`;
+    if (settings.policy === "reject") return { ok: false, plan: { ...plan, note: "unaffordable, rejected" }, reason: `${why}; the policy is to skip such an order: no trade.` };
+    return { ok: true, plan: { ...plan, note: `${why}, so the order is reduced to ${affordable} lot${affordable === 1 ? "" : "s"}.` } };
+  }
+  return { ok: true, plan: { ...plan, note: lots === input.maxLots && cost(input.maxLots + 1) <= Math.min(allocation, cash) ? `Capped at the maximum of ${input.maxLots} lots.` : `${lots} whole lot${lots === 1 ? "" : "s"} within the ₹${allocation.toFixed(2)} allocation (rounded down).` } };
 }

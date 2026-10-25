@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { AlgoStrategy } from "@/lib/algo/exclusive";
 
 /**
  * Keeps the chart's Algo (start dialog, replay panel) in step with the Algo settings panel in the Strategy
@@ -37,4 +38,34 @@ export function useUnsavedSettings() {
     return () => window.removeEventListener(DIRTY, update);
   }, []);
   return value;
+}
+
+/**
+ * Which algo feature the panels show and the chart starts: Algo Trade or Algo - Primary Strategy. Selecting
+ * one never starts it, and the server's execution lock — not this choice — decides who may place orders.
+ */
+const SELECTED_KEY = "td-algo-strategy";
+const SELECTED = "td-algo-strategy-change";
+
+export function readSelectedStrategy(): AlgoStrategy {
+  try {
+    return localStorage.getItem(SELECTED_KEY) === "PRIMARY_STRATEGY" ? "PRIMARY_STRATEGY" : "EXISTING_ALGO";
+  } catch {
+    return "EXISTING_ALGO";
+  }
+}
+
+export function useSelectedStrategy(): [AlgoStrategy, (next: AlgoStrategy) => void] {
+  const [value, setValue] = useState<AlgoStrategy>("EXISTING_ALGO");
+  useEffect(() => {
+    const update = () => setValue(readSelectedStrategy());
+    update();
+    window.addEventListener(SELECTED, update);
+    return () => window.removeEventListener(SELECTED, update);
+  }, []);
+  const select = (next: AlgoStrategy) => {
+    try { localStorage.setItem(SELECTED_KEY, next); } catch { /* Storage is optional. */ }
+    window.dispatchEvent(new Event(SELECTED));
+  };
+  return [value, select];
 }

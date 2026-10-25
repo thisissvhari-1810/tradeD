@@ -1,10 +1,11 @@
 import type { AlgoLine, Candle, CustomLevel, LineType } from "./lines";
 import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm, type AtmContract, type ChainInput, type Protective, type Right } from "./options";
 import { evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
-import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type MarketAnalysis, type PatternSettings, type StrategyId, type StrategySignal } from "./patterns";
+import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type ExistingStrategyId, type MarketAnalysis, type PatternSettings, type StrategySignal } from "./patterns";
+import { PRIMARY_SETTINGS_DEFAULTS, primarySignal, type PrimarySettings } from "./primary";
 import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
 import { ema } from "@/lib/market/indicators";
-import { planTrade, RISK_DEFAULTS, type RiskSettings, type TradePlan } from "./sizing";
+import { allocateLots, ALLOCATION_DEFAULTS, planTrade, RISK_DEFAULTS, type AllocationSettings, type CapitalPlan, type RiskSettings, type TradePlan } from "./sizing";
 import { volumeCheck } from "./patterns";
 
 /**
@@ -51,14 +52,21 @@ export type AlgoConfig = {
   entryCutoff: string;
   /** At the end of the entry window: keep an open position under its stop / target, or close it. */
   windowExit: "hold" | "close";
-  /** "risk": lots sized from the index stop so one trade risks at most the risk per trade; "fixed": `lots`. */
-  sizing: "risk" | "fixed";
+  /** "risk": lots sized from the index stop so one trade risks at most the risk per trade; "fixed": `lots`;
+   * "capital" (Algo - Primary Strategy): the most whole lots the capital allocation and available cash buy. */
+  sizing: "risk" | "fixed" | "capital";
+  /** Capital-allocation sizing: share of the capital per trade, the capital it is taken from, and the policy. */
+  allocation: AllocationSettings;
   /** Capital, risk per trade, daily target and minimum reward : risk (risk sizing). */
   risk: RiskSettings;
   /** Minimum setup-quality score (0–100) to enter (risk sizing). */
   minScore: number;
-  /** Which strategies may signal: the line break and the price-action add-ons. */
-  strategies: Record<StrategyId, boolean>;
+  /** Which strategies may signal: the line break and the price-action add-ons (the existing Algo Trade). */
+  strategies: Record<ExistingStrategyId, boolean>;
+  /** Which feature's signals these settings drive: the existing Algo Trade, or Algo - Primary Strategy. */
+  engine: "existing" | "primary";
+  /** Algo - Primary Strategy (NIFTY ORB + VWAP + trend) settings; used only when engine is "primary". */
+  primary: PrimarySettings;
   /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
   observationMinutes: number;
   /** Settings format: 4 = the early-session strategy (9:15–10:30, risk sizing); 3 = trade filters; 2 = observation. */
@@ -88,8 +96,8 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   lots: 10,
   stop: { mode: "percent", value: 20 },
   target: { mode: "percent", value: 40 },
-  // 1.5% of the ₹1,00,000 capital.
-  maxDailyLoss: 1_500,
+  // 2% of the ₹1,00,000 capital (two full-risk losses).
+  maxDailyLoss: 2_000,
   maxTrades: 3,
   maxOpenPositions: 1,
   cooldownMinutes: 5,
@@ -106,14 +114,37 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   entryCutoff: "12:00",
   windowExit: "hold",
   sizing: "risk",
+  allocation: ALLOCATION_DEFAULTS,
   risk: RISK_DEFAULTS,
   minScore: 60,
   strategies: { line: true, trendline: true, w: true, m: true, orb: true, bounce: true, rejection: true },
   observationMinutes: 0,
-  settingsVersion: 5,
+  engine: "existing",
+  primary: PRIMARY_SETTINGS_DEFAULTS,
+  settingsVersion: 6,
   filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0.03, secondCandle: true, momentum: true },
   structureStop: true,
   patterns: PATTERN_DEFAULTS,
+};
+
+/**
+ * Algo - Primary Strategy's own default settings: the same account, sizing and risk rules, its own signal
+ * engine (the opening range is its observation window), no existing-strategy filters, chart replay only.
+ */
+export const PRIMARY_DEFAULTS: AlgoConfig = {
+  ...ALGO_DEFAULTS,
+  engine: "primary",
+  mode: "REPLAY",
+  // Up to 100% of the ₹1,00,000 demo capital in whole lots; +3% / −3% on the executed option premium.
+  sizing: "capital",
+  lots: 50,
+  stop: { mode: "percent", value: 3 },
+  target: { mode: "percent", value: 3 },
+  maxDailyLoss: 3_000,
+  maxTrades: 2,
+  minScore: 0,
+  filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
+  structureStop: false,
 };
 
 export const TICK = 0.05;
@@ -160,7 +191,7 @@ export const ENGINE_LABEL: Record<EngineStatus, string> = {
   DAILY_RISK_LIMIT_REACHED: "DAILY RISK LIMIT REACHED",
   TRADING_WINDOW_CLOSED: "TRADING WINDOW CLOSED",
 };
-export type EngineState = { status: EngineStatus; reason: string; time: number; plan: TradePlan | null };
+export type EngineState = { status: EngineStatus; reason: string; time: number; plan: TradePlan | null; capital?: CapitalPlan | null };
 
 export type AlgoState = {
   /** The session is started (monitoring); false = stopped. */
@@ -293,6 +324,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
       let kind: EventKind = "EVALUATION";
       let reasons: string[] | undefined;
       let plan: TradePlan | null = null;
+      let capital: CapitalPlan | null = null;
       let entered = false;
       if (signal) {
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
@@ -304,6 +336,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
           outcome = `${evaluation.explanation} ${result.message}`;
           reasons = result.reasons;
           plan = result.plan ?? null;
+          capital = result.capital ?? null;
           entered = result.ok;
           if (!result.ok) kind = "REJECTED";
         }
@@ -312,7 +345,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
         reasons = ["Conflicting signals"];
       }
       log({ key: `eval:${candle.time}`, time: candle.time, kind, message: outcome, evaluation, reasons });
-      state.engine = engineState(state, config, candle.time, evaluation, { entered, reasons, plan });
+      state.engine = { ...engineState(state, config, candle.time, evaluation, { entered, reasons, plan }), capital };
     }
     if (latest && (state.lastCandle == null || latest.time > state.lastCandle)) state.lastCandle = latest.time;
   }
@@ -327,7 +360,7 @@ function dayStart(date: string) {
   return Math.floor(Date.parse(`${date}T03:45:00Z`) / 1000);
 }
 
-async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void): Promise<{ ok: boolean; message: string; reasons?: string[]; plan?: TradePlan | null }> {
+async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void): Promise<{ ok: boolean; message: string; reasons?: string[]; plan?: TradePlan | null; capital?: CapitalPlan | null }> {
   const { config, adapter, now } = input;
   const side: Side = evaluation.decision === "CALL" ? "CALL" : "PUT";
   const right: Right = side === "CALL" ? "CE" : "PE";
@@ -355,8 +388,8 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (evaluation.time + 60 < observationEnd) reasons.push(`Observation period: the first ${config.observationMinutes} minutes (to ${istClock(observationEnd)} IST) are analysis only; no new entries.`);
   else if (clock < (config.entryStart ?? "09:15")) reasons.push(`Before the entry window (${config.entryStart}–${config.entryCutoff} IST).`);
   else if (clock > config.entryCutoff) reasons.push(`Trading window closed at ${config.entryCutoff} IST: no new entries.`);
-  if (sizing === "risk" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
-  if (sizing === "fixed") {
+  if (sizing !== "fixed" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  if (sizing !== "risk") {
     const problem = protectiveProblem(config.stop, config.target);
     if (problem) reasons.push(problem);
   }
@@ -436,6 +469,14 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     }
     lots = plan.lots;
   }
+  // Capital sizing: the most whole lots the allocation and the cash actually available pay for (charges included).
+  let capital: CapitalPlan | null = null;
+  if (sizing === "capital") {
+    const allocated = allocateLots({ price, lotSize: contract.lotSize, cash, settings: { ...ALLOCATION_DEFAULTS, ...config.allocation }, maxLots: config.lots, charges: (orderSide, premium, quantity) => adapter.charges(orderSide, premium, quantity) });
+    capital = allocated.plan;
+    if (!allocated.ok) return { ...reject(state, evaluation.time, key, [allocated.reason], log), capital };
+    lots = allocated.plan.lots;
+  }
   const quantity = lots * contract.lotSize;
   const charges = adapter.charges("BUY", price, quantity);
   const cost = price * quantity + charges;
@@ -457,11 +498,12 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (fill.status === "FILLED" || fill.status === "PARTIAL") {
     openPosition(state, { key, contract: ref, side, lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false, setup: setupOf(entryEvaluation, side, plan), plan }, fill, input);
     const position = state.position!;
+    const capitalText = capital ? ` Capital: ₹${money(fill.price * fill.quantity + fill.charges).toFixed(2)} committed of ₹${capital.available.toFixed(2)} available (${capital.percent}% allocation of ₹${capital.allocation.toFixed(2)}; ${capital.note}) Option-premium target ₹${position.target} (+${config.target.value}${config.target.mode === "percent" ? "% on the premium" : " ₹ on the premium"} = ₹${money((position.target - fill.price) * fill.quantity).toFixed(2)} on this trade before charges, ${money(((position.target - fill.price) * fill.quantity / capital.allocation) * 100)}% of the allocated capital); premium stop ₹${position.stop}. Entry charges ₹${fill.charges}.` : "";
     const planned = plan ? ` Index stop ${plan.stopIndex.toFixed(2)}, index target ${plan.targetIndex.toFixed(2)} (reward : risk ${plan.rewardRisk}); ${lots} lot${lots === 1 ? "" : "s"} risking ₹${plan.risk.toFixed(2)} of ₹${plan.budget.toFixed(2)}; setup score ${plan.score.score}.` : "";
-    const message = `${label} selected. Entry accepted: ${fill.quantity} @ ₹${fill.price}${fill.status === "PARTIAL" ? ` (partial fill of ${quantity})` : ""}. Stop ₹${position.stop}, target ₹${position.target}.${planned}`;
+    const message = `${label} selected. Entry accepted: ${fill.quantity} @ ₹${fill.price}${fill.status === "PARTIAL" ? ` (partial fill of ${quantity})` : ""}. Stop ₹${position.stop}, target ₹${position.target}.${planned}${capitalText}`;
     state.lastOrder = { time: now, status: fill.status, message };
     log({ key: `entry:${key}`, time: evaluation.time, kind: "ENTRY", message, contract: { ...ref, bid: contract.bid, ask: contract.ask }, side, order: { key, status: fill.status, quantity: fill.quantity, price: fill.price, charges: fill.charges }, stop: position.stop, target: position.target, ...(position.setup ? { setup: position.setup } : {}) });
-    return { ok: true, message: `${label} selected. Entry accepted.`, plan };
+    return { ok: true, message: `${label} selected. Entry accepted.`, plan, capital };
   }
   if (fill.status === "PENDING" || fill.status === "UNKNOWN") {
     state.pending = { key, contract: ref, side, lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: fill.status === "UNKNOWN", setup: setupOf(entryEvaluation, side, plan), plan };
@@ -469,7 +511,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     const message = fill.status === "UNKNOWN" ? `${label}: order outcome unknown; reconciling before any retry.` : `${label}: order pending.`;
     state.lastOrder = { time: now, status: fill.status, message };
     log({ key: `entry:${key}`, time: evaluation.time, kind: fill.status === "UNKNOWN" ? "ERROR" : "INFO", message, contract: ref, side, order: { key, status: fill.status } });
-    return { ok: true, message, plan };
+    return { ok: true, message, plan, capital };
   }
   return reject(state, evaluation.time, key, [`Order rejected: ${fill.status === "REJECTED" ? fill.reason : "unknown reason"}`], log, { contract: ref, side });
 }
@@ -606,7 +648,7 @@ function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, e
   const risk = { ...RISK_DEFAULTS, ...config.risk };
   const at = (status: EngineStatus, reason: string, plan: TradePlan | null = null): EngineState => ({ status, reason, time, plan });
   if (state.riskLocked || state.realizedToday <= -config.maxDailyLoss) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${config.maxDailyLoss}: no new entries today.`);
-  if ((config.sizing ?? "fixed") === "risk" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  if ((config.sizing ?? "fixed") !== "fixed" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (clock > config.entryCutoff) return at("TRADING_WINDOW_CLOSED", `Entries closed at ${config.entryCutoff} IST.${state.position ? " The open position stays protected by its stop and target." : ""}`);
   if (result.entered && (evaluation.decision === "CALL" || evaluation.decision === "PUT")) return at(evaluation.decision === "CALL" ? "BUY_CANDIDATE" : "SELL_CANDIDATE", evaluation.explanation, result.plan);
   if (state.awaiting) return at("WAIT_FOR_CONFIRMATION", evaluation.explanation);
@@ -688,6 +730,7 @@ function deriveStatus(state: AlgoState): AlgoStatus {
  */
 function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
   const { config } = input;
+  if (config.engine === "primary") return primaryCoordinate(line, candles, input, state);
   const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
   const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
   // Breakout buffer: a line counts only when the close is clearly beyond it.
@@ -740,6 +783,34 @@ function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInp
   }
   if (!enabled.line && (line.decision === "CALL" || line.decision === "PUT")) return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: "Line break is switched off; no other strategy signalled." };
   return { ...line, strategies: all };
+}
+
+/**
+ * Algo - Primary Strategy's signal for one completed candle: its own ORB + VWAP + trend rules only (the
+ * strategy lines and the existing setups do not signal). The market analysis (trendlines, zones, the
+ * opening range) is still computed for the chart, the dashboard and the room-to-target check.
+ */
+function primaryCoordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
+  const { config } = input;
+  const settings = { ...PRIMARY_SETTINGS_DEFAULTS, ...config.primary };
+  const sessionOpen = dayStart(input.sessionDate);
+  const { analysis } = analyzeMarket({
+    candles,
+    sessionOpen,
+    observationMinutes: 0,
+    settings: { ...PATTERN_DEFAULTS, ...config.patterns, orbMinutes: settings.orMinutes },
+    enabled: {},
+    zones: input.lines.filter((item) => item.activeFrom <= line.time).map((item) => ({ price: item.price, label: item.label })),
+  });
+  const result = primarySignal(candles, sessionOpen, settings);
+  const before = state.analysis?.strategies.primary?.lastSignal ?? null;
+  analysis.primary = result.state;
+  analysis.strategies.primary = { enabled: true, status: result.state.status, direction: result.signal?.direction ?? null, trigger: result.signal?.level ?? result.state.range?.high ?? null, waiting: !result.signal, lastSignal: result.signal ? { time: line.time, direction: result.signal.direction } : before };
+  state.analysis = analysis;
+  state.awaiting = null;
+  const base = { ...line, events: [], notes: [] };
+  if (!result.signal) return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: [result.state.status, ...result.state.checks].filter(Boolean).join(". ").replace(/\.\./g, ".") };
+  return { ...base, strategies: [result.signal], decision: result.signal.direction, explanation: result.signal.reason };
 }
 
 /** The setup an entry is taken on: the first agreeing strategy's level and invalidation. */

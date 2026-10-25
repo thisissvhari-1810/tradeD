@@ -18,7 +18,7 @@ const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : var
  * days are split in time order into training / validation / out-of-sample parts; a variant is chosen on the
  * training days only and then reported on the other two.
  */
-export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
+export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { disabled: string | null; strategy?: "EXISTING_ALGO" | "PRIMARY_STRATEGY" }) {
   const [range] = useState(() => lastTradingDays(todayIst(), 20));
   const [from, setFrom] = useState(range[0]);
   const [to, setTo] = useState(range.at(-1)!);
@@ -47,7 +47,7 @@ export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
       for (const variant of planned) {
         if (cancel.current) break;
         try {
-          results.push(await api<BacktestDay>("/api/algo", { action: "backtestDay", date, variant }));
+          results.push(await api<BacktestDay>("/api/algo", { action: "backtestDay", date, variant, strategy }));
         } catch (caught) {
           results.push({ date, variant, ok: false, reason: caught instanceof Error ? caught.message : "The request failed." });
         }

@@ -321,6 +321,6 @@ describe("multi-day backtest arithmetic", () => {
     expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \} : score \? \{ \.\.\.saved, minScore: Math\.min\(100, Number\(score\[1\]\)\) \} : saved/);
     expect(day).not.toMatch(/prisma\.\w+\.(update|create|upsert|delete)/);
     expect(server).toMatch(/if \(sessionComplete\(state, config\.maxTrades\)\) break;/);
-    expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/return Response\.json\(await backtestDay\(user, input\.date, input\.variant\)\)/);
+    expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/return Response\.json\(await backtestDay\(user, input\.date, input\.variant, input\.strategy\)\)/);
   });
 });

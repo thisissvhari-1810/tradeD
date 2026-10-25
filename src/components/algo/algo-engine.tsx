@@ -25,7 +25,17 @@ const sessionSeconds = (date: string, hhmm: string) => Math.floor(Date.parse(`${
  * target and the loss allowance, and the time left in the entry window. `now` is the replay clock in
  * replay and the wall clock live.
  */
-export function EngineCard({ state, config, date, now, unrealized }: { state: AlgoState | null | undefined; config: AlgoConfig; date: string; now: number | null; unrealized: number | null }) {
+export function EngineCard({ state, config, date, now, unrealized, available = null, position = null }: {
+  state: AlgoState | null | undefined;
+  config: AlgoConfig;
+  date: string;
+  now: number | null;
+  unrealized: number | null;
+  /** Cash available on the Algo account (from the ledger, after every order and exit). */
+  available?: string | null;
+  /** The open position, valued at its latest replay premium. */
+  position?: { quantity: number; lots: number; avg: number; stop: number; target: number; entryCharges: number; premium?: number | null; unrealized?: number | null } | null;
+}) {
   const engine = state?.engine ?? null;
   const risk = { ...RISK_DEFAULTS, ...config.risk };
   const realized = state?.realizedToday ?? 0;
@@ -63,6 +73,7 @@ export function EngineCard({ state, config, date, now, unrealized }: { state: Al
             </details>
           </dl>
         ) : null}
+        {config.sizing === "capital" ? <CapitalBlock capital={engine?.capital ?? null} available={available} position={position} config={config} /> : null}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <Cell label="Net P&L today" value={inr(net)} tone={net > 0 ? "text-profit" : net < 0 ? "text-loss" : undefined} />
           <Cell label={`Target ${inr(risk.dailyTarget)} (goal)`} value={net >= risk.dailyTarget ? "Reached" : `${inr(risk.dailyTarget - net)} to go`} />
@@ -73,6 +84,39 @@ export function EngineCard({ state, config, date, now, unrealized }: { state: Al
         <p className="text-muted">The target is a goal, not an expected result. No setup means no trade; risk is never raised to reach it.</p>
       </div>
     </section>
+  );
+}
+
+/**
+ * Capital sizing at a glance: before a trade, the latest plan (what the allocation and the available cash
+ * buy); with a position, what it commits, its premium levels, charges and net P&L. Figures come from the
+ * ledger and the replay premium; nothing is estimated except the exit charges, which are labelled.
+ */
+function CapitalBlock({ capital, available, position, config }: { capital: NonNullable<AlgoState["engine"]>["capital"] | null; available: string | null; position: { quantity: number; lots: number; avg: number; stop: number; target: number; entryCharges: number; premium?: number | null; unrealized?: number | null } | null; config: AlgoConfig }) {
+  return (
+    <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 rounded-md bg-sunken/50 p-2" aria-label="Capital">
+      <Cell label="Available funds" value={available ?? "—"} />
+      <Cell label="Allocation" value={`${config.allocation.percent}% of ${inr(config.allocation.maxCapital)}`} />
+      {position ? (
+        <>
+          <Cell label="Committed capital" value={inr(position.avg * position.quantity + position.entryCharges)} />
+          <Cell label="Quantity" value={`${position.lots} lot${position.lots === 1 ? "" : "s"} · ${position.quantity}`} />
+          <Cell label="Entry premium" value={inr(position.avg)} />
+          <Cell label="Target / stop premium" value={`${inr(position.target)} / ${inr(position.stop)}`} />
+          <Cell label="Charges (entry; exit est.)" value={`${inr(position.entryCharges)}; ≈${inr(position.entryCharges)}`} />
+          <Cell label="Net P&L now" value={position.unrealized == null ? "—" : inr(position.unrealized)} tone={(position.unrealized ?? 0) > 0 ? "text-profit" : (position.unrealized ?? 0) < 0 ? "text-loss" : undefined} />
+          <p className="col-span-2 text-muted">Net P&amp;L is after the entry charges; the exit&apos;s charges are deducted when it fills. Target and stop are on the option premium, not the account.</p>
+        </>
+      ) : capital ? (
+        <>
+          <Cell label="Planned quantity" value={capital.lots ? `${capital.lots} lot${capital.lots === 1 ? "" : "s"} · ${capital.quantity}` : "None"} tone={capital.lots ? undefined : "text-loss"} />
+          <Cell label="Premium · lot size" value={`${inr(capital.price)} · ${capital.lotSize}`} />
+          <Cell label="Would commit" value={capital.lots ? `${inr(capital.committed)} (charges ${inr(capital.entryCharges)})` : "—"} />
+          <Cell label="Cash at the signal" value={inr(capital.available)} />
+          {capital.note ? <p className="col-span-2 text-muted">{capital.note}</p> : null}
+        </>
+      ) : <p className="col-span-2 text-muted">No signal yet: the quantity is planned from the actual premium and lot size when one appears.</p>}
+    </dl>
   );
 }
 

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
-import { ALGO_DEFAULTS, initialState, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
+import { ALGO_DEFAULTS, initialState, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
 import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
 import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
@@ -1407,7 +1407,8 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
 
 describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   // Line break only (the other setups have their own tests), no filters, any score: the window and sizing alone.
-  const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+  // The ₹500 / ₹1,500 / ₹5,000 limits these cases were written for.
+  const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", maxDailyLoss: 1_500, risk: { ...ALGO_DEFAULTS.risk, perTradePercent: 0.5, dailyTarget: 5_000 }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
   /** Flat 10 above the line, a body crossing down to `by` below it at `at`, then flat there; `after` overrides closes. */
   function crossing(at: number, by: number, after: Record<number, number> = {}): Candle[] {
     const candles: Candle[] = [];
@@ -1481,5 +1482,69 @@ describe("trailing stop", () => {
     const moved = result.events.find((event) => event.message.startsWith("Trailing stop moved"));
     expect(moved?.message).toMatch(/from 23156\.94 to 23145\.94 \(beyond the swing high 23139\.00/);
     expect(result.state.position?.setup?.stopIndex).toBeLessThan(23_150);
+  });
+});
+
+describe("Algo - Primary Strategy in chart replay (capital sizing on the shared Algo account)", () => {
+  const primary: AlgoConfig = { ...PRIMARY_DEFAULTS, cooldownMinutes: 0 };
+  /** Opening range LINE ± 4 (09:15–09:30), a slow rise inside it, a breakout close at 25 (LINE + 15), then flat. */
+  function orb(): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < 15 ? LINE + (index % 2 ? 3 : -3) : index < 25 ? LINE + (index - 15) * 0.3 : LINE + 15;
+      const open = index > 0 ? candles[index - 1].close : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+  const entryOf = (events: Array<{ kind: string; message: string; setup?: { strategy?: string } }>) => events.find((event) => event.kind === "ENTRY");
+
+  it("buys the most whole lots ₹1,00,000 pays for (charges included), exits at +3% on the premium, and the cash reconciles", async () => {
+    feed.premiums = premiums((index) => (index >= 30 ? { low: 103.5, high: 104.5, close: 104 } : null));
+    const first = await run(orb(), { cursor: m(28), config: primary });
+    expect(buys()).toHaveLength(1);
+    const entry = entryOf(first.events)!;
+    expect(entry.setup?.strategy).toBe("primary");
+    expect(entry.message).toContain("Capital: ₹");
+    expect(entry.message).toMatch(/Option-premium target ₹103\.0\d/);
+    const quantity = Number(buys()[0].quantity);
+    expect(quantity % 75).toBe(0);
+    const committed = START - cash();
+    // Within the capital, and one more lot (≥ ₹100 × 75) would not have fitted.
+    expect(committed).toBeLessThanOrEqual(START);
+    expect(committed + 750_000n).toBeGreaterThan(START);
+    // The target is hit later: the exit's realized P&L is exactly what the cash gained back.
+    const second = await run(orb(), { cursor: m(40), config: primary, state: first.state, processedThrough: first.processedThrough });
+    expect(sells()).toHaveLength(1);
+    const exit = second.events.find((event) => event.kind === "EXIT")!;
+    expect(exit.message).toContain("Exit (TARGET)");
+    expect(Number(cash() - START)).toBeCloseTo(Math.round(exit.pnl! * 100), -1);
+    expect(exit.pnl!).toBeGreaterThan(0);
+  });
+
+  it("repeating a step (pause / resume, a re-sent request) never places a second order", async () => {
+    const first = await run(orb(), { cursor: m(28), config: primary });
+    const again = await run(orb(), { cursor: m(28), config: primary, state: first.state, processedThrough: first.processedThrough });
+    expect(buys()).toHaveLength(1);
+    expect(again.events.filter((event) => event.kind === "ENTRY")).toHaveLength(0);
+  });
+
+  it("less cash than the allocation: the affordable whole lots (reduce), or no trade with the reason", async () => {
+    db.state.accounts[0].cashAvailable = 4_000_000n; // ₹40,000
+    const reduced = await run(orb(), { cursor: m(28), config: primary });
+    expect(buys()).toHaveLength(1);
+    expect(Number(buys()[0].quantity) / 75).toBeLessThanOrEqual(5);
+    expect(entryOf(reduced.events)!.message).toContain("so the order is reduced to");
+    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
+    db.state.accounts[0].cashAvailable = 500_000n; // ₹5,000
+    const broke = await run(orb(), { cursor: m(28), config: { ...primary }, state: { ...initialState(DATE), running: true, entries: true } });
+    expect(buys()).toHaveLength(0);
+    expect(broke.events.some((event) => event.kind === "REJECTED" && event.message.includes("Insufficient buying power: one lot needs"))).toBe(true);
+  });
+
+  it("the existing Algo Trade on the same candles does not take the Primary Strategy's signal (separate engines)", async () => {
+    const existing = await run(orb(), { cursor: m(28), config: { ...config, strategies: { line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false } } });
+    expect(buys()).toHaveLength(0);
+    expect(existing.events.some((event) => event.evaluation?.strategies?.some((item) => item.strategy === "primary"))).toBe(false);
   });
 });

@@ -5,7 +5,7 @@ import { api } from "@/components/api";
 import { playGate, type PlayGate } from "@/lib/algo/chart-replay";
 import { newReplaySession } from "@/lib/options/replay-premium";
 import type { AlgoData } from "@/components/algo/algo-panel";
-import { useOnSettingsSaved } from "@/components/algo/algo-settings-sync";
+import { readSelectedStrategy, useOnSettingsSaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 
 export type ChartAlgo = ReturnType<typeof useChartAlgo>;
 
@@ -98,6 +98,7 @@ export function useChartAlgo(input: {
   const [data, setData] = useState<AlgoData | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [selected] = useSelectedStrategy();
   const callbacks = useRef(input);
   useEffect(() => { callbacks.current = input; });
   const sessionRef = useRef(session);
@@ -178,7 +179,8 @@ export function useChartAlgo(input: {
   const setEnabled = useCallback(async (next: boolean) => {
     if (next) {
       callbacks.current.onPause();
-      if (data?.config.mode !== "REPLAY" && !(await command("mode", { action: "chartMode" }))) return;
+      // Only Algo Trade has a live-price mode to switch from; the Primary Strategy is chart replay only.
+      if (readSelectedStrategy() === "EXISTING_ALGO" && data?.config.mode !== "REPLAY" && !(await command("mode", { action: "chartMode" }))) return;
       remember(true);
       return;
     }
@@ -190,7 +192,7 @@ export function useChartAlgo(input: {
   // trading is switched to chart replay once (never while a live-price session or position is active).
   const switched = useRef(false);
   useEffect(() => {
-    if (!active || !enabled || !data || switched.current || data.config.mode === "REPLAY") return;
+    if (!active || !enabled || !data || switched.current || data.config.mode === "REPLAY" || readSelectedStrategy() !== "EXISTING_ALGO") return;
     if (data.state.running || data.state.position || data.state.pending) return;
     switched.current = true;
     // Run after this effect (the request updates state).
@@ -257,14 +259,17 @@ export function useChartAlgo(input: {
     return true;
   }, [command, date, forgetSession]);
 
+  // Ready to trade the replay: Algo Trade in chart-replay mode, or Algo - Primary Strategy (chart replay only).
+  const replayReady = selected === "PRIMARY_STRATEGY" || run?.strategy === "PRIMARY_STRATEGY" || data?.config.mode === "REPLAY";
   const gate: PlayGate | null = cursor == null ? null : playGate({
-    algoEnabled: enabled && data?.config.mode === "REPLAY",
+    algoEnabled: enabled && replayReady,
     cursor,
     processedThrough: run && run.replaySession === session && run.status === "ACTIVE" ? run.processedThrough : null,
   });
 
   return {
     enabled,
+    replayReady,
     setEnabled,
     data,
     run: run && run.replaySession === session ? run : null,
@@ -282,7 +287,8 @@ export function useChartAlgo(input: {
         sessionRef.current = id;
         rememberSession(date, id);
       }
-      return command("arm", { action: "chartArm", session: id, cursor: Math.floor(at) });
+      // The selected feature arms the run; the server refuses it while the other one holds the execution lock.
+      return command("arm", { action: "chartArm", session: id, cursor: Math.floor(at), strategy: readSelectedStrategy() });
     },
     /** The active session has anything to archive (it ran, or traded, or holds a position). */
     hasSession: Boolean(session && run),

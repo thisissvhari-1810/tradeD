@@ -1123,6 +1123,10 @@ model AlgoSession {
   state       Json
   /// A short lease so two ticks never run the same session at once.
   lockedUntil DateTime    @default(now())
+  /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO or PRIMARY_STRATEGY).
+  activeStrategy String   @default("NONE")
+  /// "Algo - Primary Strategy" (NIFTY ORB + VWAP) settings, independent of the existing algo's `config`.
+  primaryConfig Json?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   events      AlgoEvent[]
@@ -1141,6 +1145,8 @@ model AlgoRun {
   underlying       String
   /// Settings snapshot taken when the run was confirmed (changes apply to the next run).
   config           Json
+  /// The algo feature that owns this run: EXISTING_ALGO or PRIMARY_STRATEGY (trade attribution and history).
+  strategy         String      @default("EXISTING_ALGO")
   /// The strategy lines for the replayed date, fixed for the run.
   lines            Json
   state            Json

@@ -9,7 +9,8 @@ import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
-import { announceSaved, announceUnsaved } from "@/components/algo/algo-settings-sync";
+import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
+import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
@@ -43,6 +44,7 @@ const clock = (seconds: number | null | undefined) => (seconds ? new Intl.DateTi
 export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const [data, setData] = useState<AlgoData | null>(null);
   const [draft, setDraft] = useState<AlgoConfig | null>(null);
+  const [selected, select] = useSelectedStrategy();
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -112,8 +114,18 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const marketHours = istMinute != null && istMinute >= 9 * 60 + 16 && istMinute <= 15 * 60 + 30;
   const feedStale = Boolean(checkedAt != null && marketHours && state.running && state.lastCandle != null && checkedAt - (state.lastCandle + 60) > 180);
 
+  if (selected === "PRIMARY_STRATEGY") {
+    return (
+      <div className="space-y-3">
+        <StrategySelector data={data} selected={selected} onSelect={select} />
+        <PrimaryPanel data={data} onData={apply} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
+      <StrategySelector data={data} selected={selected} onSelect={select} />
       <div className="flex items-center gap-2">
         <span className={cx("shrink-0 whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", status.tone)} role="status">{status.label}</span>
         <span className="min-w-0 truncate text-micro text-muted">{data.config.underlying} · 1m · {data.config.mode === "PAPER" ? "Paper" : data.config.mode === "REPLAY" ? "Chart replay" : "Live"}</span>
@@ -441,11 +453,11 @@ function Confirm({ label, confirm, onConfirm, disabled, danger }: { label: React
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="flex min-h-7 items-center justify-between gap-2"><span className="min-w-0 truncate text-muted" title={label}>{label}</span>{children}</div>;
 }
 
-function NumberInput({ value, step, min, onChange }: { value: number; step: number; min: number; onChange: (value: number) => void }) {
+export function NumberInput({ value, step, min, onChange }: { value: number; step: number; min: number; onChange: (value: number) => void }) {
   return <input type="number" className="compact-field w-[9.5rem] text-right" value={Number.isFinite(value) ? value : ""} step={step} min={min} onChange={(event) => onChange(event.target.value === "" ? NaN : Number(event.target.value))} />;
 }
 
@@ -464,7 +476,7 @@ function Protect({ label, value, onChange }: { label: string; value: AlgoConfig[
   );
 }
 
-function Info({ label, text, tone }: { label: string; text: string; tone?: string }) {
+export function Info({ label, text, tone }: { label: string; text: string; tone?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-micro text-muted">{label}</dt>

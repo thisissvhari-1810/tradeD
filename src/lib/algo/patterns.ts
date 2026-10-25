@@ -13,9 +13,12 @@ import { openingRange as buildOpeningRange, openingRangeBreak, sessionTrend, ses
  * move: a confirmed pivot is a fixed candle's price.
  */
 
-export type StrategyId = "line" | "trendline" | "w" | "m" | "orb" | "bounce" | "rejection";
-export const STRATEGY_IDS: StrategyId[] = ["line", "trendline", "orb", "bounce", "rejection", "w", "m"];
-export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern", orb: "Opening-range breakout", bounce: "Support bounce", rejection: "Resistance rejection" };
+/** The existing Algo Trade's setups (each can be switched on / off in its settings). */
+export type ExistingStrategyId = "line" | "trendline" | "w" | "m" | "orb" | "bounce" | "rejection";
+/** Every signal source; "primary" is "Algo - Primary Strategy" (its own feature, not one of the toggles). */
+export type StrategyId = ExistingStrategyId | "primary";
+export const STRATEGY_IDS: ExistingStrategyId[] = ["line", "trendline", "orb", "bounce", "rejection", "w", "m"];
+export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern", orb: "Opening-range breakout", bounce: "Support bounce", rejection: "Resistance rejection", primary: "ORB + VWAP (Primary)" };
 export type Direction = "CALL" | "PUT";
 
 export type PatternSettings = {
@@ -46,7 +49,7 @@ export type PatternSettings = {
   trendStop: "swing" | "line";
 };
 
-export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false, orbMinutes: 15, zoneTolerancePercent: 0.03, breakMode: "close", bufferMode: "percent", bufferValue: 0.02, trendStop: "swing" };
+export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false, orbMinutes: 15, zoneTolerancePercent: 0.03, breakMode: "close", bufferMode: "percent", bufferValue: 0.02, trendStop: "line" };
 
 export type Pivot = { kind: "HIGH" | "LOW"; index: number; time: number; price: number; confirmedAt: number };
 
@@ -141,7 +144,9 @@ export type MarketAnalysis = {
   orb?: OpeningRange | null;
   /** Recently broken trendlines, up to the candle that broke them. */
   brokenLines?: Array<Trendline & { brokenAt: { time: number; price: number; close: number } }>;
-  strategies: Record<StrategyId, StrategyStatus>;
+  strategies: Record<ExistingStrategyId, StrategyStatus> & { primary?: StrategyStatus };
+  /** Algo - Primary Strategy: its opening range, VWAP / TWAP, trend and the conditions checked last. */
+  primary?: import("./primary").PrimaryState | null;
 };
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -267,7 +272,7 @@ function breakoutOn(candles: Candle[], from: number, direction: Direction, level
 export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; observationMinutes: number; settings: Partial<PatternSettings>; enabled: Partial<Record<StrategyId, boolean>>; lineDecision?: { direction: Direction | null; status: string; trigger: number | null; lastSignal: { time: number; direction: Direction } | null }; zones?: Zone[] }): { analysis: MarketAnalysis; signals: StrategySignal[] } {
   const { candles, sessionOpen } = input;
   const settings: PatternSettings = { ...PATTERN_DEFAULTS, ...input.settings };
-  const enabled: Record<StrategyId, boolean> = { line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false, ...input.enabled };
+  const enabled: Record<StrategyId, boolean> = { primary: false, line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false, ...input.enabled };
   const observationEnd = sessionOpen + input.observationMinutes * 60;
   const last = candles.at(-1) ?? null;
   const asOf = last ? last.time + 60 : sessionOpen;
@@ -285,7 +290,7 @@ export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; o
   const orb = buildOpeningRange(candles, sessionOpen, settings.orbMinutes);
   const zones = sessionZones(input.zones ?? [], auto, orb, lastIndex, settings.zoneTolerancePercent);
   const signals: StrategySignal[] = [];
-  const statuses = {} as Record<StrategyId, StrategyStatus>;
+  const statuses = {} as Record<ExistingStrategyId, StrategyStatus>;
   const observing = !observationComplete;
 
   const signal = (strategy: StrategyId, direction: Direction, level: number, invalidation: number, reason: string): StrategySignal => {

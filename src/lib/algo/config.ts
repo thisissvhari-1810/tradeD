@@ -2,7 +2,8 @@ import { ALL_LINE_TYPES, type CustomLevel, type LineType } from "./lines";
 import { protectiveProblem, type Protective } from "./options";
 import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "./runner";
 import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
-import { RISK_DEFAULTS, type RiskSettings } from "./sizing";
+import { ALLOCATION_DEFAULTS, RISK_DEFAULTS, type AllocationSettings, type RiskSettings } from "./sizing";
+import { PRIMARY_SETTINGS_DEFAULTS, type PrimarySettings } from "./primary";
 
 /**
  * Reads and validates Algo settings (the server applies this to every save, so limits are never only a
@@ -31,6 +32,10 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Version 5 widens the entry window to 12:00: a saved 10:30 (the version 4 default) moves once.
   const savedCutoff = time(row.entryCutoff, ALGO_DEFAULTS.entryCutoff);
   const cutoff = num(row.settingsVersion) >= 5 || savedCutoff !== "10:30" ? savedCutoff : ALGO_DEFAULTS.entryCutoff;
+  // Version 6: the stop beyond the broken line, 1% (₹1,000) risk a trade, ₹2,000 a day and a ₹3,000 (3%) target.
+  // Only values still at the version 4 / 5 defaults move; anything chosen since is kept.
+  const v6 = num(row.settingsVersion) >= 6;
+  const kept = (value: number, old: number, next: number) => (!v6 && value === old ? next : value);
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -41,7 +46,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // ATM options) move to 20% / 40% once, with the structure stop; later choices are kept.
     stop: upgrade(protective(row.stop, ALGO_DEFAULTS.stop), row, 20),
     target: upgrade(protective(row.target, ALGO_DEFAULTS.target), row, 40),
-    maxDailyLoss: early && Number.isFinite(num(row.maxDailyLoss)) ? num(row.maxDailyLoss) : ALGO_DEFAULTS.maxDailyLoss,
+    maxDailyLoss: early && Number.isFinite(num(row.maxDailyLoss)) ? kept(num(row.maxDailyLoss), 1_500, ALGO_DEFAULTS.maxDailyLoss) : ALGO_DEFAULTS.maxDailyLoss,
     maxTrades: Number.isFinite(num(row.maxTrades)) ? num(row.maxTrades) : ALGO_DEFAULTS.maxTrades,
     cooldownMinutes: Number.isFinite(num(row.cooldownMinutes)) ? num(row.cooldownMinutes) : ALGO_DEFAULTS.cooldownMinutes,
     disabledLines: Array.isArray(row.disabledLines) ? row.disabledLines.filter((type): type is LineType => typeof type === "string" && (lineTypes.has(type as LineType) || type === "custom")) : [],
@@ -58,22 +63,34 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     entryStart: time(row.entryStart, ALGO_DEFAULTS.entryStart),
     entryCutoff: early ? cutoff : ALGO_DEFAULTS.entryCutoff,
     windowExit: row.windowExit === "close" ? "close" : "hold",
-    sizing: !early ? "risk" : row.sizing === "fixed" ? "fixed" : "risk",
-    risk: riskOf(row.risk),
+    sizing: !early ? "risk" : row.sizing === "fixed" ? "fixed" : row.sizing === "capital" ? "capital" : "risk",
+    allocation: allocationOf(row.allocation),
+    risk: ((risk) => ({ ...risk, perTradePercent: kept(risk.perTradePercent, 0.5, RISK_DEFAULTS.perTradePercent), dailyTarget: kept(risk.dailyTarget, 5_000, RISK_DEFAULTS.dailyTarget) }))(riskOf(row.risk)),
     minScore: Number.isFinite(num(row.minScore)) ? num(row.minScore) : ALGO_DEFAULTS.minScore,
     strategies: strategiesOf(row.strategies),
+    engine: row.engine === "primary" ? "primary" : "existing",
+    primary: primaryOf(row.primary),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
     filters: filtersOf(row.filters),
     structureStop: typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
-    patterns: patternsOf(row.patterns),
+    patterns: ((patterns) => (v6 ? patterns : { ...patterns, trendStop: PATTERN_DEFAULTS.trendStop }))(patternsOf(row.patterns)),
   };
 }
 
 function upgrade(value: Protective, row: Raw, floor: number): Protective {
   if (num(row.settingsVersion) >= 3 || value.mode !== "percent" || value.value >= floor) return value;
   return { mode: "percent", value: floor };
+}
+
+function allocationOf(value: unknown): AllocationSettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  return {
+    percent: Number.isFinite(num(row.percent)) ? num(row.percent) : ALLOCATION_DEFAULTS.percent,
+    maxCapital: Number.isFinite(num(row.maxCapital)) ? num(row.maxCapital) : ALLOCATION_DEFAULTS.maxCapital,
+    policy: row.policy === "reject" ? "reject" : "reduce",
+  };
 }
 
 function riskOf(value: unknown): RiskSettings {
@@ -98,6 +115,24 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
     breakoutBufferPercent: Number.isFinite(num(row.breakoutBufferPercent)) ? num(row.breakoutBufferPercent) : fallback.breakoutBufferPercent,
     secondCandle: typeof row.secondCandle === "boolean" ? row.secondCandle : fallback.secondCandle,
     momentum: typeof row.momentum === "boolean" ? row.momentum : fallback.momentum,
+  };
+}
+
+function primaryOf(value: unknown): PrimarySettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const d = PRIMARY_SETTINGS_DEFAULTS;
+  const pick = (key: "orMinutes" | "trendFast" | "trendSlow" | "retestBars" | "breakBufferPercent") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
+  return {
+    orMinutes: pick("orMinutes"),
+    vwap: typeof row.vwap === "boolean" ? row.vwap : d.vwap,
+    vwapFallback: row.vwapFallback === "reject" ? "reject" : "twap",
+    trend: row.trend === "none" ? "none" : "ema",
+    trendFast: pick("trendFast"),
+    trendSlow: pick("trendSlow"),
+    retest: typeof row.retest === "boolean" ? row.retest : d.retest,
+    retestBars: pick("retestBars"),
+    breakBufferPercent: pick("breakBufferPercent"),
+    stopBasis: row.stopBasis === "mid" || row.stopBasis === "range" ? row.stopBasis : "candle",
   };
 }
 
@@ -130,6 +165,11 @@ function patternsOf(value: unknown): PatternSettings {
 export function algoConfigProblems(config: AlgoConfig): string[] {
   const problems: string[] = [];
   const risky = config.sizing === "risk";
+  if (config.sizing === "capital") {
+    if (config.engine !== "primary") problems.push("Capital-allocation sizing is part of Algo - Primary Strategy; Algo Trade uses risk-based or fixed sizing.");
+    if (!(config.allocation.percent > 0 && config.allocation.percent <= 100)) problems.push("Capital allocation must be above 0% and at most 100%.");
+    if (!(config.allocation.maxCapital >= 1_000 && config.allocation.maxCapital <= 100_000_000)) problems.push("Maximum capital must be ₹1,000 to ₹10,00,00,000.");
+  }
   if (!Number.isInteger(config.lots) || config.lots < 1 || config.lots > 50) problems.push(risky ? "Maximum lots must be 1 to 50." : "Quantity must be 1 to 50 lots.");
   if (!risky) {
     const protect = protectiveProblem(config.stop, config.target);
@@ -152,7 +192,15 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(config.maxQuoteAgeSeconds >= 5 && config.maxQuoteAgeSeconds <= 600)) problems.push("The quote freshness limit must be 5 to 600 seconds.");
   if (!Number.isInteger(config.slippageTicks) || config.slippageTicks < 0 || config.slippageTicks > 20) problems.push("Slippage must be 0 to 20 ticks.");
   for (const level of config.custom) if (!(level.price > 0)) problems.push(`The extra level "${level.label || level.id}" needs a price above 0.`);
-  if (!STRATEGY_IDS.some((id) => config.strategies[id])) problems.push("Switch on at least one strategy.");
+  if (config.engine !== "primary" && !STRATEGY_IDS.some((id) => config.strategies[id])) problems.push("Switch on at least one strategy.");
+  if (config.engine === "primary") {
+    const primary = config.primary;
+    if (config.mode !== "REPLAY") problems.push("Algo - Primary Strategy runs in chart replay (demo trading) only.");
+    if (!Number.isInteger(primary.orMinutes) || primary.orMinutes < 5 || primary.orMinutes > 60) problems.push("The opening range must be 5 to 60 minutes.");
+    if (!Number.isInteger(primary.trendFast) || !Number.isInteger(primary.trendSlow) || primary.trendFast < 2 || primary.trendSlow <= primary.trendFast || primary.trendSlow > 100) problems.push("The trend EMAs must be whole numbers with the fast one shorter than the slow one (at most 100).");
+    if (!Number.isInteger(primary.retestBars) || primary.retestBars < 1 || primary.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
+    if (!(primary.breakBufferPercent >= 0 && primary.breakBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
+  }
   if (!Number.isInteger(config.observationMinutes) || config.observationMinutes < 0 || config.observationMinutes > 120) problems.push("The observation period must be 0 to 120 minutes.");
   const pattern = config.patterns;
   if (!Number.isInteger(pattern.pivotStrength) || pattern.pivotStrength < 1 || pattern.pivotStrength > 5) problems.push("Swing sensitivity must be 1 to 5 candles.");

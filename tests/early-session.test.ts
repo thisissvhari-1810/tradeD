@@ -13,10 +13,16 @@ const candle = (index: number, open: number, high: number, low: number, close: n
 const flat = (count: number, price: number) => Array.from({ length: count }, (_, index) => candle(index, price, price + 2, price - 2, price));
 
 describe("defaults: the early session replaces the old all-day settings", () => {
-  it("09:15–12:00, no waiting, ₹500 a trade, ₹1,500 a day, ₹5,000 target, reward : risk 2; old saved settings move once", () => {
-    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "12:00", observationMinutes: 0, sizing: "risk", maxDailyLoss: 1_500, risk: { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2 } });
+  it("09:15–12:00, no waiting, ₹1,000 a trade, ₹2,000 a day, ₹3,000 (3%) target, line stop, reward : risk 2; old saved settings move once", () => {
+    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "12:00", observationMinutes: 0, sizing: "risk", maxDailyLoss: 2_000, risk: { capital: 100_000, perTradePercent: 1, dailyTarget: 3_000, stopAtTarget: true, minRewardRisk: 2 }, patterns: { trendStop: "line" } });
     const migrated = readAlgoConfig({ settingsVersion: 3, entryCutoff: "15:00", observationMinutes: 30, maxDailyLoss: 5_000, lots: 1 });
-    expect(migrated).toMatchObject({ entryCutoff: "12:00", observationMinutes: 0, maxDailyLoss: 1_500, sizing: "risk", lots: 10 });
+    expect(migrated).toMatchObject({ entryCutoff: "12:00", observationMinutes: 0, maxDailyLoss: 2_000, sizing: "risk", lots: 10 });
+    // Version 5 defaults move to version 6 once; values the user changed are kept.
+    const v5 = readAlgoConfig({ settingsVersion: 5, maxDailyLoss: 1_500, risk: { perTradePercent: 0.5, dailyTarget: 5_000 }, patterns: { trendStop: "swing" } });
+    expect([v5.maxDailyLoss, v5.risk.perTradePercent, v5.risk.dailyTarget, v5.patterns.trendStop]).toEqual([2_000, 1, 3_000, "line"]);
+    const own = readAlgoConfig({ settingsVersion: 5, maxDailyLoss: 2_500, risk: { perTradePercent: 0.75, dailyTarget: 4_000 } });
+    expect([own.maxDailyLoss, own.risk.perTradePercent, own.risk.dailyTarget]).toEqual([2_500, 0.75, 4_000]);
+    expect(readAlgoConfig({ ...v5, patterns: { ...v5.patterns, trendStop: "swing" } }).patterns.trendStop).toBe("swing");
     // Version 4's 10:30 default moves to 12:00 once; any other saved time is kept.
     expect(readAlgoConfig({ settingsVersion: 4, entryCutoff: "10:30" }).entryCutoff).toBe("12:00");
     expect(readAlgoConfig({ settingsVersion: 4, entryCutoff: "11:00" }).entryCutoff).toBe("11:00");
@@ -67,7 +73,7 @@ describe("support bounce and resistance rejection", () => {
 describe("risk sizing and the setup score", () => {
   const base: PlanInput = {
     direction: "CALL", entryIndex: 23_160, invalidation: 23_155, zones: [], price: 100, lotSize: 75, slippageTicks: 1,
-    charges: () => 20, cash: 100_000, maxLots: 10, risk: RISK_DEFAULTS, minScore: 0,
+    charges: () => 20, cash: 100_000, maxLots: 10, risk: { ...RISK_DEFAULTS, perTradePercent: 0.5, dailyTarget: 5_000 }, minScore: 0,
     score: { structure: "BULLISH", momentum: { fast: 2, slow: 1 }, candle: { open: 23_150, high: 23_161, low: 23_149, close: 23_160 }, agreeing: 1, volume: "UNAVAILABLE" },
   };
   it("the stop goes beyond the invalidation; the target is twice the distance; lots fit the ₹500 budget", () => {
@@ -128,7 +134,7 @@ describe("pre-market plan", async () => {
     return { time: OPEN - (30 - index) * DAY, open, high: Math.max(open, close) + 60, low: Math.min(open, close) - 60, close };
   });
   it("is provisional; lists previous-day levels, scenarios with invalidations, volatility and the 1-lot stop room", () => {
-    const plan = buildPlan({ date: "2026-10-16", underlying: "NIFTY", previous: { date: "2026-10-15", high: 23_200, low: 23_050, close: 23_120 }, daily, open: null, risk: RISK_DEFAULTS, maxDailyLoss: 1_500, lotSize: 75, orbMinutes: 15 });
+    const plan = buildPlan({ date: "2026-10-16", underlying: "NIFTY", previous: { date: "2026-10-15", high: 23_200, low: 23_050, close: 23_120 }, daily, open: null, risk: { ...RISK_DEFAULTS, perTradePercent: 0.5, dailyTarget: 5_000 }, maxDailyLoss: 1_500, lotSize: 75, orbMinutes: 15 });
     expect(plan.provisional).toBe(true);
     expect(plan.gap).toBeNull();
     expect(plan.levels.map((level) => level.label)).toEqual(expect.arrayContaining(["Previous-day high", "Previous-day low", "Previous-day close"]));
@@ -171,7 +177,7 @@ describe("trendline breakouts: detection modes, buffer, structural stop, target 
 
   it("the stop is beyond the latest swing low (or, with the line option, the broken line)", () => {
     const close = [...build(BASE), wick(110.5, 110)];
-    expect(signals(close)[0]).toMatchObject({ invalidation: 99.5, reason: expect.stringContaining("Stop beyond swing low 99.50") });
+    expect(signals(close, { trendStop: "swing" })[0]).toMatchObject({ invalidation: 99.5, reason: expect.stringContaining("Stop beyond swing low 99.50") });
     expect(signals(close, { trendStop: "line" })[0].invalidation).toBeCloseTo(104.17, 1);
   });
 

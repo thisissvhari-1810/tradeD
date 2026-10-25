@@ -8,7 +8,8 @@ import { algoConfigProblems, readAlgoConfig, switchToChartReplay } from "@/lib/a
 import { strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { atmStrike, type ChainInput, type Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
-import { advance, initialState, startExit, ALGO_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { acquireLock, isAlgoStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity } from "@/lib/algo/exclusive";
+import { advance, initialState, startExit, ALGO_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -83,6 +84,60 @@ async function withLease<T>(sessionId: string, task: () => Promise<T>): Promise<
     await prisma.algoSession.update({ where: { id: sessionId }, data: { lockedUntil: new Date() } }).catch(() => undefined);
   }
 }
+
+/* ---------------- the exclusive execution lock (Algo Trade vs Algo - Primary Strategy) ---------------- */
+
+/** The lock's atomic store: a conditional update on the user's algo session row. */
+function lockStore(sessionId: string): LockStore {
+  return {
+    compareAndSet: async (expected, next) => (await prisma.algoSession.updateMany({ where: { id: sessionId, activeStrategy: { in: expected } }, data: { activeStrategy: next } })).count === 1,
+    read: async () => lockOwnerOf((await prisma.algoSession.findUnique({ where: { id: sessionId }, select: { activeStrategy: true } }))?.activeStrategy),
+  };
+}
+
+/** What a feature still has to manage: armed replay runs, open positions, pending orders (and the paper session for Algo Trade). */
+async function ownerActivity(sessionId: string, owner: AlgoStrategy): Promise<OwnerActivity> {
+  const activity: OwnerActivity = { running: false, position: false, pending: false };
+  for (const run of await prisma.algoRun.findMany({ where: { sessionId, strategy: owner, status: "ACTIVE" } })) {
+    const state = runStateOf(run);
+    activity.running ||= run.armed;
+    activity.position ||= Boolean(state.position);
+    activity.pending ||= Boolean(state.pending);
+  }
+  if (owner === "EXISTING_ALGO") {
+    const session = await prisma.algoSession.findUnique({ where: { id: sessionId } });
+    if (session) {
+      const state = stateOf(session);
+      activity.running ||= state.running;
+      activity.position ||= Boolean(state.position);
+      activity.pending ||= Boolean(state.pending);
+    }
+  }
+  return activity;
+}
+
+/** Takes the lock for `strategy` or refuses with the reason (another feature is running). */
+async function takeLock(sessionId: string, strategy: AlgoStrategy) {
+  const result = await acquireLock(lockStore(sessionId), strategy, (owner) => ownerActivity(sessionId, owner));
+  if (!result.ok) throw new AppError(result.reason, 409, "ALGO_LOCKED");
+}
+
+/** Releases `strategy`'s lock once it has nothing left to manage (a no-op otherwise). */
+async function freeLock(sessionId: string, strategy: AlgoStrategy) {
+  return releaseLock(lockStore(sessionId), strategy, await ownerActivity(sessionId, strategy));
+}
+
+/** Algo - Primary Strategy's own saved settings (or its defaults): always its engine, always chart replay. */
+function primaryConfigOf(session: { primaryConfig: Prisma.JsonValue | null }): AlgoConfig {
+  const saved = session.primaryConfig && typeof session.primaryConfig === "object" ? session.primaryConfig : PRIMARY_DEFAULTS;
+  return { ...readAlgoConfig(saved), engine: "primary", mode: "REPLAY" };
+}
+
+function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null }, strategy: AlgoStrategy): AlgoConfig {
+  return strategy === "PRIMARY_STRATEGY" ? primaryConfigOf(session) : { ...readAlgoConfig(session.config), engine: "existing" };
+}
+
+const strategyOf = (value: unknown): AlgoStrategy => (isAlgoStrategy(value) ? value : "EXISTING_ALGO");
 
 async function saveRun(sessionId: string, state: AlgoState, events: AlgoEvent[], mode: string, runId = "") {
   await prisma.$transaction([
@@ -364,9 +419,16 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "REPLAY" }, orderBy: [{ createdAt: "desc" }], take: 400 }),
   ]);
   const latestRun = replays[0]?.runId ?? null;
+  const primaryConfig = primaryConfigOf(session);
+  const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
     problems: algoConfigProblems(config),
+    /** Algo - Primary Strategy's own settings and their problems. */
+    primaryConfig,
+    primaryProblems: algoConfigProblems(primaryConfig),
+    /** The exclusive execution lock: its owner and what that owner still has open. */
+    lock: { owner, activity: owner === "NONE" ? null : await ownerActivity(session.id, owner) },
     state,
     live,
     lines: lines.map((line) => ({ ...line, enabled: !config.disabledLines.includes(line.type) })),
@@ -384,7 +446,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
 /* ---------------- commands ---------------- */
 
 export type AlgoCommand =
-  | { action: "save"; config: unknown }
+  | { action: "save"; config: unknown; strategy?: AlgoStrategy }
   | { action: "start" }
   | { action: "stop" }
   | { action: "entries"; enabled: boolean }
@@ -398,7 +460,7 @@ export type AlgoCommand =
 
 /** The Algo inside the chart's replay (see chartCommand). */
 export type ChartCommand =
-  | { action: "chartArm"; session: string; cursor: number }
+  | { action: "chartArm"; session: string; cursor: number; strategy?: AlgoStrategy }
   | { action: "chartStep"; session: string; cursor: number }
   | { action: "chartExit"; session: string; cursor: number; emergency?: boolean }
   | { action: "chartDisarm"; session: string }
@@ -410,7 +472,7 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
   const session = await loadSession(user.id);
   if (command.action === "replay") return withLease(session.id, () => runReplay(user, session.id, command.date)).then(() => algoView(user));
   if ("session" in command) {
-    await withLease(session.id, () => chartCommand(user, session.id, readAlgoConfig(session.config), command));
+    await withLease(session.id, () => chartCommandLocked(user, session, command));
     return algoView(user, command.session);
   }
   await withLease(session.id, async () => {
@@ -421,7 +483,15 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
     const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
     switch (command.action) {
       case "save": {
-        const next = readAlgoConfig(command.config);
+        if (command.strategy === "PRIMARY_STRATEGY") {
+          const primary: AlgoConfig = { ...readAlgoConfig(command.config), engine: "primary", mode: "REPLAY" };
+          const problems = algoConfigProblems(primary);
+          if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+          await prisma.algoSession.update({ where: { id: session.id }, data: { primaryConfig: primary as unknown as Prisma.InputJsonValue } });
+          note("settings-primary", "Algo - Primary Strategy settings saved.");
+          break;
+        }
+        const next: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing" };
         const problems = algoConfigProblems(next);
         if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
         if (next.mode === "LIVE") throw new AppError(`Live algo trading is unavailable: ${(await liveAvailability(user)).reasons.join(" ")}`, 409, "LIVE_UNAVAILABLE");
@@ -434,6 +504,8 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
         const problems = algoConfigProblems(config);
         if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
         if (config.mode !== "PAPER") throw new AppError(config.mode === "LIVE" ? "Live algo trading is unavailable." : "Historical replay runs from the Replay button, not as a session.", 409);
+        // Only one algo feature may place orders: the lock is taken before any candle is evaluated.
+        await takeLock(session.id, "EXISTING_ALGO");
         // Starting mid-session never trades history: evaluation begins from the next completed candle.
         Object.assign(state, { running: true, entries: true, sessionDate: todayIst(), lastCandle: null });
         note("start", "Session started (paper trading). Monitoring completed 1-minute candles.");
@@ -479,11 +551,14 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
       const ran = await runTick(user, session.id, config, state);
       await saveRun(session.id, ran.state, [...events, ...ran.events], "PAPER");
       await syncPaperLevels(user.id, ran.state);
+      await freeLock(session.id, "EXISTING_ALGO");
       return;
     }
     state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : state.running ? (state.entries ? "MONITORING" : "READY") : "DISABLED";
     await saveRun(session.id, state, events, "PAPER");
     await syncPaperLevels(user.id, state);
+    // A stopped session with nothing open releases the execution lock.
+    await freeLock(session.id, "EXISTING_ALGO");
   });
   return algoView(user);
 }
@@ -498,13 +573,23 @@ async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig,
   const lines = data.date === today ? strategyLines(data, config.custom) : [];
   const legacy = onLegacyAccount(state);
   const adapter = adapterFor(user, config, state);
+  // New entries only while Algo Trade owns the execution lock; otherwise the open position is only protected.
+  const lockEvents: AlgoEvent[] = [];
+  if (state.running && state.entries) {
+    const got = await acquireLock(lockStore(sessionId), "EXISTING_ALGO", (owner) => ownerActivity(sessionId, owner));
+    if (!got.ok) {
+      state.entries = false;
+      const now = Math.floor(Date.now() / 1000);
+      lockEvents.push({ key: `lock-lost:${now}`, time: now, kind: "REJECTED", message: `New entries stopped: ${got.reason}` });
+    }
+  }
   // A legacy position is only protected and closed on its old account: no new entry is ever made there,
   // so candles are evaluated (and entries made on the Algo wallet) from the tick after it is flat.
   const input = legacy ? { ...state, running: false } : state;
   const result = await advance(input, { sessionId, sessionDate: today, config, candles, lines, now: Math.floor(Date.now() / 1000), adapter });
   if (legacy) result.state.running = state.running;
   tagWallet(result.state, legacy);
-  return result;
+  return { state: result.state, events: [...lockEvents, ...result.events] };
 }
 
 /** Keeps a legacy paper position's stored stop and target equal to the runner's. */
@@ -593,11 +678,11 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
  * settings with every entry filter and the structure stop off ("baseline") to compare. Read-only: nothing
  * is written and no order is placed anywhere.
  */
-export async function backtestDay(user: SessionUser, date: string, variant: string) {
+export async function backtestDay(user: SessionUser, date: string, variant: string, strategy: AlgoStrategy = "EXISTING_ALGO") {
   assertAllowed(user);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date.", 400);
   const session = await loadSession(user.id);
-  const saved = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
+  const saved = { ...configFor(session, strategy), mode: "REPLAY" as const };
   // "baseline": the entry filters and the structure stop off; "score:NN": the saved settings with another minimum score.
   const score = /^score:(\d{1,3})$/.exec(variant);
   const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false } : score ? { ...saved, minScore: Math.min(100, Number(score[1])) } : saved;
@@ -694,7 +779,22 @@ const istTime = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOSt
  * completed premium. A run never moves backwards: a replay moved before its processed minute must start a
  * new replay session (the chart's reset), which starts a new run.
  */
-async function chartCommand(user: SessionUser, sessionId: string, config: AlgoConfig, command: ChartCommand) {
+/**
+ * Chart replay commands under the execution lock: a run's feature (Algo Trade or Algo - Primary Strategy)
+ * takes the lock when it is confirmed, keeps it while it is armed or has a position or order open, and
+ * releases it after any command leaves it with nothing to manage (disabled and flat, exited, archived).
+ */
+async function chartCommandLocked(user: SessionUser, session: Prisma.AlgoSessionGetPayload<object>, command: ChartCommand) {
+  const run = await prisma.algoRun.findUnique({ where: { sessionId_replaySession: { sessionId: session.id, replaySession: command.session } } });
+  const strategy: AlgoStrategy = run ? strategyOf(run.strategy) : command.action === "chartArm" ? strategyOf(command.strategy) : "EXISTING_ALGO";
+  try {
+    await chartCommand(user, session.id, configFor(session, strategy), strategy, command);
+  } finally {
+    await freeLock(session.id, strategy).catch(() => false);
+  }
+}
+
+async function chartCommand(user: SessionUser, sessionId: string, config: AlgoConfig, strategy: AlgoStrategy, command: ChartCommand) {
   const existing = await prisma.algoRun.findUnique({ where: { sessionId_replaySession: { sessionId, replaySession: command.session } } });
   const now = Math.floor(Date.now() / 1000);
   const note = (key: string, time: number, message: string, kind: AlgoEvent["kind"] = "INFO"): AlgoEvent => ({ key: `${key}:${now}`, time, kind, message });
@@ -705,9 +805,13 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const problems = algoConfigProblems(config);
     if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
     if (existing?.status === "ENDED") throw new AppError(existing.endReason === "SESSION_END" ? "This replay session has finished. Reset the replay to start a new algo session." : "This algo session has ended. Reset the replay to start a new one.", 409, "RUN_ENDED");
+    // A replay session belongs to one feature: switching starts a new session (never this run's orders).
+    if (existing && strategyOf(existing.strategy) !== strategy) throw new AppError(`This replay session's algo run belongs to ${STRATEGY_NAME[strategyOf(existing.strategy)]}. Exit or reset the replay (after its position is closed) to start ${STRATEGY_NAME[strategy]} in a new session.`, 409, "OTHER_STRATEGY");
     const minute = Math.floor(command.cursor / 60) * 60;
     if (existing && minute < existing.processedThrough) throw new AppError(`The replay is before ${istTime(existing.processedThrough)}, the last minute the algo processed. Move it forward to resume, or reset the replay to start a new isolated session.`, 409, "REPLAY_BEHIND");
     if (minute >= close) throw new AppError("The replay is at the session close. Choose an earlier time or another date.", 409, "SESSION_CLOSED");
+    // The exclusive lock before any signal is processed: refused while the other feature is active.
+    await takeLock(sessionId, strategy);
     if (existing) {
       const state = runStateOf(existing);
       Object.assign(state, { running: true, entries: true });
@@ -729,11 +833,11 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const state: AlgoState = { ...initialState(date), running: true, entries: true, lastCandle: processedThrough > open ? processedThrough - 60 : null, status: "MONITORING" };
     const run = await prisma.algoRun.create({
       data: {
-        sessionId, replaySession: command.session, date, underlying: config.underlying, config: config as unknown as Prisma.InputJsonValue, lines: lines as unknown as Prisma.InputJsonValue,
+        sessionId, replaySession: command.session, date, underlying: config.underlying, strategy, config: config as unknown as Prisma.InputJsonValue, lines: lines as unknown as Prisma.InputJsonValue,
         state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, wallet: "ALGO", startCashPaise: cash, periodId: period.periodId,
       },
     });
-    await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `Algo replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Algo wallet (₹1,00,000 practice capital); no broker orders.` }]);
+    await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `${STRATEGY_NAME[strategy]}: replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Algo wallet (₹1,00,000 practice capital); no broker orders.` }]);
     return;
   }
 
@@ -772,7 +876,20 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     // Protection continues while entries are off; a run that is off with nothing open does nothing.
     if (!existing.armed && !state.position && !state.pending) return;
     if (minute <= existing.processedThrough) return;
+    // Entries only while this run's feature owns the execution lock; otherwise it only protects its position.
+    const lockNotes: AlgoEvent[] = [];
+    let armed = existing.armed;
+    if (armed) {
+      const got = await acquireLock(lockStore(sessionId), strategy, (owner) => ownerActivity(sessionId, owner));
+      if (!got.ok) {
+        armed = false;
+        Object.assign(state, { running: false, entries: false });
+        lockNotes.push(note("lock-lost", existing.processedThrough, `New entries stopped: ${got.reason}`, "REJECTED"));
+      }
+    }
     const ran = await stepChartRun({ ...(await context()), state, processedThrough: existing.processedThrough, cursor: command.cursor });
+    ran.events.unshift(...lockNotes);
+    if (!armed && existing.armed) await prisma.algoRun.update({ where: { id: existing.id }, data: { armed: false } });
     if (ran.ended) ran.state.status = ran.state.recovery ? "RECOVERY_REQUIRED" : ran.state.position ? "EXIT_PENDING" : "COMPLETED";
     await saveChartRun(existing, {
       state: ran.state as unknown as Prisma.InputJsonValue, processedThrough: ran.processedThrough,
@@ -834,7 +951,7 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
     const events = eventsOf(current.id);
     const runLines = Array.isArray(current.lines) ? (current.lines as unknown as AlgoLine[]) : [];
     run = {
-      id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, armed: current.armed, status: current.status, endReason: current.endReason,
+      id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, strategy: strategyOf(current.strategy), armed: current.armed, status: current.status, endReason: current.endReason,
       processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: events.slice(-400), stats: runStats(events), config: readAlgoConfig(current.config),
       summary: (current.summary ?? null) as { account?: Awaited<ReturnType<typeof algoWallet>> | null; stats?: ReturnType<typeof runStats>; completed?: number; maxTrades?: number; startCapital?: number; status?: string; finalizedAt?: string } | null,
       // The strategy lines this run compares (fixed for its date) and how many of them are switched on.
@@ -847,7 +964,7 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
     runs: runs.map((item) => {
       const events = eventsOf(item.id);
       return {
-        id: item.id, replaySession: item.replaySession, date: item.date, underlying: item.underlying, status: item.status, endReason: item.endReason, startedAt: item.startedAt.toISOString(), endedAt: item.endedAt?.toISOString() ?? null,
+        id: item.id, replaySession: item.replaySession, date: item.date, underlying: item.underlying, strategy: strategyOf(item.strategy), status: item.status, endReason: item.endReason, startedAt: item.startedAt.toISOString(), endedAt: item.endedAt?.toISOString() ?? null,
         startCash: rupees(item.startCashPaise), endCash: item.endCashPaise == null ? null : rupees(item.endCashPaise), config: readAlgoConfig(item.config), stats: runStats(events),
         trades: events.filter((event) => event.kind === "ENTRY" || event.kind === "EXIT"),
       };
@@ -911,6 +1028,8 @@ async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<objec
   const summary = {
     sessionId: run.replaySession,
     runId: run.id,
+    strategy: strategyOf(run.strategy),
+    strategyName: STRATEGY_NAME[strategyOf(run.strategy)],
     underlying: run.underlying,
     date: run.date,
     timeframe: "1m",

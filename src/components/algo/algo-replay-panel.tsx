@@ -12,7 +12,8 @@ import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
-import { useUnsavedSettings } from "@/components/algo/algo-settings-sync";
+import { useSelectedStrategy, useUnsavedSettings } from "@/components/algo/algo-settings-sync";
+import { blockedMessage, STRATEGY_NAME } from "@/lib/algo/exclusive";
 import type { Confirmation } from "@/lib/algo/confirmations";
 
 const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
@@ -71,7 +72,9 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   const data = algo.data;
   const run = algo.run;
   const position = run?.position ?? null;
-  const replayMode = data?.config.mode === "REPLAY";
+  const replayMode = algo.replayReady;
+  const [selected] = useSelectedStrategy();
+  const feature = run?.strategy ?? selected;
   const enabled = algo.enabled && replayMode;
   const state = run?.state;
   const status: AlgoStatus = !enabled && !position ? "DISABLED" : state?.status ?? (enabled ? "READY" : "DISABLED");
@@ -93,6 +96,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="text-base font-semibold">Algo</h2>
+        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : "Algo Trade"}</span>
         <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
         <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
         {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
@@ -143,10 +147,17 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
             <input type="checkbox" role="switch" className="oc-check" aria-label="Enable Algo for this replay" disabled={algo.busy === "mode"} checked={enabled} onChange={(event) => void algo.setEnabled(event.target.checked)} />
           </label>
         ) : null}
+        {data ? (
+          <p className="text-xs text-muted">
+            Strategy: <strong className="text-text-2">{STRATEGY_NAME[feature]}</strong> · Execution lock: <strong className={data.lock.owner === feature ? "text-profit" : data.lock.owner === "NONE" ? "text-text-2" : "text-warning"}>{data.lock.owner === "NONE" ? "free" : STRATEGY_NAME[data.lock.owner]}</strong>
+            {data.lock.owner !== "NONE" && data.lock.owner !== feature ? ` — ${STRATEGY_NAME[feature]} cannot start until it is stopped.` : ""}
+          </p>
+        ) : null}
         {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
-        {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} /> : null}
+        {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
+        {run ? <ReportDownload runId={run.id} /> : null}
         {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
         {run ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
         {run ? <StrategyRows analysis={state?.analysis} /> : null}
@@ -464,7 +475,10 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
 }) {
   const data = algo.data;
   const gate = algo.gate;
-  const config = data?.config;
+  const [selected] = useSelectedStrategy();
+  // The run's own feature (a resume), else the one selected for this new session.
+  const strategy = algo.run?.strategy ?? selected;
+  const config = strategy === "PRIMARY_STRATEGY" ? data?.primaryConfig : data?.config;
   const run = algo.run;
   const unsaved = useUnsavedSettings();
   // Always confirm with the settings saved right now (they may have been changed since the chart loaded them).
@@ -496,7 +510,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Replay speed", `${speed}x`],
     ["Algo account cash", data.account.cashAvailable],
     ["Algo account equity", data.account.equity],
-    ["Quantity", `${config.lots} lot${config.lots === 1 ? "" : "s"} (ATM CALL / PUT)`],
+    ["Quantity", config.sizing === "capital" ? `Whole lots for up to ${config.allocation.percent}% of ₹${config.allocation.maxCapital.toLocaleString("en-IN")} (max ${config.lots})` : config.sizing === "risk" ? `Sized to ₹${Math.round(config.risk.capital * config.risk.perTradePercent) / 100} risk (max ${config.lots} lots)` : `${config.lots} lot${config.lots === 1 ? "" : "s"} (ATM CALL / PUT)`],
     ["Stop-loss", config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
     ["Target", config.target.mode === "percent" ? `${config.target.value}% of premium` : `₹${config.target.value} above entry`],
     ["Max daily loss", inr(config.maxDailyLoss)],
@@ -510,15 +524,21 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Structure stop", config.structureStop ? "On" : "Off"],
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];
-  const strategies = STRATEGY_IDS.filter((id) => config.strategies[id]).map((id) => STRATEGY_LABEL[id]).join(", ") || "None enabled";
+  const strategies = strategy === "PRIMARY_STRATEGY"
+    ? `Opening range ${config.primary.orMinutes} min + ${config.primary.vwap ? "VWAP side" : "no VWAP filter"} + ${config.primary.trend === "ema" ? `${config.primary.trendFast}/${config.primary.trendSlow} EMA trend` : "no trend filter"}${config.primary.retest ? " + retest" : ""}`
+    : STRATEGY_IDS.filter((id) => config.strategies[id]).map((id) => STRATEGY_LABEL[id]).join(", ") || "None enabled";
+  const lock = data.lock;
+  const blocked = lock.owner !== "NONE" && lock.owner !== strategy && lock.activity && (lock.activity.running || lock.activity.position || lock.activity.pending) ? blockedMessage(lock.owner, strategy, lock.activity) : null;
   return (
     <Dialog title="Start Algo Trading Replay?" onClose={onCancel}>
       <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. Stop-loss and target rules will be monitored throughout the replay.</p>
+      <p className="mt-2 text-xs font-semibold text-text">{STRATEGY_NAME[strategy]}</p>
+      {blocked ? <p className="mt-2 rounded-md bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{blocked}</p> : null}
       {unsaved ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">The Algo settings in the Strategy panel have unsaved changes. The replay uses the saved settings shown below: press Save settings there first to use your changes.</p> : null}
       {ended ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">This replay session&apos;s algo run has ended ({run?.endReason === "SESSION_END" ? "session close" : "reset"}). Reset the replay to start a new isolated session.</p> : null}
       {gate.kind === "confirm" && gate.skippedMinutes > 0 ? <p className="mt-2 rounded-md bg-info-soft px-2 py-1.5 text-micro text-info">The replay moved forward {gate.skippedMinutes} minute{gate.skippedMinutes === 1 ? "" : "s"} since the algo last ran. Those minutes are processed in order first (signals, stop-loss and target), exactly as if the replay had played through them.</p> : null}
       <div className="mt-3">
-        <p className="text-micro text-muted">Strategies</p>
+        <p className="text-micro text-muted">{strategy === "PRIMARY_STRATEGY" ? "Rules" : "Strategies"}</p>
         <p className="font-medium text-text">{strategies}</p>
       </div>
       <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1.5">
@@ -528,7 +548,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onCancel}>Cancel</button>
         {ended ? <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onReset}>Reset session</button> : null}
-        <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 font-semibold text-on-primary disabled:opacity-50" disabled={Boolean(algo.busy) || ended} onClick={onStart}><Play className="h-3.5 w-3.5" aria-hidden />{algo.busy === "arm" ? "Starting…" : "Start Algo & Replay"}</button>
+        <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 font-semibold text-on-primary disabled:opacity-50" disabled={Boolean(algo.busy) || ended || Boolean(blocked)} onClick={onStart}><Play className="h-3.5 w-3.5" aria-hidden />{algo.busy === "arm" ? "Starting…" : "Start Algo & Replay"}</button>
       </div>
     </Dialog>
   );
@@ -617,6 +637,18 @@ function useReportDownload(runId: string) {
       .finally(() => setBusy(false));
   };
   return { busy, error, download };
+}
+
+/** The session's trades so far (and every signal with its reason), downloadable at any time. */
+function ReportDownload({ runId }: { runId: string }) {
+  const report = useReportDownload(runId);
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-border-soft px-3 py-2">
+      <span className="min-w-0 text-xs text-muted">Trades, signals and the reason for every skipped signal</span>
+      <button type="button" className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-border px-2.5 text-xs font-semibold hover:bg-hover disabled:opacity-50" disabled={report.busy} onClick={report.download}><Download className="h-3.5 w-3.5" aria-hidden />{report.busy ? "Preparing…" : "Download CSV"}</button>
+      {report.error ? <p className="text-xs text-loss" role="alert">{report.error}</p> : null}
+    </div>
+  );
 }
 
 /** A finished session in the panel: its full report as a download, and a retrade of the same day. */
