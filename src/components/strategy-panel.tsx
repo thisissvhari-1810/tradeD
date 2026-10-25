@@ -199,13 +199,23 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
             </select>
           </div>
           {settings.boxSpan === "candles" ? (
-            <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
-            <span className="min-w-0 truncate text-muted">Box B position</span>
-              <select className="compact-field w-[9.5rem] shrink-0" aria-label="Box B position" value={settings.cloneShift} onChange={(event) => set({ cloneShift: event.target.value === "session" ? "session" : "none" })}>
-                <option value="none">Same as A</option>
-                <option value="session">Next session</option>
-              </select>
-            </div>
+            <>
+              <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-muted" title="Width of the previous-day box; box B is its clone and always the same width">Box breadth</span>
+                <select className="compact-field w-[9.5rem] shrink-0" aria-label="Box breadth" value={settings.boxBreadth} onChange={(event) => set({ boxBreadth: event.target.value === "1" ? 1 : event.target.value === "2" ? 2 : 1.5 })}>
+                  <option value="1">Standard (±1 day)</option>
+                  <option value="1.5">Wide (±1.5 days)</option>
+                  <option value="2">Wider (±2 days)</option>
+                </select>
+              </div>
+              <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
+                <span className="min-w-0 truncate text-muted">Box B position</span>
+                <select className="compact-field w-[9.5rem] shrink-0" aria-label="Box B position" value={settings.cloneShift} onChange={(event) => set({ cloneShift: event.target.value === "session" ? "session" : "none" })}>
+                  <option value="session">Today&apos;s candles</option>
+                  <option value="none">Same as A</option>
+                </select>
+              </div>
+            </>
           ) : null}
           <div className="divide-y divide-border-soft rounded-md border border-border-soft">
             <BoxSection title="Previous-close box" value={settings.closeBox} onChange={(closeBox) => set({ closeBox })} />

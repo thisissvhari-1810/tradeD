@@ -243,15 +243,53 @@ describe("box placement matches the manual drawing", () => {
   const anchors = { before: 1_792_454_400, previous: 1_792_454_400 + DAY, day: 1_792_454_400 + 2 * DAY, after: 1_792_454_400 + 3 * DAY };
   const withAnchors: S1Data = { ...data, anchors };
 
-  it("box A spans the session before the previous day to today; clone B keeps the same horizontal coordinates", () => {
-    const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
+  it("standard breadth: box A spans the session before the previous day to today (the manual drawing)", () => {
+    const [closeBox, openBox] = strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, boxBreadth: 1, cloneShift: "none" }).drawings;
     expect(closeBox.points.map((point) => point.time)).toEqual([anchors.before, anchors.day]);
     expect(openBox.points.map((point) => point.time)).toEqual([anchors.before, anchors.day]);
   });
 
-  it("optionally moves clone B one session right as well", () => {
-    const [, openBox] = strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, cloneShift: "session" }).drawings;
-    expect(openBox.points.map((point) => point.time)).toEqual([anchors.previous, anchors.after]);
+  it("by default the previous-day box is wider (1.5 bars either side) and its clone B sits over today's candles", () => {
+    const [closeBox, openBox] = strategyView(withAnchors, null, STRATEGY_DEFAULTS).drawings;
+    const back = anchors.previous - anchors.before;
+    const ahead = anchors.day - anchors.previous;
+    const [aLeft, aRight] = closeBox.points.map((point) => point.time);
+    expect([aLeft, aRight]).toEqual([anchors.previous - 1.5 * back, anchors.previous + 1.5 * ahead]);
+    expect(aRight - aLeft).toBeGreaterThan(anchors.day - anchors.before);
+    const [bLeft, bRight] = openBox.points.map((point) => point.time);
+    // B is A's clone: the same breadth, one session right, covering today's whole candle.
+    expect(bRight - bLeft).toBe(aRight - aLeft);
+    expect(bLeft).toBe(aLeft + ahead);
+    expect(bLeft).toBeLessThan(anchors.day);
+    expect(bRight).toBeGreaterThan(anchors.after - 1);
+  });
+
+  it("breadth changes only time edges: every price, height and midpoint is identical at any breadth", () => {
+    const views = ([1, 1.5, 2] as const).map((boxBreadth) => strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, boxBreadth }));
+    const prices = (view: (typeof views)[number]) => view.drawings.map((drawing) => drawing.points.map((point) => point.price));
+    for (const view of views) {
+      expect(view.failures).toEqual([]);
+      expect(prices(view)).toEqual(prices(views[0]));
+      expect(view.trace?.boxA.height).toBe(views[0].trace?.boxA.height);
+      expect(view.trace?.boxB?.height).toBe(views[0].trace?.boxB?.height);
+      expect(view.trace?.boxA.mid).toBe(views[0].trace?.boxA.mid);
+      expect(view.trace?.boxB?.mid).toBe(views[0].trace?.boxB?.mid);
+    }
+    const widths = views.map((view) => view.drawings[0].points[1].time - view.drawings[0].points[0].time);
+    expect(widths[0]).toBeLessThan(widths[1]);
+    expect(widths[1]).toBeLessThan(widths[2]);
+  });
+
+  it("box B can still be kept over box A's candles", () => {
+    const [closeBox, openBox] = strategyView(withAnchors, null, { ...STRATEGY_DEFAULTS, cloneShift: "none" }).drawings;
+    expect(openBox.points.map((point) => point.time)).toEqual(closeBox.points.map((point) => point.time));
+  });
+
+  it("saved settings from before version 5 get the wider box and B over today once; later choices are kept", () => {
+    const old = parseStrategySettings(JSON.stringify({ version: 4, cloneShift: "none", boxBreadth: 1 }));
+    expect(old).toMatchObject({ cloneShift: "session", boxBreadth: 1.5 });
+    const chosen = parseStrategySettings(JSON.stringify({ version: 5, cloneShift: "none", boxBreadth: 2 }));
+    expect(chosen).toMatchObject({ cloneShift: "none", boxBreadth: 2 });
   });
 
   it("can instead span today's session only", () => {

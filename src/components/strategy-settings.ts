@@ -11,8 +11,13 @@ export type StrategySettings = {
   enabled: boolean;
   /** candles: box 1 from the session before the previous day to today, box 2 one session right (like the manual drawing). session: today 09:15-15:30. */
   boxSpan: "candles" | "session";
-  /** none: box B keeps box A's horizontal coordinates (only moved vertically). session: also one session right. */
+  /** none: box B keeps box A's horizontal coordinates (only moved vertically). session: also one session right, over today's candles. */
   cloneShift: "none" | "session";
+  /**
+   * Breadth of the previous-day box, in daily bars either side of the previous day's candle (1 = from the
+   * session before it to today, as drawn by hand). Box B is a clone, so it always has the same breadth.
+   */
+  boxBreadth: 1 | 1.5 | 2;
   closeBox: StrategyBox;
   openBox: StrategyBox;
   high: StrategyLevel;
@@ -25,13 +30,16 @@ const KEY = "td-strategy";
  *   2: both boxes' fill became fully transparent (opacity 0).
  *   3: the 9:15 low line uses the same dark green as the high line (#15803D).
  *   4: every border and line is 1px (box borders, midlines, 9:15 high and low).
+ *   5: the previous-day box is wider (1.5 bars either side) and its clone B sits over today's candles.
  */
-const VERSION = 4;
+const VERSION = 5;
 
 export const STRATEGY_DEFAULTS: StrategySettings = {
   enabled: false,
   boxSpan: "candles",
-  cloneShift: "none",
+  // The clone (box B) is placed over today's candles, one session right of box A.
+  cloneShift: "session",
+  boxBreadth: 1.5,
   // Transparent boxes: only the borders, midlines and labels show; candles stay fully visible inside.
   closeBox: { border: "#7E22CE", fill: "#A855F7", width: 1, opacity: 0, dash: "solid", visible: true, mid: { color: "#7E22CE", width: 1, dash: "dashed", visible: true } },
   openBox: { border: "#C2410C", fill: "#F97316", width: 1, opacity: 0, dash: "solid", visible: true, mid: { color: "#C2410C", width: 1, dash: "dashed", visible: true } },
@@ -104,7 +112,9 @@ export function parseStrategySettings(raw: string | null, legacyOn = false): Str
   return {
     enabled: flag(row.enabled, legacyOn),
     boxSpan: row.boxSpan === "session" ? "session" : "candles",
-    cloneShift: row.cloneShift === "session" ? "session" : "none",
+    // Before version 5, box B sat over the previous day with box A; it moves to today once.
+    cloneShift: version < 5 ? "session" : row.cloneShift === "none" ? "none" : "session",
+    boxBreadth: version < 5 ? STRATEGY_DEFAULTS.boxBreadth : row.boxBreadth === 1 || row.boxBreadth === 1.5 || row.boxBreadth === 2 ? row.boxBreadth : STRATEGY_DEFAULTS.boxBreadth,
     closeBox: slim(box(row.closeBox, STRATEGY_DEFAULTS.closeBox, current), thin),
     openBox: slim(box(row.openBox, STRATEGY_DEFAULTS.openBox, current), thin),
     high: slim(level(row.high, STRATEGY_DEFAULTS.high), thin),

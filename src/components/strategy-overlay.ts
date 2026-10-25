@@ -51,10 +51,15 @@ export function strategyView(data: S1Data, cursor: number | null, settings: Stra
   const previous = data.previous;
   const show = s1Reveal(data, levels, cursor);
   const tag = `${STRATEGY_PREFIX}${data.symbol}:${data.date}`;
-  // Horizontal: around the previous candle (the session before it to today) when daily anchors exist,
-  // else today's session. B keeps A's horizontal coordinates unless "one session right" is chosen.
+  // Horizontal: around the previous day's candle when daily anchors exist, `boxBreadth` daily bars either
+  // side (1 = from the session before it to today, as drawn by hand), else today's session. Only the
+  // time edges depend on the breadth; every price (high, low, close, open) is the same at any breadth.
+  // B keeps A's horizontal coordinates unless "one session right" places it over today's candles.
   const anchors = settings.boxSpan === "candles" ? data.anchors ?? null : null;
-  const [left, right] = anchors ? [anchors.before, anchors.day] : [data.sessionOpen, data.sessionClose];
+  const breadth = settings.boxBreadth;
+  const [left, right] = anchors
+    ? [anchors.previous - breadth * (anchors.previous - anchors.before), anchors.previous + breadth * (anchors.day - anchors.previous)]
+    : [data.sessionOpen, data.sessionClose];
   const cloneDt = anchors && settings.cloneShift === "session" ? anchors.day - anchors.previous : 0;
 
   // Step 1: the original rectangle over the previous day's candle (unlocked so the move applies).

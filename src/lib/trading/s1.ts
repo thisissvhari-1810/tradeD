@@ -10,8 +10,9 @@
  *   original  = [previousLow, previousHigh], originalMid = (high + low) / 2
  *   shift1    = previousClose − originalMid      box 1 = original moved by shift1
  *   clone     = box 1,  shift2 = todayOpen − clone mid      box 2 = clone moved by shift2
- * Horizontally, box 1 spans from the session before the previous day to the current day (two daily
- * bars, centred on the previous candle) and box 2 is the same box one session to the right.
+ * Horizontally, box 1 is centred on the previous day's candle, a chosen number of daily bars either side
+ * (1 = from the session before it to the current day; the default is 1.5), and box 2, its clone, is the
+ * same box one session to the right over the current day's candles. Breadth never changes a price.
  */
 import type { PreviousSession } from "@/lib/trading/replay-engine";
 
