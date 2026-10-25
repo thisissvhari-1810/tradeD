@@ -462,7 +462,12 @@ describe("chart wiring for the algo replay", () => {
   });
 
   it("leaving replay never closes a position by itself: Exit Replay archives the session first, explicitly", () => {
-    expect(desk).toMatch(/function leaveReplay\(\) \{\s*setReplay\(\(current\) => \(\{ \.\.\.current, active: false, status: "idle" \}\)\);\s*\}/);
+    // Leaving only closes the replay and clears its drawings (never an order or a position).
+    expect(desk).toMatch(/function leaveReplay\(\) \{\s*setReplay\(\(current\) => \(\{ \.\.\.current, active: false, status: "idle" \}\)\);\s*clearReplayDrawings\(\);\s*\}/);
+    const clear = desk.slice(desk.indexOf("function clearReplayDrawings()"), desk.indexOf("function continueExitReplay()"));
+    expect(clear).not.toMatch(/algo\.|placeOption|api</);
+    expect(clear).toMatch(/changeAutoTrend\(\{ \.\.\.autoTrend, trendlines: false, levels: false, markers: false, breaks: false \}\)/);
+    expect(clear).toMatch(/changeStrategy\(\{ \.\.\.strategy, enabled: false \}\)/);
     expect(desk).not.toMatch(/function leaveReplay\(\) \{[\s\S]{0,200}algo\.(exit|finalize)\(/);
   });
 

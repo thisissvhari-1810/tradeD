@@ -169,6 +169,27 @@ const NO_OVERLAY: never[] = [];
 const NO_DRAWINGS: Drawing[] = [];
 
 /** The candle series a request belongs to: a stock and timeframe, or an option contract and timeframe. */
+/** Ids of the drawings made during the current replay, per chart (kept across reloads until it is exited). */
+const REPLAY_DRAWINGS = "td-replay-drawings";
+function rememberReplayDrawings(store: string, ids: string[]) {
+  try {
+    const made = JSON.parse(localStorage.getItem(REPLAY_DRAWINGS) ?? "{}") as Record<string, string[]>;
+    made[store] = [...new Set([...(made[store] ?? []), ...ids])].slice(-500);
+    localStorage.setItem(REPLAY_DRAWINGS, JSON.stringify(made));
+  } catch {
+    // Storage unavailable: nothing to remember.
+  }
+}
+function takeReplayDrawings(): Record<string, string[]> {
+  try {
+    const made = JSON.parse(localStorage.getItem(REPLAY_DRAWINGS) ?? "{}") as Record<string, string[]>;
+    localStorage.removeItem(REPLAY_DRAWINGS);
+    return made && typeof made === "object" ? made : {};
+  } catch {
+    return {};
+  }
+}
+
 function seriesKeyOf(symbol: string, timeframe: ChartSpan, contract: OptionChartRequest | null) {
   return contract ? `opt:${contract.securityId}:${contract.underlying}:${contract.expiry}:${contract.strike}:${contract.right}:${timeframe}` : `${symbol}:${timeframe}`;
 }
@@ -578,6 +599,12 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [variant, desk.mode]);
 
   function rememberDrawings(next: Drawing[], record?: boolean) {
+    // Drawings made while replaying belong to the replay: they are removed when it is exited.
+    if (replay.active) {
+      const before = new Set(drawingsRef.current.map((drawing) => drawing.id));
+      const added = next.filter((drawing) => !before.has(drawing.id)).map((drawing) => drawing.id);
+      if (added.length) rememberReplayDrawings(drawingStore, added);
+    }
     if (record) {
       pastRef.current = [...pastRef.current, drawingsRef.current].slice(-40);
       futureRef.current = [];
@@ -1049,6 +1076,29 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
 
   function leaveReplay() {
     setReplay((current) => ({ ...current, active: false, status: "idle" }));
+    clearReplayDrawings();
+  }
+
+  /**
+   * Exit Replay clears the chart: the drawings made during the replay are deleted (on every chart they were
+   * drawn on), and the automatic drawings — Auto trend lines, levels and markers, and the Strategy levels —
+   * are switched off. The Algo's lines exist only in replay. Earlier manual drawings are kept.
+   */
+  function clearReplayDrawings() {
+    flushDrawings();
+    const made = takeReplayDrawings();
+    for (const [store, ids] of Object.entries(made)) {
+      const remove = new Set(ids);
+      const list = store === drawingStore ? drawingsRef.current : loadDrawings(store);
+      const kept = list.filter((drawing) => !remove.has(drawing.id));
+      if (kept.length === list.length) continue;
+      saveDrawings(store, kept);
+      if (store === drawingStore) setDrawings(kept);
+    }
+    setSelectedDrawing(null);
+    setLineFocus(null);
+    if (autoTrend.trendlines || autoTrend.levels || autoTrend.markers || autoTrend.breaks) changeAutoTrend({ ...autoTrend, trendlines: false, levels: false, markers: false, breaks: false });
+    if (strategy.enabled) changeStrategy({ ...strategy, enabled: false });
   }
 
   function continueExitReplay() {
