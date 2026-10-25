@@ -6,7 +6,8 @@ import { s1Levels, type S1Data } from "@/lib/trading/s1";
  * its price, the moment it became known (so it is never "crossed" before it existed) and its type.
  */
 
-export type Candle = { time: number; open: number; high: number; low: number; close: number };
+/** A 1-minute candle (`volume` when the feed provides it; index candles often have none). */
+export type Candle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
 export type LineType =
   | "prev-box-top" | "prev-box-mid" | "prev-box-bottom"

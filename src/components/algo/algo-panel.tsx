@@ -6,6 +6,8 @@ import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
+import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
+import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
 import type { algoView } from "@/server/algo";
@@ -42,6 +44,8 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const [error, setError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [replayDate, setReplayDate] = useState("");
+  // The time of the last tick (for the feed's staleness); set by the tick, never read from the clock while rendering.
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
   const [yesterday] = useState(() => new Date(Date.now() + 19_800_000 - 86_400_000).toISOString().slice(0, 10));
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
@@ -76,6 +80,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     if (!active) return;
     const timer = window.setInterval(() => {
       if (document.hidden) return;
+      setCheckedAt(Math.floor(Date.now() / 1000));
       api<AlgoData>("/api/algo", { action: "tick" }).then(apply).catch(() => undefined);
     }, 15_000);
     return () => window.clearInterval(timer);
@@ -89,6 +94,10 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
   const position = data.position;
   const paper = draft.mode === "PAPER";
+  // During market hours a running session should see a new completed candle every minute.
+  const istMinute = checkedAt == null ? null : Math.floor(((checkedAt + 19_800) % 86_400) / 60);
+  const marketHours = istMinute != null && istMinute >= 9 * 60 + 16 && istMinute <= 15 * 60 + 30;
+  const feedStale = Boolean(checkedAt != null && marketHours && state.running && state.lastCandle != null && checkedAt - (state.lastCandle + 60) > 180);
 
   return (
     <div className="space-y-3">
@@ -146,6 +155,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       </div>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
         <Info label="Last candle" text={clock(state.lastCandle)} />
+        {paper && state.running ? <Info label="Feed" text={feedStale ? "Stale: no new candle" : "Updating"} tone={feedStale ? "text-warning" : "text-profit"} /> : null}
         <div className="col-span-2 min-w-0">
           <dt className="text-micro text-muted">Last signal</dt>
           <dd className="text-data leading-snug text-text-2">{state.lastSignal ? `${clock(state.lastSignal.time)} · ${state.lastSignal.explanation}` : "None yet"}</dd>
@@ -155,6 +165,15 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <dd className="text-data leading-snug text-text-2">{state.lastOrder ? state.lastOrder.message : "None yet"}</dd>
         </div>
       </dl>
+
+      {/* Live paper: the same market analysis, strategies and confirmations as the replay dashboard. */}
+      {paper && (state.running || state.analysis) ? (
+        <>
+          <MarketAnalysisSection analysis={state.analysis} symbol={data.config.underlying} time={state.analysis?.asOf ?? null} />
+          <StrategyRows analysis={state.analysis} />
+          {!position ? <p className="text-micro font-semibold text-text-2" role="status">{waitingMessage(state.analysis, state.tradesToday, data.config.maxTrades)}</p> : null}
+        </>
+      ) : null}
 
       {position ? (
         <div className="rounded-md border border-profit/30 bg-profit-soft/40 p-2">
@@ -168,6 +187,8 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             <Info label="Target" text={inr(position.target)} />
             <Info label="Exit status" text={position.exit ? `Exiting (${position.exit.reason})` : "Protected by TradeD checks"} />
           </dl>
+          <p className="eyebrow mb-1 mt-2">Intratrade confirmations</p>
+          <ConfirmationList confirmations={state.confirmations ?? null} />
         </div>
       ) : null}
 
@@ -209,6 +230,24 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <Field label="Max quote age (s)"><NumberInput value={draft.maxQuoteAgeSeconds} step={5} min={5} onChange={(maxQuoteAgeSeconds) => set({ maxQuoteAgeSeconds })} /></Field>
           <Field label="Paper slippage (ticks)"><NumberInput value={draft.slippageTicks} step={1} min={0} onChange={(slippageTicks) => set({ slippageTicks })} /></Field>
           <Field label="No entries after (IST)"><input type="time" className="compact-field w-[9.5rem]" value={draft.entryCutoff} min="09:16" max="15:29" onChange={(event) => set({ entryCutoff: event.target.value || "15:00" })} /></Field>
+          <p className="eyebrow pt-2">Strategies</p>
+          {STRATEGY_IDS.map((id) => (
+            <label key={id} className="flex min-h-7 cursor-pointer items-center justify-between gap-2">
+              <span className="text-muted">{STRATEGY_LABEL[id]}</span>
+              <input type="checkbox" className="oc-check" aria-label={`${STRATEGY_LABEL[id]} strategy`} checked={draft.strategies[id]} onChange={(event) => set({ strategies: { ...draft.strategies, [id]: event.target.checked } })} />
+            </label>
+          ))}
+          <Field label="Observation (minutes)"><NumberInput value={draft.observationMinutes} step={1} min={0} onChange={(observationMinutes) => set({ observationMinutes })} /></Field>
+          <p className="text-micro text-muted">No new entries in the first {Number.isFinite(draft.observationMinutes) ? draft.observationMinutes : "—"} minutes after 09:15: the opening is analysed only.</p>
+          <p className="eyebrow pt-2">Trendline / W / M settings</p>
+          <Field label="Swing sensitivity (candles)"><NumberInput value={draft.patterns.pivotStrength} step={1} min={1} onChange={(pivotStrength) => set({ patterns: { ...draft.patterns, pivotStrength } })} /></Field>
+          <Field label="Min. bottoms / tops apart"><NumberInput value={draft.patterns.minSeparation} step={1} min={2} onChange={(minSeparation) => set({ patterns: { ...draft.patterns, minSeparation } })} /></Field>
+          <Field label="Max. lows / highs gap (%)"><NumberInput value={draft.patterns.tolerancePercent} step={0.05} min={0.01} onChange={(tolerancePercent) => set({ patterns: { ...draft.patterns, tolerancePercent } })} /></Field>
+          <Field label="Min. breakout beyond (%)"><NumberInput value={draft.patterns.minBreakPercent} step={0.01} min={0} onChange={(minBreakPercent) => set({ patterns: { ...draft.patterns, minBreakPercent } })} /></Field>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Wait for a retest</span><input type="checkbox" className="oc-check" aria-label="Retest mode" checked={draft.patterns.retest} onChange={(event) => set({ patterns: { ...draft.patterns, retest: event.target.checked } })} /></label>
+          {draft.patterns.retest ? <Field label="Retest window (candles)"><NumberInput value={draft.patterns.retestBars} step={1} min={1} onChange={(retestBars) => set({ patterns: { ...draft.patterns, retestBars } })} /></Field> : null}
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Require breakout volume</span><input type="checkbox" className="oc-check" aria-label="Volume confirmation" checked={draft.patterns.volume} onChange={(event) => set({ patterns: { ...draft.patterns, volume: event.target.checked } })} /></label>
+          {draft.patterns.volume ? <p className="text-micro text-muted">Applied only when the feed has volume (index candles usually do not); otherwise shown as unavailable.</p> : null}
           {dirty ? (
             <div className="flex gap-1.5 pt-1">
               <button type="button" className="h-8 flex-1 rounded-md bg-primary font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={Boolean(busy)} onClick={() => void run("save", { action: "save", config: draft })}>{busy === "save" ? "Saving…" : "Save settings"}</button>

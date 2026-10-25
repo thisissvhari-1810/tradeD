@@ -1,6 +1,8 @@
 import type { AlgoLine, Candle, CustomLevel, LineType } from "./lines";
 import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm, type AtmContract, type ChainInput, type Protective, type Right } from "./options";
 import { evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
+import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type MarketAnalysis, type PatternSettings, type StrategyId, type StrategySignal } from "./patterns";
+import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
 
 /**
  * The Algo state machine. One execution interface (paper, replay or live adapters) does the trading;
@@ -41,6 +43,12 @@ export type AlgoConfig = {
   slippageTicks: number;
   /** No new entries after this IST time (HH:MM). */
   entryCutoff: string;
+  /** Which strategies may signal: the line break and the price-action add-ons. */
+  strategies: Record<StrategyId, boolean>;
+  /** Minutes after the session open that are analysis only: no new entries (15 = 09:15–09:30). */
+  observationMinutes: number;
+  /** Swing, pattern and breakout settings for the trendline, W and M strategies. */
+  patterns: PatternSettings;
 };
 
 export const ALGO_DEFAULTS: AlgoConfig = {
@@ -64,6 +72,9 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   maxSpreadPercent: 5,
   slippageTicks: 1,
   entryCutoff: "15:00",
+  strategies: { line: true, trendline: true, w: true, m: true },
+  observationMinutes: 15,
+  patterns: PATTERN_DEFAULTS,
 };
 
 export const TICK = 0.05;
@@ -94,9 +105,11 @@ export type OpenPosition = {
   exitAttempts: number;
   /** "ALGO" when held on the Algo wallet; absent on positions opened before it existed. */
   wallet?: "ALGO";
+  /** The strategy and the broken level the trade was entered on (for its confirmations). */
+  setup?: TradeSetup;
 };
 
-export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean; wallet?: "ALGO" };
+export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean; wallet?: "ALGO"; setup?: TradeSetup };
 
 export type AlgoState = {
   /** The session is started (monitoring); false = stopped. */
@@ -117,6 +130,10 @@ export type AlgoState = {
   pending: PendingEntry | null;
   lastSignal: { time: number; decision: string; explanation: string } | null;
   lastOrder: { time: number; status: string; message: string } | null;
+  /** The latest market analysis (opening range, trend, trendlines, W / M, strategy statuses). */
+  analysis?: MarketAnalysis | null;
+  /** The open trade's latest intratrade confirmations. */
+  confirmations?: Confirmation[] | null;
 };
 
 export function initialState(sessionDate: string): AlgoState {
@@ -161,6 +178,8 @@ export type AlgoEvent = {
   target?: number;
   pnl?: number;
   reasons?: string[];
+  /** On entries: the strategy and the broken level the trade was taken on. */
+  setup?: TradeSetup;
 };
 
 export type AdvanceInput = {
@@ -209,7 +228,8 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
     const fresh = state.lastCandle == null ? (latest ? [latest] : []) : completed.filter((candle) => candle.time > state.lastCandle!);
     for (const candle of fresh) {
       const index = completed.indexOf(candle);
-      const evaluation = evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now });
+      const lineEvaluation = evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now });
+      const evaluation = coordinate(lineEvaluation, completed.slice(0, index + 1), input, state);
       const signal = evaluation.decision === "CALL" || evaluation.decision === "PUT";
       const isLatest = candle === latest && (adapter.kind === "replay" || now - (candle.time + 60) <= FRESH_SECONDS);
       let outcome = evaluation.explanation;
@@ -234,6 +254,8 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
     }
     if (latest && (state.lastCandle == null || latest.time > state.lastCandle)) state.lastCandle = latest.time;
   }
+
+  await confirm(state, input, log);
 
   state.status = deriveStatus(state);
   return { state, events };
@@ -265,7 +287,9 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (state.realizedToday <= -config.maxDailyLoss) { state.riskLocked = true; reasons.push("Daily loss limit reached (risk lock)."); }
   if (state.lastEntryAt != null && config.cooldownMinutes > 0 && now - state.lastEntryAt < config.cooldownMinutes * 60) reasons.push(`Cooling down (${config.cooldownMinutes} min between entries).`);
   const clock = istClock(evaluation.time + 60);
-  if (clock < "09:16" || clock > config.entryCutoff) reasons.push(`Outside the entry window (09:16–${config.entryCutoff} IST).`);
+  const observationEnd = dayStart(input.sessionDate) + config.observationMinutes * 60;
+  if (evaluation.time + 60 < observationEnd) reasons.push(`Observation period: the first ${config.observationMinutes} minutes (to ${istClock(observationEnd)} IST) are analysis only; no new entries.`);
+  else if (clock > config.entryCutoff) reasons.push(`Outside the entry window (${istClock(observationEnd)}–${config.entryCutoff} IST).`);
   const problem = protectiveProblem(config.stop, config.target);
   if (problem) reasons.push(problem);
   if (!Number.isInteger(config.lots) || config.lots < 1) reasons.push("Quantity must be a whole number of lots.");
@@ -306,15 +330,15 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   }
   const label = `ATM ${side} ${contract.strike} ${contract.expiry}`;
   if (fill.status === "FILLED" || fill.status === "PARTIAL") {
-    openPosition(state, { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false }, fill, input);
+    openPosition(state, { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false, setup: setupOf(evaluation, side) }, fill, input);
     const position = state.position!;
     const message = `${label} selected. Entry accepted: ${fill.quantity} @ ₹${fill.price}${fill.status === "PARTIAL" ? ` (partial fill of ${quantity})` : ""}. Stop ₹${position.stop}, target ₹${position.target}.`;
     state.lastOrder = { time: now, status: fill.status, message };
-    log({ key: `entry:${key}`, time: evaluation.time, kind: "ENTRY", message, contract: { ...ref, bid: contract.bid, ask: contract.ask }, side, order: { key, status: fill.status, quantity: fill.quantity, price: fill.price, charges: fill.charges }, stop: position.stop, target: position.target });
+    log({ key: `entry:${key}`, time: evaluation.time, kind: "ENTRY", message, contract: { ...ref, bid: contract.bid, ask: contract.ask }, side, order: { key, status: fill.status, quantity: fill.quantity, price: fill.price, charges: fill.charges }, stop: position.stop, target: position.target, ...(position.setup ? { setup: position.setup } : {}) });
     return { ok: true, message: `${label} selected. Entry accepted.` };
   }
   if (fill.status === "PENDING" || fill.status === "UNKNOWN") {
-    state.pending = { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: fill.status === "UNKNOWN" };
+    state.pending = { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: fill.status === "UNKNOWN", setup: setupOf(evaluation, side) };
     if (fill.status === "UNKNOWN") state.recovery = `The ${label} entry may or may not have been placed (${fill.reason}). It is being reconciled; it will not be re-sent.`;
     const message = fill.status === "UNKNOWN" ? `${label}: order outcome unknown; reconciling before any retry.` : `${label}: order pending.`;
     state.lastOrder = { time: now, status: fill.status, message };
@@ -340,6 +364,7 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
     entryKey: pending.key, contract: pending.contract, side: pending.side, lots: pending.lots, quantity: fill.quantity, avg: fill.price,
     stop, target, entryCharges: fill.charges, openedAt: input.now, signalTime: pending.signalTime, lineIds: pending.lineIds, exit: null, exitAttempts: 0,
     ...(pending.wallet ? { wallet: pending.wallet } : {}),
+    ...(pending.setup ? { setup: { ...pending.setup, entryTime: input.now } } : {}),
   };
   state.pending = null;
   state.tradesToday += 1;
@@ -457,4 +482,87 @@ function deriveStatus(state: AlgoState): AlgoStatus {
   if (!state.running) return "DISABLED";
   if (state.riskLocked) return "RISK_LOCKED";
   return state.entries ? "MONITORING" : "READY";
+}
+
+/**
+ * The shared signal coordinator for one completed candle: the line break (when enabled) and the
+ * price-action strategies each give their signal; every one is kept on the evaluation, same-direction
+ * signals are one entry decision, opposite ones are a conflict (no entry). The market analysis is updated
+ * from the same completed candles. Entries then go through tryEntry (risk, limits, observation window).
+ */
+function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
+  const { config } = input;
+  const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
+  const lineDirection: Direction | null = enabled.line && (line.decision === "CALL" || line.decision === "PUT") ? line.decision : null;
+  const previous = state.analysis?.strategies.line.lastSignal ?? null;
+  const { analysis, signals } = analyzeMarket({
+    candles,
+    sessionOpen: dayStart(input.sessionDate),
+    observationMinutes: config.observationMinutes,
+    settings: { ...PATTERN_DEFAULTS, ...config.patterns },
+    enabled,
+    lineDecision: {
+      direction: lineDirection,
+      status: !enabled.line ? "DISABLED" : lineDirection ? `LINE ${lineDirection === "CALL" ? "BREAK UP" : "BREAK DOWN"} CONFIRMED` : line.decision === "CONFLICTING_SIGNAL" ? "CONFLICTING LINE CROSSINGS" : "WAITING FOR LINE CROSSING",
+      trigger: line.events[0]?.price ?? null,
+      lastSignal: lineDirection ? { time: line.time, direction: lineDirection } : previous,
+    },
+  });
+  // Keep each strategy's last signal across candles.
+  for (const id of STRATEGY_IDS) {
+    const before = state.analysis?.strategies[id]?.lastSignal ?? null;
+    if (!analysis.strategies[id].lastSignal && before) analysis.strategies[id] = { ...analysis.strategies[id], lastSignal: before };
+  }
+  state.analysis = analysis;
+  const all: StrategySignal[] = [...signals];
+  if (lineDirection) {
+    const crossed = line.events.filter((event) => (event.direction === "DOWN") === (lineDirection === "PUT"));
+    const level = crossed[0]?.price ?? line.candle.close;
+    all.unshift({ id: `line:${lineDirection}:${line.time}`, strategy: "line", direction: lineDirection, time: line.time, trigger: line.candle.close, level, invalidation: level, reason: line.explanation, volume: "NOT_REQUIRED" });
+  }
+  if (line.decision === "CONFLICTING_SIGNAL" && enabled.line) return { ...line, strategies: all };
+  const directions = new Set(all.map((item) => item.direction));
+  if (directions.size > 1) {
+    return { ...line, strategies: all, decision: "CONFLICTING_SIGNAL", explanation: `Conflicting signals: ${all.map((item) => `${STRATEGY_LABEL[item.strategy]} ${item.direction}`).join(", ")}. Conflict policy: no entry.` };
+  }
+  if (directions.size === 1) {
+    const direction = all[0].direction;
+    const names = all.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
+    const reasons = all.filter((item) => item.strategy !== "line").map((item) => item.reason).join(" ");
+    return { ...line, strategies: all, decision: direction, explanation: `${names}: ${direction === "CALL" ? "bullish" : "bearish"} signal. ${lineDirection ? line.explanation : ""} ${reasons}`.replace(/\s+/g, " ").trim() };
+  }
+  if (!enabled.line && (line.decision === "CALL" || line.decision === "PUT")) return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: "Line break is switched off; no other strategy signalled." };
+  return { ...line, strategies: all };
+}
+
+/** The setup an entry is taken on: the first agreeing strategy's level and invalidation. */
+function setupOf(evaluation: CandleEvaluation, side: Side): TradeSetup | undefined {
+  const agreeing = (evaluation.strategies ?? []).filter((item) => item.direction === side);
+  const primary = agreeing[0];
+  if (!primary) return undefined;
+  return { strategy: primary.strategy, strategies: agreeing.map((item) => item.strategy), direction: side, level: primary.level, invalidation: primary.invalidation, underlyingEntry: evaluation.candle.close, entryTime: evaluation.time + 60 };
+}
+
+/**
+ * The open trade's intratrade confirmations, from the session's completed candles and the option's
+ * replay-time (or live) premium. Only a status that changed is logged, so a quiet trade adds no noise.
+ */
+async function confirm(state: AlgoState, input: AdvanceInput, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void) {
+  const position = state.position;
+  if (!position?.setup) {
+    state.confirmations = null;
+    return;
+  }
+  const candles = input.candles.filter((candle) => candle.time + 60 <= input.now && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time);
+  const mark = await input.adapter.mark(position.contract, input.now).catch(() => null);
+  const next = tradeConfirmations({
+    setup: position.setup,
+    candles,
+    premium: mark?.bid != null ? { value: mark.bid, asOf: mark.asOf, stop: position.stop, target: position.target } : null,
+    now: input.now,
+  });
+  for (const item of changedConfirmations(state.confirmations, next)) {
+    log({ key: `confirm:${position.entryKey}:${item.category}:${item.status}:${input.now}`, kind: "INFO", message: `${item.label}: ${item.status}. ${item.why}` });
+  }
+  state.confirmations = next;
 }

@@ -1,4 +1,5 @@
 import type { AlgoEvent } from "./runner";
+import { STRATEGY_LABEL, type StrategyId } from "./patterns";
 
 /**
  * The Algo inside the chart's replay: pure rules shared by the server (which executes) and the chart
@@ -285,6 +286,9 @@ export type AlgoTrade = {
   /** The crossed lines' prices (underlying), for highlighting them on the chart. */
   linePrices: number[];
   direction: "UP" | "DOWN" | null;
+  /** The strategy that produced the entry, and every strategy that agreed on its candle. */
+  strategy: StrategyId;
+  strategies: StrategyId[];
 };
 
 /**
@@ -308,7 +312,9 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       strike: contract?.strike ?? null,
       right: contract?.right ?? "",
       expiry: contract?.expiry ?? "",
-      lines: evaluation?.events.map((cross) => cross.label) ?? [],
+      lines: event.setup && event.setup.strategy !== "line" ? [STRATEGY_LABEL[event.setup.strategy]] : evaluation?.events.map((cross) => cross.label) ?? [],
+      strategy: event.setup?.strategy ?? "line",
+      strategies: event.setup?.strategies ?? ["line"],
       linePrices: evaluation?.events.map((cross) => cross.price) ?? [],
       direction: evaluation?.events[0]?.direction ?? null,
       entryCharges: event.order.charges ?? 0,
@@ -389,6 +395,7 @@ export function tradeTimeline(events: AlgoEvent[], entryKey: string): TimelineEv
       list.push({ id: `exit-attempt:${event.key}`, time: event.time, kind: event.kind === "ERROR" ? "rejected" : "info", text: event.message });
     }
   }
+  for (const event of events) if (confirmationEntryKey(event.key) === entryKey) list.push({ id: event.key, time: event.time, kind: "info", text: event.message });
   return list.sort((a, b) => a.time - b.time);
 }
 
@@ -410,7 +417,10 @@ export function tradeSlots(trades: AlgoTrade[], skipped: SkippedSignal[], pendin
   });
 }
 
-export type ActivityItem = { id: string; time: number; kind: "signal" | "opened" | "closed" | "rejected" | "info"; side: "CALL" | "PUT" | null; trade: number | null; text: string; pnl: number | null };
+export type ActivityItem = { id: string; time: number; kind: "signal" | "opened" | "closed" | "rejected" | "confirm" | "info"; side: "CALL" | "PUT" | null; trade: number | null; text: string; pnl: number | null };
+
+/** The trade an intratrade confirmation event belongs to (its key is confirm:<entry key>:<category>:<status>:<time>). */
+export const confirmationEntryKey = (key: string) => (key.startsWith("confirm:") ? key.slice("confirm:".length).split(":").slice(0, -3).join(":") : null);
 
 /** Everything the algo did, newest first, each tagged with its trade number where it belongs to one. */
 export function activityFeed(events: AlgoEvent[]): ActivityItem[] {
@@ -428,12 +438,16 @@ export function activityFeed(events: AlgoEvent[]): ActivityItem[] {
       list.push({ id: event.key, time: entryFillTime(event), kind: "opened", side: event.side ?? null, trade: numberOf(event.order.key), text: `BUY ${event.side ?? ""} ${event.contract ? `${event.contract.strike} ${event.contract.right}` : ""} × ${event.order.quantity ?? "—"} @ ${event.order.price != null ? rupee(event.order.price) : "—"}: position opened`, pnl: null });
     } else if (event.kind === "EXIT" && event.order) {
       list.push({ id: event.key, time: event.time, kind: "closed", side: event.side ?? null, trade: numberOf(event.order.key), text: `${EXIT_LABEL[exitReasonOf(event.message)] ?? "Exit"}: SELL × ${event.order.quantity ?? "—"} @ ${event.order.price != null ? rupee(event.order.price) : "—"}, position closed`, pnl: event.pnl ?? null });
+    } else if (event.key.startsWith("confirm:")) {
+      const entry = confirmationEntryKey(event.key);
+      const trade = trades.find((item) => item.entryKey === entry) ?? null;
+      list.push({ id: event.key, time: event.time, kind: "confirm", side: trade?.side ?? null, trade: trade?.number ?? null, text: event.message, pnl: null });
     } else if ((event.kind === "ERROR" || event.kind === "INFO") && !event.key.startsWith("eval:") && !event.key.startsWith("reject:")) {
       list.push({ id: event.key, time: event.time, kind: event.kind === "ERROR" ? "rejected" : "info", side: event.side ?? null, trade: numberOf(event.order?.key), text: event.message, pnl: null });
     }
   }
   // Newest first; within one minute the later step first (a fill above the signal that caused it).
-  const rank: Record<ActivityItem["kind"], number> = { closed: 4, opened: 3, rejected: 2, signal: 1, info: 0 };
+  const rank: Record<ActivityItem["kind"], number> = { closed: 5, confirm: 4, opened: 3, rejected: 2, signal: 1, info: 0 };
   return list.sort((a, b) => b.time - a.time || rank[b.kind] - rank[a.kind] || (a.id < b.id ? 1 : -1));
 }
 

@@ -864,8 +864,10 @@ describe("trade dashboard and trade detail view", () => {
     expect(new Set(trades.map((trade) => trade.entryKey)).size).toBe(2);
     const first = tradeTimeline(result.events, trades[0].entryKey);
     const second = tradeTimeline(result.events, trades[1].entryKey);
-    expect(first.map((event) => event.kind)).toEqual(["signal", "order", "opened", "exit", "closed"]);
-    expect(second.map((event) => event.kind)).toEqual(["signal", "order", "opened"]);
+    // The order / fill events in order; the trade's intratrade confirmation changes are listed with them.
+    expect(first.filter((event) => event.kind !== "info").map((event) => event.kind)).toEqual(["signal", "order", "opened", "exit", "closed"]);
+    expect(second.filter((event) => event.kind !== "info").map((event) => event.kind)).toEqual(["signal", "order", "opened"]);
+    expect(first.some((event) => event.kind === "info" && /^(Price action|Breakout level|Candle|Volume|Momentum|Risk \/ exit):/.test(event.text))).toBe(true);
     expect(first.every((event, index) => index === 0 || event.time >= first[index - 1].time)).toBe(true);
     expect(first.at(-1)?.text).toMatch(/Realized \+₹/);
     // Later replay minutes never change the completed trade.
@@ -892,7 +894,9 @@ describe("trade dashboard and trade detail view", () => {
   it("the activity feed lists actual events newest first, tagged with trade numbers, sides and P&L", async () => {
     const { result } = await session();
     const feedItems = activityFeed(result.events);
-    expect(feedItems[0]).toMatchObject({ kind: "opened", trade: 2, side: "CALL" });
+    // Newest first: the open trade's confirmations, then its entry.
+    expect(feedItems.find((item) => item.kind !== "confirm")).toMatchObject({ kind: "opened", trade: 2, side: "CALL" });
+    expect(feedItems.filter((item) => item.kind === "confirm").every((item) => item.trade != null)).toBe(true);
     const closed = feedItems.find((item) => item.kind === "closed");
     expect(closed).toMatchObject({ trade: 1, side: "PUT" });
     expect(closed?.pnl).toBeGreaterThan(0);
@@ -1157,5 +1161,69 @@ describe("minimal chart markers, completion after the last trade, Algo on by def
     expect(hook).toMatch(/queueMicrotask\(\(\) => void command\("mode", \{ action: "chartMode" \}\)\)/);
     // Never switched to chart replay while a live-price session or position is active.
     expect(hook).toMatch(/if \(data\.state\.running \|\| data\.state\.position \|\| data\.state\.pending\) return;/);
+  });
+});
+
+describe("price-action strategies through the shared coordinator and the real ledger", () => {
+  const W = [100, 102, 104, 108, 104, 101, 100, 102, 104, 106, 103, 101, 100, 101, 102, 103, 110];
+  /** Flat until `start`, then the W fixture (scaled ×10 around 23,000), then flat above the neckline. */
+  function wDay(start: number): Candle[] {
+    const closes: number[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const step = index - start;
+      closes.push(step < 0 ? 23_000 : step < W.length ? 23_000 + (W[step] - 100) * 10 : 23_100 + (W.length - step) * 0);
+    }
+    return closes.map((close, index) => {
+      const open = index === 0 ? close : closes[index - 1];
+      return { time: m(index), open, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5, close, volume: 0 };
+    });
+  }
+  const wOnly: AlgoConfig = { ...config, strategies: { line: false, trendline: false, w: true, m: false } };
+
+  it("a W neckline breakout after 09:30 places one ATM CALL, recording its strategy and setup", async () => {
+    // Pattern from 09:45; the breakout candle is index 46 (10:01), closing at 10:02.
+    const result = await run(wDay(30), { cursor: m(50), config: wOnly });
+    expect(buys()).toHaveLength(1);
+    expect(String(db.state.instruments[0].symbol)).toContain("|CE|");
+    expect(result.state.position?.setup).toMatchObject({ strategy: "w", direction: "CALL", level: 23_065, invalidation: 22_995 });
+    const entry = result.events.find((event) => event.kind === "ENTRY");
+    expect(entry?.time).toBe(m(46));
+    expect(entry?.setup?.strategy).toBe("w");
+    const evaluation = result.events.find((event) => event.key === `eval:${m(46)}`)?.evaluation;
+    expect(evaluation?.strategies?.map((item) => item.strategy)).toEqual(["w"]);
+    expect(algoTrades(result.events, null)[0]).toMatchObject({ strategy: "w", strategies: ["w"] });
+    // The market analysis is stored for the dashboard and the chart.
+    expect(result.state.analysis?.w?.neckline).toBe(23_065);
+    expect(result.state.analysis?.strategies.w.lastSignal).toEqual({ time: m(46), direction: "CALL" });
+  });
+
+  it("intratrade confirmations are logged when their status changes, never repeated for the same state", async () => {
+    const result = await run(wDay(30), { cursor: m(60), config: wOnly });
+    const confirmations = result.events.filter((event) => event.key.startsWith("confirm:"));
+    expect(confirmations.length).toBeGreaterThan(0);
+    expect(result.state.confirmations?.map((item) => item.category)).toEqual(["price", "level", "candle", "volume", "momentum", "risk"]);
+    expect(result.state.confirmations?.find((item) => item.category === "volume")?.status).toBe("UNAVAILABLE");
+    const keys = confirmations.map((event) => event.key.split(":").slice(-3, -1).join(":"));
+    for (let index = 1; index < keys.length; index += 1) {
+      const category = keys[index].split(":")[0];
+      const previous = keys.slice(0, index).reverse().find((key) => key.startsWith(`${category}:`));
+      expect(previous).not.toBe(keys[index]);
+    }
+    expect(buys()).toHaveLength(1);
+  });
+
+  it("no entry inside the observation window, and the opening breakout is not traded when it ends", async () => {
+    // The breakout candle (index 16) closes at 09:32, inside a 30-minute observation.
+    const result = await run(wDay(0), { cursor: m(80), config: { ...wOnly, observationMinutes: 30 } });
+    expect(db.state.orders).toHaveLength(0);
+    expect(result.state.analysis?.observationComplete).toBe(true);
+    expect(result.state.analysis?.w?.status).toBe("BROKEN");
+  });
+
+  it("the line break can be switched off; it alone still trades as before when the others are off", async () => {
+    await run(underlying("DOWN"), { cursor: m(40), config: { ...config, strategies: { line: false, trendline: false, w: false, m: false } } });
+    expect(db.state.orders).toHaveLength(0);
+    const lineOnly = await run(underlying("DOWN"), { cursor: m(40), config: { ...config, strategies: { line: true, trendline: false, w: false, m: false } } });
+    expect(lineOnly.state.position?.setup).toMatchObject({ strategy: "line", level: LINE });
   });
 });

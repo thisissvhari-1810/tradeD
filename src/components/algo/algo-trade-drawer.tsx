@@ -8,6 +8,8 @@ import { algoTrades, tradeTimeline, type AlgoTrade, type TimelineEvent } from "@
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { ExitConfirm, PremiumBar, type LivePosition } from "@/components/algo/algo-replay-panel";
 import { LiveMoney, money, toneOf } from "@/components/algo/live-value";
+import { ConfirmationList } from "@/components/algo/algo-analysis";
+import { STRATEGY_LABEL } from "@/lib/algo/patterns";
 
 const ist = (seconds: number | null | undefined) => (seconds ? new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16) : "—");
 const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
@@ -139,7 +141,8 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
 
         <Section title="Entry and exit">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <Row label="Strategy line">{trade.lines.join(", ") || "—"}</Row>
+            <Row label="Strategy">{STRATEGY_LABEL[trade.strategy]}{trade.strategies.length > 1 ? ` (+ ${trade.strategies.slice(1).map((id) => STRATEGY_LABEL[id]).join(", ")})` : ""}</Row>
+            <Row label="Trigger">{trade.lines.join(", ") || "—"}</Row>
             <Row label="Crossing">{trade.direction === "DOWN" ? "Bearish (body crossed down)" : trade.direction === "UP" ? "Bullish (body crossed up)" : "—"}</Row>
             <Row label="Signal candle">{ist(trade.signalTime)} IST</Row>
             <Row label="Underlying at signal">{trade.underlyingAtSignal?.toFixed(2) ?? "—"} <span className="text-xs text-muted">(index)</span></Row>
@@ -151,6 +154,12 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
             <Row label="Risk / reward">{reward == null ? "—" : `1 : ${reward.toFixed(2)}`}</Row>
           </dl>
         </Section>
+
+        {!completed ? (
+          <Section title="Intratrade confirmations">
+            <ConfirmationList confirmations={run.state.confirmations ?? null} />
+          </Section>
+        ) : null}
 
         <Section title="Risk management (option premium)">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2">

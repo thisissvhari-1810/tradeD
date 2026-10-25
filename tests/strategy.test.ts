@@ -179,7 +179,10 @@ describe("wiring", () => {
   });
 
   it("strategy drawings stay separate from manual drawings", () => {
-    expect(desk).toContain("overlays={strategyOverlay}");
+    // Read-only overlays: the strategy's boxes and lines, plus the Algo's derived trendlines / necklines.
+    expect(desk).toContain("overlays={chartOverlays}");
+    expect(desk).toMatch(/const chartOverlays = useMemo\(\(\) => \(algoDrawings\.length \? \[\.\.\.strategyOverlay, \.\.\.algoDrawings\] : strategyOverlay\)/);
+    expect(desk).not.toMatch(/setDrawings\([^)]*algoDrawings/);
   });
 });
 

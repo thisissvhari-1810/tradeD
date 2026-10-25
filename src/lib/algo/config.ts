@@ -1,6 +1,7 @@
 import { ALL_LINE_TYPES, type CustomLevel, type LineType } from "./lines";
 import { protectiveProblem, type Protective } from "./options";
 import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "./runner";
+import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
 
 /**
  * Reads and validates Algo settings (the server applies this to every save, so limits are never only a
@@ -45,6 +46,28 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     maxSpreadPercent: Number.isFinite(num(row.maxSpreadPercent)) ? num(row.maxSpreadPercent) : ALGO_DEFAULTS.maxSpreadPercent,
     slippageTicks: Number.isFinite(num(row.slippageTicks)) ? num(row.slippageTicks) : ALGO_DEFAULTS.slippageTicks,
     entryCutoff: typeof row.entryCutoff === "string" && /^(09|1[0-5]):[0-5]\d$/.test(row.entryCutoff) ? row.entryCutoff : ALGO_DEFAULTS.entryCutoff,
+    strategies: strategiesOf(row.strategies),
+    observationMinutes: Number.isFinite(num(row.observationMinutes)) ? num(row.observationMinutes) : ALGO_DEFAULTS.observationMinutes,
+    patterns: patternsOf(row.patterns),
+  };
+}
+
+function strategiesOf(value: unknown): AlgoConfig["strategies"] {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  return Object.fromEntries(STRATEGY_IDS.map((id) => [id, typeof row[id] === "boolean" ? row[id] : ALGO_DEFAULTS.strategies[id]])) as AlgoConfig["strategies"];
+}
+
+function patternsOf(value: unknown): PatternSettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const pick = (key: keyof PatternSettings) => (Number.isFinite(num(row[key])) ? num(row[key]) : (PATTERN_DEFAULTS[key] as number));
+  return {
+    pivotStrength: pick("pivotStrength"),
+    minSeparation: pick("minSeparation"),
+    tolerancePercent: pick("tolerancePercent"),
+    minBreakPercent: pick("minBreakPercent"),
+    retest: typeof row.retest === "boolean" ? row.retest : PATTERN_DEFAULTS.retest,
+    retestBars: pick("retestBars"),
+    volume: typeof row.volume === "boolean" ? row.volume : PATTERN_DEFAULTS.volume,
   };
 }
 
@@ -62,6 +85,14 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(config.maxQuoteAgeSeconds >= 5 && config.maxQuoteAgeSeconds <= 600)) problems.push("The quote freshness limit must be 5 to 600 seconds.");
   if (!Number.isInteger(config.slippageTicks) || config.slippageTicks < 0 || config.slippageTicks > 20) problems.push("Slippage must be 0 to 20 ticks.");
   for (const level of config.custom) if (!(level.price > 0)) problems.push(`The extra level "${level.label || level.id}" needs a price above 0.`);
+  if (!STRATEGY_IDS.some((id) => config.strategies[id])) problems.push("Switch on at least one strategy.");
+  if (!Number.isInteger(config.observationMinutes) || config.observationMinutes < 0 || config.observationMinutes > 120) problems.push("The observation period must be 0 to 120 minutes.");
+  const pattern = config.patterns;
+  if (!Number.isInteger(pattern.pivotStrength) || pattern.pivotStrength < 1 || pattern.pivotStrength > 5) problems.push("Swing sensitivity must be 1 to 5 candles.");
+  if (!Number.isInteger(pattern.minSeparation) || pattern.minSeparation < 2 || pattern.minSeparation > 60) problems.push("The minimum separation between bottoms / tops must be 2 to 60 candles.");
+  if (!(pattern.tolerancePercent > 0 && pattern.tolerancePercent <= 2)) problems.push("The double-bottom / top tolerance must be above 0% and at most 2%.");
+  if (!(pattern.minBreakPercent >= 0 && pattern.minBreakPercent <= 1)) problems.push("The minimum breakout distance must be 0% to 1%.");
+  if (!Number.isInteger(pattern.retestBars) || pattern.retestBars < 1 || pattern.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
   return problems;
 }
 

@@ -1,13 +1,16 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, History, LogIn, LogOut, OctagonX, Play, Radio, Zap } from "lucide-react";
+import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, History, LogIn, LogOut, OctagonX, Play, Radio, ShieldCheck, Zap } from "lucide-react";
 import { cx } from "@/components/ui";
 import { activityFeed, algoTrades, runDiagnostics, skippedSignals, tradeSlots, type ActivityItem, type AlgoTrade, type SlotState } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
+import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
+import { STRATEGY_LABEL } from "@/lib/algo/patterns";
+import type { Confirmation } from "@/lib/algo/confirmations";
 
 const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
 const ist = (seconds: number | null | undefined) => (seconds ? new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16) : "—");
@@ -137,6 +140,10 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
         ) : null}
         {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
+        {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
+        {run ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
+        {run ? <StrategyRows analysis={state?.analysis} /> : null}
+
         {/* 2. Strategy and replay status */}
         {run && diagnostics ? (
           <details className="rounded-lg border border-border-soft" aria-label="Algo processing">
@@ -194,9 +201,15 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 
         {/* 4. Active trades */}
         {openTrades.map((trade) => (
-          <TradeCard key={trade.entryKey} trade={trade} max={max} position={position && position.entryKey === trade.entryKey ? position : null} selected={selectedTrade === trade.entryKey} onOpen={() => onOpenTrade(trade.entryKey)} onExit={() => setConfirmExit(true)} exiting={algo.busy === "exit"} />
+          <TradeCard key={trade.entryKey} trade={trade} max={max} position={position && position.entryKey === trade.entryKey ? position : null} confirmations={position && position.entryKey === trade.entryKey ? state?.confirmations ?? null : null} stale={Boolean(position && position.entryKey === trade.entryKey && cursor != null && position.premiumAt != null && cursor - position.premiumAt > 120)} selected={selectedTrade === trade.entryKey} onOpen={() => onOpenTrade(trade.entryKey)} onExit={() => setConfirmExit(true)} exiting={algo.busy === "exit"} />
         ))}
-        {run && !openTrades.length ? <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted">No open position. {state?.lastSignal ? `Last signal ${ist(state.lastSignal.time + 60)} IST: ${state.lastSignal.explanation}` : "Waiting for a qualifying line crossing."}</p> : null}
+        {run && !openTrades.length ? (
+          <div className="rounded-lg border border-dashed border-border px-3 py-2 text-xs">
+            <p className="font-semibold text-text-2" role="status">{waitingMessage(state?.analysis, trades.length, max)}</p>
+            <p className="mt-0.5 text-muted">No open position. {state?.lastSignal ? `Last signal ${ist(state.lastSignal.time + 60)} IST: ${state.lastSignal.explanation}` : "No signal yet in this session."}</p>
+            {state?.analysis && (state.analysis.levels.above != null || state.analysis.levels.below != null) ? <p className="num mt-0.5 text-muted">Next levels: above {state.analysis.levels.above?.toFixed(2) ?? "—"} · below {state.analysis.levels.below?.toFixed(2) ?? "—"}</p> : null}
+          </div>
+        ) : null}
 
         {/* 5. Activity */}
         {run ? <ActivityFeed items={activityFeed(run.events)} onOpenTrade={(number) => { const trade = trades.find((item) => item.number === number); if (trade) onOpenTrade(trade.entryKey); }} /> : null}
@@ -266,7 +279,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 }
 
 /** One open trade, with its live premium and P&L (from the replay-time mark) and its detail view. */
-function TradeCard({ trade, max, position, selected, onOpen, onExit, exiting }: { trade: AlgoTrade; max: number; position: LivePosition | null; selected: boolean; onOpen: () => void; onExit: () => void; exiting: boolean }) {
+function TradeCard({ trade, max, position, confirmations, stale, selected, onOpen, onExit, exiting }: { trade: AlgoTrade; max: number; position: LivePosition | null; confirmations: Confirmation[] | null; stale: boolean; selected: boolean; onOpen: () => void; onExit: () => void; exiting: boolean }) {
   const call = trade.side === "CALL";
   return (
     <section data-trade={trade.entryKey} className={cx("rounded-xl border-2 bg-gradient-to-br p-3 shadow-e1", call ? "from-profit-soft/30 to-panel" : "from-loss-soft/30 to-panel", selected ? "border-primary" : "border-border")} aria-label={`Trade ${trade.number} of ${max}`}>
@@ -275,6 +288,7 @@ function TradeCard({ trade, max, position, selected, onOpen, onExit, exiting }: 
         <span className="inline-flex items-center gap-1 text-xs font-semibold"><CircleDot className={cx("h-3 w-3", trade.status === "OPEN" ? "text-profit" : "text-warning")} aria-hidden />{trade.status === "OPEN" ? "OPEN" : "EXIT PENDING"}</span>
       </div>
       <p className="text-sm text-text-2">{trade.underlying} {trade.strike} {trade.right} · {trade.expiry}</p>
+      <p className="text-xs text-muted">{STRATEGY_LABEL[trade.strategy]}{trade.strategies.length > 1 ? ` (+ ${trade.strategies.slice(1).map((id) => STRATEGY_LABEL[id]).join(", ")})` : ""}</p>
       <p className="mt-2 text-xs font-medium uppercase tracking-wide text-muted">Live P&amp;L</p>
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[1.875rem] font-semibold leading-tight"><LiveMoney value={position?.unrealized} signed tone missing="Price unavailable" /></span>
@@ -282,11 +296,15 @@ function TradeCard({ trade, max, position, selected, onOpen, onExit, exiting }: 
       </div>
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
         <Metric label="Entry">{inr(trade.entryPremium)}</Metric>
-        <Metric label={`Live${position?.premiumAt ? ` · ${ist(position.premiumAt)}` : ""}`}><LiveMoney value={position?.premium} className="text-lg font-semibold" /></Metric>
+        <Metric label={`${stale ? "Last valid" : "Live"}${position?.premiumAt ? ` · ${ist(position.premiumAt)}` : ""}`}><LiveMoney value={position?.premium} className="text-lg font-semibold" />{stale ? <span className="ml-1 rounded-pill bg-warning-soft px-1.5 text-xs font-semibold text-warning">STALE</span> : null}</Metric>
         <Metric label="Qty">{trade.quantity}</Metric>
         <Metric label="Value"><LiveMoney value={position?.value} /></Metric>
       </dl>
       {position ? <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} /> : null}
+      <details open className="mt-2 rounded-md border border-border-soft px-2 py-1.5">
+        <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-muted">Intratrade confirmations</summary>
+        <div className="mt-1.5"><ConfirmationList confirmations={confirmations} /></div>
+      </details>
       <div className="mt-2 flex gap-2">
         <button type="button" className="inline-flex h-9 flex-1 items-center justify-center gap-1 rounded-md border border-border font-semibold hover:bg-hover" onClick={onOpen}>View trade details <ArrowRight className="h-4 w-4" aria-hidden /></button>
         <button type="button" className="h-9 rounded-md bg-loss px-3 font-semibold text-on-signal hover:brightness-110 disabled:opacity-50" disabled={!position || Boolean(position.exit) || exiting} onClick={onExit}>{position?.exit ? "Exiting…" : "Exit"}</button>
@@ -300,6 +318,7 @@ const FEED_ICON: Record<ActivityItem["kind"], ReactNode> = {
   opened: <LogIn className="h-3.5 w-3.5 text-profit" aria-hidden />,
   closed: <LogOut className="h-3.5 w-3.5 text-info" aria-hidden />,
   rejected: <Ban className="h-3.5 w-3.5 text-loss" aria-hidden />,
+  confirm: <ShieldCheck className="h-3.5 w-3.5 text-info" aria-hidden />,
   info: <CircleDot className="h-3.5 w-3.5 text-muted" aria-hidden />,
 };
 type FeedFilter = "all" | "CALL" | "PUT" | "opened" | "closed" | "rejected";

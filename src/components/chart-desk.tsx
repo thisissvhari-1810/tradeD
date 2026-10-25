@@ -23,6 +23,7 @@ import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { algoChartMarkers } from "@/components/algo/algo-markers";
+import { algoAnalysisDrawings, algoPivotMarkers } from "@/components/algo/algo-drawings";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
@@ -823,7 +824,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [algoRun, symbol, replay.cursor, algoOpen?.entryKey, algoOpen?.exitPending, algoOpen?.unrealized],
   );
-  const algoMarkers = useMemo<ChartMarker[]>(() => algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade), [algoTrades, desk.appearance.tokens, selectedTrade]);
+  // The Algo's market analysis on the chart (trendlines, necklines, pattern pivots), from the run's stored analysis.
+  // Nothing later than the replay time is drawn (a marker past the last visible candle would land on it).
+  const analysisNow = algoRun && algoRun.underlying === symbol ? algoRun.state.analysis ?? null : null;
+  const algoAnalysis = analysisNow && (replay.cursor == null || analysisNow.asOf <= replay.cursor + 60) ? analysisNow : null;
+  const algoDrawings = useMemo(() => algoAnalysisDrawings(algoAnalysis, { trendline: desk.appearance.tokens.info, neckline: desk.appearance.tokens.warning }), [algoAnalysis, desk.appearance.tokens]);
+  const algoMarkers = useMemo<ChartMarker[]>(() => [
+    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted).filter((marker) => replay.cursor == null || marker.time < replay.cursor),
+    ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
+  ], [algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.cursor]);
   // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).
   const [markerTip, setMarkerTip] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   // The trade shown in the detail view, and a strategy line highlighted from it.
@@ -1166,6 +1175,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, replay.date, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
+  const chartOverlays = useMemo(() => (algoDrawings.length ? [...strategyOverlay, ...algoDrawings] : strategyOverlay), [strategyOverlay, algoDrawings]);
   // Strategy drawings are derived, not stored: each refresh reconciles to the same ids. The log below
   // shows that (created / updated / retained / removed). On in development, or with
   // localStorage "td-debug-strategy" = "1"; it runs only when the strategy result changes.
@@ -1429,7 +1439,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 span={timeframe}
                 focusId={selectedDrawing}
                 drawings={drawings}
-                overlays={strategyOverlay}
+                overlays={chartOverlays}
                 onDrawings={rememberDrawings}
                 handleRef={handleRef}
                 scheme={desk.theme}

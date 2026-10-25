@@ -1,4 +1,5 @@
 import type { AlgoLine, Candle, LineType } from "./lines";
+import type { StrategySignal } from "./patterns";
 
 /**
  * Candle-body crossings on completed 1-minute candles, and one decision per candle.
@@ -46,6 +47,8 @@ export type CandleEvaluation = {
   notes: LineNote[];
   /** Lines compared on this candle (enabled, and known when the previous candle formed). */
   evaluated?: number;
+  /** Every strategy's signal on this candle (line break and the price-action add-ons), from the coordinator. */
+  strategies?: StrategySignal[];
   decision: Decision;
   /** Plain-language reason for the decision. */
   explanation: string;
