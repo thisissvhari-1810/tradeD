@@ -274,6 +274,12 @@ export type AlgoTrade = {
   realized: number | null;
   returnPercent: number | null;
   durationMinutes: number | null;
+  /** Simulated charges of the entry fill and of the exit fills (₹). */
+  entryCharges: number;
+  exitCharges: number;
+  /** The crossed lines' prices (underlying), for highlighting them on the chart. */
+  linePrices: number[];
+  direction: "UP" | "DOWN" | null;
 };
 
 /**
@@ -298,6 +304,10 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       right: contract?.right ?? "",
       expiry: contract?.expiry ?? "",
       lines: evaluation?.events.map((cross) => cross.label) ?? [],
+      linePrices: evaluation?.events.map((cross) => cross.price) ?? [],
+      direction: evaluation?.events[0]?.direction ?? null,
+      entryCharges: event.order.charges ?? 0,
+      exitCharges: 0,
       signalTime: evaluation?.time ?? event.time,
       underlyingAtSignal: evaluation?.candle.close ?? null,
       entryTime: entryFillTime(event),
@@ -327,6 +337,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       const cost = trade.entryPremium * trade.quantity;
       trade.returnPercent = cost ? Math.round((trade.realized / cost) * 10_000) / 100 : null;
       trade.durationMinutes = Math.round((last.time - trade.entryTime) / MINUTE);
+      trade.exitCharges = Math.round(exits.reduce((sum, event) => sum + (event.order?.charges ?? 0), 0) * 100) / 100;
     }
     if (open && open.entryKey === trade.entryKey) trade.status = open.exitPending ? "EXIT_PENDING" : "OPEN";
   }
@@ -348,4 +359,75 @@ export function skippedSignals(events: AlgoEvent[]): SkippedSignal[] {
     else if (side && event.reasons?.length) list.push({ id: event.key, time: event.time + MINUTE, side, reason: event.reasons.join(" "), lines });
   }
   return list.sort((a, b) => b.time - a.time);
+}
+
+export type TimelineEvent = { id: string; time: number; kind: "signal" | "order" | "opened" | "exit" | "closed" | "rejected" | "info"; text: string };
+
+/** One trade's recorded events, oldest first: its signal, the order and fill, exit attempts and fills. */
+export function tradeTimeline(events: AlgoEvent[], entryKey: string): TimelineEvent[] {
+  const list: TimelineEvent[] = [];
+  const entry = events.find((event) => event.kind === "ENTRY" && event.order?.key === entryKey);
+  if (!entry) return list;
+  const evaluation = entry.key.startsWith("entry:") ? events.find((event) => event.key === `eval:${entry.time}`)?.evaluation : null;
+  if (evaluation) {
+    list.push({ id: `signal:${entryKey}`, time: evaluation.time + MINUTE, kind: "signal", text: `${evaluation.decision} signal on the ${ist(evaluation.time)} candle: ${evaluation.explanation}` });
+  }
+  const fillTime = entryFillTime(entry);
+  list.push({ id: `order:${entryKey}`, time: fillTime, kind: "order", text: `BUY order ${entry.order?.status ?? "FILLED"} (simulated): ${entry.order?.quantity ?? "—"} @ ${entry.order?.price != null ? rupee(entry.order.price) : "—"}${entry.order?.charges != null ? `, charges ${rupee(entry.order.charges)}` : ""}.` });
+  list.push({ id: `opened:${entryKey}`, time: fillTime, kind: "opened", text: `Position opened. Stop-loss ${entry.stop != null ? rupee(entry.stop) : "—"}, target ${entry.target != null ? rupee(entry.target) : "—"} (option premium).` });
+  for (const event of events) {
+    if (!event.order?.key.startsWith(`${entryKey}:exit`)) continue;
+    if (event.kind === "EXIT") {
+      list.push({ id: `exit:${event.key}`, time: event.time, kind: "exit", text: event.message.replace(/ Realized .*$/, "") });
+      list.push({ id: `closed:${event.key}`, time: event.time, kind: "closed", text: `SELL ${event.order.quantity ?? ""} @ ${event.order.price != null ? rupee(event.order.price) : "—"} (simulated). Realized ${event.pnl != null ? signedRupee(event.pnl) : "—"} after charges.` });
+    } else {
+      list.push({ id: `exit-attempt:${event.key}`, time: event.time, kind: event.kind === "ERROR" ? "rejected" : "info", text: event.message });
+    }
+  }
+  return list.sort((a, b) => a.time - b.time);
+}
+
+export type SlotState = { number: number; state: "Waiting" | "Order pending" | "Open" | "Exit pending" | "Completed" | "Rejected"; trade: AlgoTrade | null; reason: string | null; time: number | null };
+
+/**
+ * The session's entry slots (the trade limit). Filled entries take slots in order; the next empty slot
+ * shows a pending order, or the latest signal rejected after the last entry, with its reason.
+ */
+export function tradeSlots(trades: AlgoTrade[], skipped: SkippedSignal[], pending: boolean, max: number): SlotState[] {
+  const lastEntry = trades.at(-1)?.entryTime ?? 0;
+  const rejectedSince = skipped.filter((row) => row.time > lastEntry).sort((a, b) => b.time - a.time)[0] ?? null;
+  return Array.from({ length: max }, (_, index): SlotState => {
+    const trade = trades[index] ?? null;
+    if (trade) return { number: index + 1, trade, reason: null, time: trade.entryTime, state: trade.status === "OPEN" ? "Open" : trade.status === "EXIT_PENDING" ? "Exit pending" : "Completed" };
+    if (index === trades.length && pending) return { number: index + 1, trade: null, reason: null, time: null, state: "Order pending" };
+    if (index === trades.length && rejectedSince) return { number: index + 1, trade: null, reason: rejectedSince.reason, time: rejectedSince.time, state: "Rejected" };
+    return { number: index + 1, trade: null, reason: null, time: null, state: "Waiting" };
+  });
+}
+
+export type ActivityItem = { id: string; time: number; kind: "signal" | "opened" | "closed" | "rejected" | "info"; side: "CALL" | "PUT" | null; trade: number | null; text: string; pnl: number | null };
+
+/** Everything the algo did, newest first, each tagged with its trade number where it belongs to one. */
+export function activityFeed(events: AlgoEvent[]): ActivityItem[] {
+  const trades = algoTrades(events, null);
+  const numberOf = (key: string | undefined) => (key ? trades.find((trade) => key === trade.entryKey || key.startsWith(`${trade.entryKey}:exit`))?.number ?? null : null);
+  const list: ActivityItem[] = [];
+  for (const event of events) {
+    const decision = event.evaluation?.decision;
+    const signalSide = decision === "CALL" || decision === "PUT" ? decision : null;
+    if (event.key.startsWith("eval:") && event.kind === "EVALUATION" && signalSide) {
+      list.push({ id: event.key, time: event.time + MINUTE, kind: "signal", side: signalSide, trade: null, text: event.evaluation?.explanation ?? event.message, pnl: null });
+    } else if (event.key.startsWith("eval:") && event.kind === "REJECTED") {
+      list.push({ id: event.key, time: event.time + MINUTE, kind: "rejected", side: signalSide, trade: null, text: `Signal not traded: ${(event.reasons ?? [event.message]).join(" ")}`, pnl: null });
+    } else if (event.kind === "ENTRY" && event.order) {
+      list.push({ id: event.key, time: entryFillTime(event), kind: "opened", side: event.side ?? null, trade: numberOf(event.order.key), text: `BUY ${event.side ?? ""} ${event.contract ? `${event.contract.strike} ${event.contract.right}` : ""} × ${event.order.quantity ?? "—"} @ ${event.order.price != null ? rupee(event.order.price) : "—"}: position opened`, pnl: null });
+    } else if (event.kind === "EXIT" && event.order) {
+      list.push({ id: event.key, time: event.time, kind: "closed", side: event.side ?? null, trade: numberOf(event.order.key), text: `${EXIT_LABEL[exitReasonOf(event.message)] ?? "Exit"}: SELL × ${event.order.quantity ?? "—"} @ ${event.order.price != null ? rupee(event.order.price) : "—"}, position closed`, pnl: event.pnl ?? null });
+    } else if ((event.kind === "ERROR" || event.kind === "INFO") && !event.key.startsWith("eval:") && !event.key.startsWith("reject:")) {
+      list.push({ id: event.key, time: event.time, kind: event.kind === "ERROR" ? "rejected" : "info", side: event.side ?? null, trade: numberOf(event.order?.key), text: event.message, pnl: null });
+    }
+  }
+  // Newest first; within one minute the later step first (a fill above the signal that caused it).
+  const rank: Record<ActivityItem["kind"], number> = { closed: 4, opened: 3, rejected: 2, signal: 1, info: 0 };
+  return list.sort((a, b) => b.time - a.time || rank[b.kind] - rank[a.kind] || (a.id < b.id ? 1 : -1));
 }

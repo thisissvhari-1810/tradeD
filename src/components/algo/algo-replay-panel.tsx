@@ -1,20 +1,17 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
-import { Bot, ChevronDown, History, OctagonX, Play } from "lucide-react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, History, LogIn, LogOut, OctagonX, Play, Radio, Zap } from "lucide-react";
 import { cx } from "@/components/ui";
-import { algoTrades, runDiagnostics, skippedSignals } from "@/lib/algo/chart-replay";
+import { activityFeed, algoTrades, runDiagnostics, skippedSignals, tradeSlots, type ActivityItem, type AlgoTrade, type SlotState } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
+import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
 
-const inr = (value: number | null | undefined, signed = false) => {
-  if (value == null || !Number.isFinite(value)) return "—";
-  const text = `₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  return signed ? `${value > 0 ? "+" : value < 0 ? "−" : ""}${text}` : value < 0 ? `−${text}` : text;
-};
+const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
 const ist = (seconds: number | null | undefined) => (seconds ? new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16) : "—");
-const tone = (value: number | null | undefined) => (value == null ? "text-muted" : value > 0 ? "text-profit" : value < 0 ? "text-loss" : "text-text");
+const tone = toneOf;
 
 const BADGE: Partial<Record<AlgoStatus, { label: string; tone: string }>> = {
   DISABLED: { label: "Off", tone: "bg-sunken text-muted" },
@@ -31,19 +28,33 @@ const BADGE: Partial<Record<AlgoStatus, { label: string; tone: string }>> = {
   RISK_LOCKED: { label: "Risk lock", tone: "bg-loss-soft text-loss" },
 };
 
+const SLOT_TONE: Record<SlotState["state"], string> = {
+  Waiting: "text-muted",
+  "Order pending": "text-warning",
+  Open: "text-profit",
+  "Exit pending": "text-warning",
+  Completed: "text-text-2",
+  Rejected: "text-loss",
+};
+
+/** Live figures of the open position (from the server's replay-time mark), keyed to its trade. */
+export type LivePosition = NonNullable<NonNullable<ChartAlgo["run"]>["position"]>;
+
 /**
- * The running algo order panel beside the replay chart: the switch, the open position with its live
- * replay P&L, stop-loss and target on the option's own premium, and the manual exit. Phones show it as a
- * collapsible section under the chart.
+ * The Algo trading dashboard beside the replay chart. Every figure comes from the run's log and the
+ * Algo account's ledger, both refreshed with each processed replay minute: the account, the three entry
+ * slots, live trade cards (each opens its own detail view), the activity feed, completed trades and the
+ * signals that were not traded. Phones show it folded under the chart.
  */
-export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selectedTrade, onSelectTrade }: {
+export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selectedTrade, onOpenTrade }: {
   algo: ChartAlgo;
   cursor: number | null;
   chartSymbol: string;
   onHistory: () => void;
   /** The trade highlighted on the chart (its entry order key). */
   selectedTrade: string | null;
-  onSelectTrade: (entryKey: string | null) => void;
+  /** Opens a trade's detail view (and selects it). */
+  onOpenTrade: (entryKey: string) => void;
 }) {
   // Phones start with the panel folded to its header (the chart keeps the screen); desktops show it open.
   const [open, setOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 1023px)").matches);
@@ -59,148 +70,152 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   const badge = position?.exit ? BADGE.EXIT_PENDING! : BADGE[status] ?? BADGE.DISABLED!;
   const account = data?.account;
   const legacyRun = data?.runWallet === "DEMO" && run != null;
+  const max = run?.config.maxTrades ?? data?.config.maxTrades ?? 3;
   const trades = run ? algoTrades(run.events, position ? { entryKey: position.entryKey, exitPending: Boolean(position.exit) } : null) : [];
-  const activeTrade = position ? trades.find((trade) => trade.entryKey === position.entryKey) ?? null : null;
   const completed = trades.filter((trade) => trade.status === "COMPLETED" && trade.realized != null).reverse();
+  const openTrades = trades.filter((trade) => trade.status !== "COMPLETED");
   const skipped = run ? skippedSignals(run.events) : [];
+  const slots = tradeSlots(trades, skipped, Boolean(state?.pending), max);
   const diagnostics = run ? runDiagnostics(run.events, run.enabledLines) : null;
-  const optionSymbol = position ? `${position.contract.underlying} ${position.contract.strike} ${position.contract.right === "CE" ? "CE" : "PE"}` : "";
+  const netPnl = rupeesOf(account?.netPnl);
+  const equity = rupeesOf(account?.equity);
 
   return (
-    <aside className="flex min-h-0 shrink-0 flex-col border-border bg-panel text-data max-lg:max-h-[45dvh] max-lg:border-t lg:w-[20rem] lg:border-l" aria-label="Algo trading">
-      <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
+    <aside className="flex min-h-0 shrink-0 flex-col border-border bg-panel text-[0.8125rem] max-lg:max-h-[50dvh] max-lg:border-t lg:w-[23rem] lg:border-l xl:w-[26rem]" aria-label="Algo trading">
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
-        <h2 className="font-semibold">Algo</h2>
-        <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", badge.tone)} role="status">{badge.label}</span>
-        <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-micro font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
-        {position && !open ? <span className={cx("num whitespace-nowrap font-semibold lg:hidden", tone(position.unrealized))}>{inr(position.unrealized, true)}</span> : null}
-        <button type="button" aria-label="Algo session history" title="Session history" className="ml-auto grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-hover hover:text-text" onClick={onHistory}><History className="h-4 w-4" aria-hidden /></button>
+        <h2 className="text-base font-semibold">Algo</h2>
+        <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
+        <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
+        {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
+        <span className="num ml-auto hidden text-xs text-muted sm:inline">{ist(cursor)} IST</span>
+        <button type="button" aria-label="Algo session history" title="Session history" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-hover hover:text-text max-sm:ml-auto" onClick={onHistory}><History className="h-4 w-4" aria-hidden /></button>
         <button type="button" aria-label={open ? "Collapse algo panel" : "Expand algo panel"} aria-expanded={open} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-hover hover:text-text lg:hidden" onClick={() => setOpen((value) => !value)}><ChevronDown className={cx("h-4 w-4 transition-transform", !open && "-rotate-90")} aria-hidden /></button>
       </header>
-      <div className={cx("min-h-0 flex-1 space-y-2.5 overflow-y-auto p-3", !open && "max-lg:hidden")}>
-        {algo.error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{algo.error} <button type="button" className="ml-1 underline" onClick={algo.clearError}>Dismiss</button></p> : null}
-        {!data ? <p className="text-micro text-muted">Loading the algo…</p> : null}
 
+      <div className={cx("min-h-0 flex-1 space-y-3 overflow-y-auto p-3", !open && "max-lg:hidden")}>
+        {algo.error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-xs text-loss" role="alert">{algo.error} <button type="button" className="ml-1 underline" onClick={algo.clearError}>Dismiss</button></p> : null}
+        {!data ? <p className="text-muted">Loading the algo…</p> : null}
+
+        {/* 1. Account overview */}
+        {account ? (
+          <section className="rounded-xl border border-border bg-gradient-to-br from-elevated to-panel p-3 shadow-e1" aria-label="Algo account overview">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted">Algo account · total P&amp;L</span>
+              <span className="num rounded-pill bg-sunken px-2 py-0.5 text-xs text-text-2">Entries {trades.length}/{max}</span>
+            </div>
+            <p className="mt-1 text-[2rem] font-semibold leading-tight"><LiveMoney value={netPnl} signed tone missing="—" /></p>
+            <div className="mt-1 flex items-baseline justify-between gap-2">
+              <span className="text-xs text-muted">Equity</span>
+              <span className="text-xl font-semibold"><LiveMoney value={equity} missing="—" /></span>
+            </div>
+            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-border-soft pt-2">
+              <Metric label="Available cash"><LiveMoney value={rupeesOf(account.cashAvailable)} /></Metric>
+              <Metric label="Open-position value"><LiveMoney value={rupeesOf(account.holdingsValue)} /></Metric>
+              <Metric label="Unrealized P&L"><LiveMoney value={rupeesOf(account.unrealized)} signed tone /></Metric>
+              <Metric label="Realized P&L"><LiveMoney value={rupeesOf(account.realized)} signed tone /></Metric>
+            </dl>
+            <details className="mt-2 text-xs">
+              <summary className="cursor-pointer text-muted hover:text-text">Account breakdown</summary>
+              <div className="mt-2"><AlgoAccountFigures account={account} compact /></div>
+              <p className="mt-1 text-muted">Equity = available cash + reserved funds + open-position value. Total P&amp;L = equity − initial capital, after charges (realized and unrealized are not added twice).</p>
+              {legacyRun ? <p className="mt-1 text-warning">This replay session started before the Algo account existed, so its trades stay on your demo wallet until it ends.</p> : null}
+            </details>
+          </section>
+        ) : null}
+
+        {/* Algo switch and mode */}
         {data ? (
-          <label className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5">
+          <label className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-border-soft bg-sunken/50 px-3 py-2">
             <span className="min-w-0">
-              <span className="block font-medium">Enable Algo</span>
-              <span className="block text-micro text-muted">
-                Mode: {replayMode ? "Chart replay (historical paper, replay clock)" : data.config.mode === "PAPER" ? "Paper at live prices. Enabling switches it to chart replay." : "Live (unavailable)"}
-              </span>
-              <span className="block text-micro text-muted">{enabled ? (run?.armed ? "Confirmed: trading this replay." : "Press Play to confirm and start.") : "Replay plays without trading."}</span>
+              <span className="block font-semibold">Enable Algo</span>
+              <span className="block text-xs text-muted">{replayMode ? "Chart replay · historical paper · replay clock" : data.config.mode === "PAPER" ? "Paper at live prices. Enabling switches it to chart replay." : "Live (unavailable)"}</span>
+              <span className="block text-xs text-muted">{enabled ? (run?.armed ? "Confirmed: trading this replay." : "Press Play to confirm and start.") : "Replay plays without trading."}</span>
             </span>
             <input type="checkbox" role="switch" className="oc-check" aria-label="Enable Algo for this replay" disabled={algo.busy === "mode"} checked={enabled} onChange={(event) => void algo.setEnabled(event.target.checked)} />
           </label>
         ) : null}
+        {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
-        {data && data.config.underlying !== chartSymbol ? (
-          <p className="text-micro text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p>
-        ) : null}
-
-        {/* A. Account summary (the Algo account's ledger) */}
-        {account ? (
-          // Folded to its one-line summary while a trade is open, so the position card leads.
-          <details key={position ? "trading" : "flat"} className="group rounded-md border border-border-soft" open={!position}>
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2 py-1.5">
-              <span className="eyebrow">Algo account</span>
-              <span className="num text-micro"><span className="text-muted">Equity </span><span className="font-semibold">{account.equity}</span><span className="text-muted"> · Entries </span>{state?.tradesToday ?? 0}/{data?.config.maxTrades}</span>
+        {/* 2. Strategy and replay status */}
+        {run && diagnostics ? (
+          <details className="rounded-lg border border-border-soft" aria-label="Algo processing">
+            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
+              <Radio className={cx("h-3.5 w-3.5", run.armed ? "text-profit live-dot rounded-full" : "text-muted")} aria-hidden />
+              <span className="min-w-0 flex-1 truncate text-xs text-text-2" role="status">{diagnostics.lastCandle != null ? `${ist(diagnostics.lastCandle)} · ` : ""}{diagnostics.lastOutcome}</span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted" aria-hidden />
             </summary>
-            <div className="border-t border-border-soft px-2 py-1.5">
-              <AlgoAccountFigures account={account} compact />
-              {legacyRun ? <p className="mt-1 text-micro text-warning">This replay session started before the Algo account existed, so its trades stay on your demo wallet until it ends. New sessions use the Algo account.</p> : null}
+            <div className="border-t border-border-soft px-3 py-2 text-xs">
+              <p className="num text-muted">Replay {ist(cursor)} IST · processed to {ist(run.processedThrough)} IST</p>
+              <dl className="mt-1 grid grid-cols-4 gap-x-2 gap-y-1">
+                <Item label="Lines on" value={`${diagnostics.enabledLines}/${run.lineCount}`} />
+                <Item label="Checked" value={String(diagnostics.linesEvaluated)} />
+                <Item label="Candles" value={String(diagnostics.candlesEvaluated)} />
+                <Item label="Crossings" value={String(diagnostics.crossings)} />
+                <Item label="Signals" value={String(diagnostics.signals)} />
+                <Item label="Accepted" value={String(diagnostics.accepted)} />
+                <Item label="Rejected" value={String(diagnostics.rejected)} />
+                <Item label="Entries" value={`${trades.length}/${max}`} />
+              </dl>
+              {diagnostics.lastRejection ? <p className="mt-1 text-loss">Last rejection {ist(diagnostics.lastRejection.time)} IST: {diagnostics.lastRejection.reason}</p> : null}
             </div>
           </details>
         ) : null}
 
-        {/* Processing diagnostics: what the algo has done with the replay so far */}
-        {run && diagnostics ? (
-          <section className="rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5 text-micro" aria-label="Algo processing">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="eyebrow">Processing</span>
-              <span className="num text-muted">replay {ist(cursor)} · processed to {ist(run.processedThrough)} IST</span>
-            </div>
-            <p className="mt-0.5 text-text-2" role="status">{diagnostics.lastCandle != null ? `${ist(diagnostics.lastCandle)} candle: ` : ""}{diagnostics.lastOutcome}</p>
-            <dl className="mt-1 grid grid-cols-4 gap-x-2 gap-y-0.5">
-              <Item label="Lines on" value={`${diagnostics.enabledLines}/${run.lineCount}`} />
-              <Item label="Checked" value={String(diagnostics.linesEvaluated)} />
-              <Item label="Candles" value={String(diagnostics.candlesEvaluated)} />
-              <Item label="Crossings" value={String(diagnostics.crossings)} />
-              <Item label="Signals" value={String(diagnostics.signals)} />
-              <Item label="Accepted" value={String(diagnostics.accepted)} />
-              <Item label="Rejected" value={String(diagnostics.rejected)} />
-              <Item label="Entries" value={`${trades.length}/${run.config.maxTrades}`} />
-            </dl>
-            {diagnostics.lastRejection ? <p className="mt-1 text-loss">Last rejection {ist(diagnostics.lastRejection.time)} IST: {diagnostics.lastRejection.reason}</p> : null}
-          </section>
-        ) : null}
-
-        {/* A. Trade slots: only filled entries take a slot; rejected signals are listed below */}
+        {/* 3. Three entry slots */}
         {run ? (
-          <ol className="grid grid-cols-3 gap-1.5" aria-label="Trade slots">
-            {Array.from({ length: run.config.maxTrades }, (_, index) => {
-              const trade = trades[index];
-              const label = !trade ? (index === trades.length && state?.pending ? "Signal detected" : "Waiting") : trade.status === "OPEN" ? "Open" : trade.status === "EXIT_PENDING" ? "Exit pending" : "Completed";
+          <ol className="grid grid-cols-3 gap-2" aria-label="Trade slots">
+            {slots.map((slot) => {
+              const trade = slot.trade;
+              const live = trade && position && trade.entryKey === position.entryKey ? position.unrealized : null;
+              const value = trade ? (trade.realized ?? live) : null;
               return (
-                <li key={index}>
-                  <button type="button" disabled={!trade} aria-pressed={trade ? selectedTrade === trade.entryKey : undefined} className={cx("w-full rounded-md border px-1.5 py-1 text-left disabled:cursor-default", trade && selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft", trade?.status === "OPEN" ? "bg-profit-soft/40" : "")} onClick={() => trade && onSelectTrade(selectedTrade === trade.entryKey ? null : trade.entryKey)}>
-                    <span className="block text-micro text-muted">Trade {index + 1}/{run.config.maxTrades}</span>
-                    <span className={cx("block text-micro font-semibold", trade ? (trade.side === "CALL" ? "text-profit" : "text-loss") : "text-muted")}>{trade ? `BUY ${trade.side}` : "—"}</span>
-                    <span className={cx("block truncate text-micro", trade?.realized != null ? tone(trade.realized) : "text-text-2")}>{trade?.realized != null ? inr(trade.realized, true) : label}</span>
+                <li key={slot.number}>
+                  <button
+                    type="button"
+                    disabled={!trade}
+                    aria-pressed={trade ? selectedTrade === trade.entryKey : undefined}
+                    title={slot.reason ?? undefined}
+                    className={cx("w-full rounded-lg border px-2 py-1.5 text-left transition-colors disabled:cursor-default", trade && selectedTrade === trade.entryKey ? "border-primary ring-1 ring-primary" : "border-border-soft", trade && "hover:bg-hover", slot.state === "Open" && "bg-profit-soft/30")}
+                    onClick={() => trade && onOpenTrade(trade.entryKey)}
+                  >
+                    <span className="flex items-baseline justify-between text-xs text-muted"><span>Trade {slot.number}/{max}</span>{slot.time ? <span className="num">{ist(slot.time)}</span> : null}</span>
+                    <span className={cx("block text-sm font-semibold", trade ? (trade.side === "CALL" ? "text-profit" : "text-loss") : "text-muted")}>{trade ? `BUY ${trade.side}` : "—"}</span>
+                    <span className={cx("block text-xs font-medium", SLOT_TONE[slot.state])}>{slot.state}</span>
+                    {trade ? <span className="block text-sm font-semibold"><LiveMoney value={value} signed tone missing="—" /></span> : slot.reason ? <span className="line-clamp-2 block text-xs text-loss">{slot.reason}</span> : null}
                   </button>
                 </li>
               );
             })}
           </ol>
-        ) : null}
-
-        {/* B. Active trade */}
-        {position ? (
-          <section className="rounded-md border-2 border-border p-2" aria-label="Open algo position">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="font-semibold">{activeTrade ? `Trade ${activeTrade.number}/${run?.config.maxTrades ?? 3} — ` : ""}<span className={position.side === "CALL" ? "text-profit" : "text-loss"}>BUY {position.side}</span></p>
-              <span className="whitespace-nowrap rounded-pill bg-sunken px-1.5 text-micro font-medium">{position.exit ? "EXIT PENDING" : "OPEN"}</span>
-            </div>
-            <p className="text-text-2">{optionSymbol} · exp {position.contract.expiry}</p>
-            <p className="text-micro text-muted">Signal {activeTrade ? `${ist(activeTrade.signalTime + 60)} IST${activeTrade.lines.length ? ` · ${activeTrade.lines.join(", ")}` : ""}` : "—"} · entered {ist(position.openedAt)} IST</p>
-            <p className={cx("num mt-1 text-xl font-semibold leading-tight", tone(position.unrealized))}>{inr(position.unrealized, true)} <span className="text-data font-medium">{position.unrealizedPercent == null ? "" : `(${position.unrealizedPercent > 0 ? "+" : ""}${position.unrealizedPercent.toFixed(2)}%)`}</span></p>
-            <p className="text-micro text-muted">Unrealized P&amp;L, after entry charges · premium as of {ist(position.premiumAt)} IST</p>
-            <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} />
-            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
-              <Item label="Entry premium" value={inr(position.avg)} />
-              <Item label="Current premium" value={inr(position.premium)} />
-              <Item label="Lots × lot size" value={`${position.lots} × ${position.contract.lotSize}`} />
-              <Item label="Quantity" value={String(position.quantity)} />
-              <Item label="Entry cost" value={inr(position.invested)} />
-              <Item label="Current value" value={inr(position.value)} />
-              <Item label="Stop-loss (premium)" value={inr(position.stop)} tone="text-loss" hint={position.premium != null ? (position.premium <= position.stop ? "reached" : `${inr(position.premium - position.stop)} away`) : undefined} />
-              <Item label="Target (premium)" value={inr(position.target)} tone="text-profit" hint={position.premium != null ? (position.premium >= position.target ? "reached" : `${inr(position.target - position.premium)} away`) : undefined} />
-            </dl>
-            <button type="button" className="mt-2 h-9 w-full rounded-md bg-loss font-semibold text-on-signal hover:brightness-110 disabled:opacity-50" disabled={Boolean(algo.busy) || Boolean(position.exit) || cursor == null} onClick={() => setConfirmExit(true)}>
-              {position.exit ? "Exit pending…" : algo.busy === "exit" ? "Exiting…" : "Exit Position"}
-            </button>
-          </section>
-        ) : run ? (
-          <p className="rounded-md border border-dashed border-border p-2 text-micro text-muted">No open position. {state?.lastSignal ? `Last signal ${ist(state.lastSignal.time + 60)} IST: ${state.lastSignal.explanation}` : "No signal yet in this session."}</p>
         ) : data ? (
-          <p className="text-micro leading-snug text-muted">When enabled and confirmed, the algo checks each completed 1-minute candle of {data.config.underlying} against your enabled Strategy lines. A body crossing down buys the ATM PUT, up buys the ATM CALL, priced from that contract&apos;s real 1-minute premium history at the replay time.</p>
+          <p className="text-xs leading-snug text-muted">When enabled and confirmed, the algo checks each completed 1-minute candle of {data.config.underlying} against your enabled Strategy lines. A body crossing down buys the ATM PUT, up buys the ATM CALL, priced from that contract&apos;s real 1-minute premium history at the replay time.</p>
         ) : null}
 
-        {/* C. Completed trades */}
+        {/* 4. Active trades */}
+        {openTrades.map((trade) => (
+          <TradeCard key={trade.entryKey} trade={trade} max={max} position={position && position.entryKey === trade.entryKey ? position : null} selected={selectedTrade === trade.entryKey} onOpen={() => onOpenTrade(trade.entryKey)} onExit={() => setConfirmExit(true)} exiting={algo.busy === "exit"} />
+        ))}
+        {run && !openTrades.length ? <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted">No open position. {state?.lastSignal ? `Last signal ${ist(state.lastSignal.time + 60)} IST: ${state.lastSignal.explanation}` : "Waiting for a qualifying line crossing."}</p> : null}
+
+        {/* 5. Activity */}
+        {run ? <ActivityFeed items={activityFeed(run.events)} onOpenTrade={(number) => { const trade = trades.find((item) => item.number === number); if (trade) onOpenTrade(trade.entryKey); }} /> : null}
+
+        {/* 6. Completed trades */}
         {completed.length ? (
           <section aria-label="Completed trades">
-            <p className="eyebrow mb-1">Completed trades</p>
-            <ol className="space-y-1">
+            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">Completed trades</p>
+            <ol className="space-y-1.5">
               {completed.map((trade) => (
                 <li key={trade.entryKey}>
-                  <button type="button" aria-pressed={selectedTrade === trade.entryKey} className={cx("w-full rounded-md border px-2 py-1 text-left hover:bg-hover", selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft")} onClick={() => onSelectTrade(selectedTrade === trade.entryKey ? null : trade.entryKey)}>
-                    <span className="flex items-baseline gap-1.5 text-micro">
-                      <span className="font-semibold">T{trade.number}</span>
-                      <span className={trade.side === "CALL" ? "font-semibold text-profit" : "font-semibold text-loss"}>{trade.side}</span>
-                      <span className="text-muted">{trade.strike} {trade.right} × {trade.quantity}</span>
-                      <span className={cx("num ml-auto font-semibold", tone(trade.realized))}>{inr(trade.realized, true)}{trade.returnPercent == null ? "" : ` (${trade.returnPercent.toFixed(1)}%)`}</span>
+                  <button type="button" aria-pressed={selectedTrade === trade.entryKey} className={cx("w-full rounded-lg border px-3 py-2 text-left hover:bg-hover", selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft")} onClick={() => onOpenTrade(trade.entryKey)}>
+                    <span className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold text-muted">T{trade.number}</span>
+                      <span className={cx("font-semibold", trade.side === "CALL" ? "text-profit" : "text-loss")}>BUY {trade.side}</span>
+                      <span className="text-xs text-muted">{trade.strike} {trade.right}</span>
+                      <span className={cx("num ml-auto text-base font-semibold", tone(trade.realized))}>{inr(trade.realized, true)}</span>
                     </span>
-                    <span className="num block text-micro text-text-2">{ist(trade.entryTime)} ₹{trade.entryPremium.toFixed(2)} → {ist(trade.exitTime)} ₹{trade.exitPremium?.toFixed(2) ?? "—"} · {trade.exitReason} · {trade.durationMinutes ?? "—"} min</span>
+                    <span className="num block text-xs text-text-2">{ist(trade.entryTime)} {inr(trade.entryPremium)} → {ist(trade.exitTime)} {inr(trade.exitPremium)} · {trade.exitReason} · {trade.returnPercent == null ? "" : `${trade.returnPercent >= 0 ? "+" : ""}${trade.returnPercent.toFixed(2)}% · `}{trade.durationMinutes ?? "—"} min</span>
                   </button>
                 </li>
               ))}
@@ -208,52 +223,38 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
           </section>
         ) : null}
 
-        {/* D. Rejected / skipped signals */}
+        {/* 7. Rejected / skipped */}
         {run ? (
-          <section aria-label="Rejected and skipped signals">
-            <p className="eyebrow mb-1">Rejected / skipped ({skipped.length})</p>
-            {skipped.length ? (
-              <ol className="max-h-40 space-y-1 overflow-y-auto">
-                {skipped.slice(0, 20).map((row) => (
-                  <li key={row.id} className="rounded-md border border-loss/20 px-2 py-1 text-micro">
-                    <span className="flex items-baseline gap-1.5"><span className="num text-muted">{ist(row.time)}</span><span className="font-semibold">{row.side ? `BUY ${row.side}` : "No entry"}</span>{row.lines.length ? <span className="truncate text-muted">{row.lines.join(", ")}</span> : null}</span>
-                    <span className="block text-loss">{row.reason}</span>
-                  </li>
-                ))}
-              </ol>
-            ) : <p className="text-micro text-muted">None. Candles without a qualifying line crossing are counted under Processing.</p>}
-          </section>
+          <details className="rounded-lg border border-border-soft" aria-label="Rejected and skipped signals">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted">Rejected / skipped ({skipped.length})</summary>
+            <div className="border-t border-border-soft px-3 py-2">
+              {skipped.length ? (
+                <ol className="max-h-48 space-y-1.5 overflow-y-auto">
+                  {skipped.slice(0, 30).map((row) => (
+                    <li key={row.id} className="text-xs">
+                      <span className="flex items-baseline gap-1.5"><span className="num text-muted">{ist(row.time)}</span><span className="font-semibold">{row.side ? `BUY ${row.side}` : "No entry"}</span>{row.lines.length ? <span className="truncate text-muted">{row.lines.join(", ")}</span> : null}</span>
+                      <span className="block text-loss">{row.reason}</span>
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="text-xs text-muted">None. Candles without a qualifying line crossing are counted under the processing status.</p>}
+            </div>
+          </details>
         ) : null}
 
         {run && (run.armed || position) ? (
-          <div className="flex flex-wrap gap-1.5">
-            {run.armed ? <button type="button" className="h-8 rounded-md border border-border px-2.5 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(algo.busy)} onClick={() => void algo.setEnabled(false)}>Stop new entries</button> : null}
-            <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md border border-loss/50 px-2.5 font-medium text-loss hover:bg-loss-soft disabled:opacity-50" style={{ color: "var(--loss)" }} disabled={Boolean(algo.busy) || cursor == null} onClick={() => setConfirmEmergency(true)}><OctagonX className="h-3.5 w-3.5" aria-hidden />Emergency stop</button>
+          <div className="flex flex-wrap gap-2">
+            {run.armed ? <button type="button" className="h-9 rounded-md border border-border px-3 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(algo.busy)} onClick={() => void algo.setEnabled(false)}>Stop new entries</button> : null}
+            <button type="button" className="inline-flex h-9 items-center gap-1 rounded-md border border-loss/50 px-3 font-medium text-loss hover:bg-loss-soft disabled:opacity-50" style={{ color: "var(--loss)" }} disabled={Boolean(algo.busy) || cursor == null} onClick={() => setConfirmEmergency(true)}><OctagonX className="h-3.5 w-3.5" aria-hidden />Emergency stop</button>
           </div>
         ) : null}
-        <p className="text-micro leading-snug text-muted">Algo account only (₹1,00,000 practice capital, separate from your demo funds). Fills come from historical 1-minute option data at the replay time; nothing is ever sent to a broker from replay.</p>
+        <p className="text-xs leading-snug text-muted">Algo account only (₹1,00,000 practice capital, separate from your demo funds). Fills come from historical 1-minute option data at the replay time; nothing is ever sent to a broker from replay.</p>
       </div>
 
-      {confirmExit && position ? (
-        <Dialog title="Exit this position?" onClose={() => setConfirmExit(false)}>
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-            <Item label="Contract" value={`${position.contract.underlying} ${position.contract.strike} ${position.contract.right} · ${position.contract.expiry}`} />
-            <Item label="Quantity to close" value={String(position.quantity)} />
-            <Item label="Current premium" value={inr(position.premium)} />
-            <Item label="Estimated exit value" value={inr(position.value)} />
-            <Item label="Unrealized P&L" value={inr(position.unrealized, true)} tone={tone(position.unrealized)} />
-            <Item label="Stop-loss / target" value={`${inr(position.stop)} / ${inr(position.target)}`} />
-          </dl>
-          <p className="mt-3 text-micro text-muted">The exit fills at the last completed 1-minute premium at the replay time ({ist(cursor)} IST), less one tick of slippage per your settings, whether the replay is playing or paused. Minutes up to the replay time are checked first, so a stop-loss or target already reached is applied instead. Final realized P&amp;L includes charges and can differ from the estimate.</p>
-          <div className="mt-4 flex justify-end gap-2">
-            <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={() => setConfirmExit(false)}>Cancel</button>
-            <button type="button" className="h-8 rounded-md bg-loss px-3 font-semibold text-on-signal disabled:opacity-50" disabled={Boolean(algo.busy) || cursor == null} onClick={() => { setConfirmExit(false); if (cursor != null) void algo.exit(cursor); }}>Confirm Exit</button>
-          </div>
-        </Dialog>
-      ) : null}
+      {confirmExit && position ? <ExitConfirm algo={algo} position={position} cursor={cursor} onClose={() => setConfirmExit(false)} /> : null}
       {confirmEmergency ? (
         <Dialog title="Emergency risk stop?" onClose={() => setConfirmEmergency(false)}>
-          <p className="text-micro text-text-2">New algo entries stop immediately and {position ? "the open position is exited at the last completed premium at the replay time" : "no position is open"}. The replay itself keeps its place; you can turn the algo on again later.</p>
+          <p className="text-xs text-text-2">New algo entries stop immediately and {position ? "the open position is exited at the last completed premium at the replay time" : "no position is open"}. The replay itself keeps its place; you can turn the algo on again later.</p>
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={() => setConfirmEmergency(false)}>Cancel</button>
             <button type="button" className="h-8 rounded-md bg-loss px-3 font-semibold text-on-signal" onClick={() => { setConfirmEmergency(false); if (cursor != null) void algo.exit(cursor, true).then(() => algo.setEnabled(false)); }}>Stop now</button>
@@ -264,8 +265,126 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   );
 }
 
+/** One open trade, with its live premium and P&L (from the replay-time mark) and its detail view. */
+function TradeCard({ trade, max, position, selected, onOpen, onExit, exiting }: { trade: AlgoTrade; max: number; position: LivePosition | null; selected: boolean; onOpen: () => void; onExit: () => void; exiting: boolean }) {
+  const call = trade.side === "CALL";
+  return (
+    <section className={cx("rounded-xl border-2 bg-gradient-to-br p-3 shadow-e1", call ? "from-profit-soft/30 to-panel" : "from-loss-soft/30 to-panel", selected ? "border-primary" : "border-border")} aria-label={`Trade ${trade.number} of ${max}`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-base font-semibold">T{trade.number} · <span className={call ? "text-profit" : "text-loss"}>BUY {trade.side}</span></p>
+        <span className="inline-flex items-center gap-1 text-xs font-semibold"><CircleDot className={cx("h-3 w-3", trade.status === "OPEN" ? "text-profit" : "text-warning")} aria-hidden />{trade.status === "OPEN" ? "OPEN" : "EXIT PENDING"}</span>
+      </div>
+      <p className="text-sm text-text-2">{trade.underlying} {trade.strike} {trade.right} · {trade.expiry}</p>
+      <p className="mt-2 text-xs font-medium uppercase tracking-wide text-muted">Live P&amp;L</p>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[1.875rem] font-semibold leading-tight"><LiveMoney value={position?.unrealized} signed tone missing="Price unavailable" /></span>
+        <span className={cx("num text-base font-semibold", tone(position?.unrealizedPercent))}>{position?.unrealizedPercent == null ? "" : `${position.unrealizedPercent > 0 ? "+" : ""}${position.unrealizedPercent.toFixed(2)}%`}</span>
+      </div>
+      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+        <Metric label="Entry">{inr(trade.entryPremium)}</Metric>
+        <Metric label={`Live${position?.premiumAt ? ` · ${ist(position.premiumAt)}` : ""}`}><LiveMoney value={position?.premium} className="text-lg font-semibold" /></Metric>
+        <Metric label="Qty">{trade.quantity}</Metric>
+        <Metric label="Value"><LiveMoney value={position?.value} /></Metric>
+      </dl>
+      {position ? <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} /> : null}
+      <div className="mt-2 flex gap-2">
+        <button type="button" className="inline-flex h-9 flex-1 items-center justify-center gap-1 rounded-md border border-border font-semibold hover:bg-hover" onClick={onOpen}>View trade details <ArrowRight className="h-4 w-4" aria-hidden /></button>
+        <button type="button" className="h-9 rounded-md bg-loss px-3 font-semibold text-on-signal hover:brightness-110 disabled:opacity-50" disabled={!position || Boolean(position.exit) || exiting} onClick={onExit}>{position?.exit ? "Exiting…" : "Exit"}</button>
+      </div>
+    </section>
+  );
+}
+
+const FEED_ICON: Record<ActivityItem["kind"], ReactNode> = {
+  signal: <Zap className="h-3.5 w-3.5 text-warning" aria-hidden />,
+  opened: <LogIn className="h-3.5 w-3.5 text-profit" aria-hidden />,
+  closed: <LogOut className="h-3.5 w-3.5 text-info" aria-hidden />,
+  rejected: <Ban className="h-3.5 w-3.5 text-loss" aria-hidden />,
+  info: <CircleDot className="h-3.5 w-3.5 text-muted" aria-hidden />,
+};
+type FeedFilter = "all" | "CALL" | "PUT" | "opened" | "closed" | "rejected";
+
+/**
+ * The algo's activity, newest first. New items arrive at the top; when the reader has scrolled down to
+ * older items, the view keeps their place instead of jumping back to the top.
+ */
+function ActivityFeed({ items, onOpenTrade }: { items: ActivityItem[]; onOpenTrade: (number: number) => void }) {
+  const [filter, setFilter] = useState<FeedFilter>("all");
+  const list = items.filter((item) => filter === "all" || (filter === "CALL" || filter === "PUT" ? item.side === filter : item.kind === filter)).slice(0, 60);
+  const box = useRef<HTMLOListElement>(null);
+  const before = useRef<{ first: string | null; height: number }>({ first: null, height: 0 });
+  useLayoutEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    const first = list[0]?.id ?? null;
+    if (before.current.first && first !== before.current.first && node.scrollTop > 0) node.scrollTop += node.scrollHeight - before.current.height;
+    before.current = { first, height: node.scrollHeight };
+  });
+  const filters: Array<[FeedFilter, string]> = [["all", "All"], ["CALL", "CALL"], ["PUT", "PUT"], ["opened", "Open"], ["closed", "Completed"], ["rejected", "Rejected"]];
+  return (
+    <section aria-label="Algo activity">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Activity</span>
+        <div className="flex flex-wrap justify-end gap-0.5" role="group" aria-label="Filter activity">
+          {filters.map(([key, label]) => (
+            <button key={key} type="button" aria-pressed={filter === key} className={cx("h-6 rounded px-1.5 text-xs", filter === key ? "bg-primary-soft font-semibold text-primary" : "text-muted hover:text-text")} onClick={() => setFilter(key)}>{label}</button>
+          ))}
+        </div>
+      </div>
+      {list.length ? (
+        <ol ref={box} className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border-soft p-1.5">
+          {list.map((item) => (
+            <li key={item.id} className="anim-rise flex gap-2 rounded-md px-1.5 py-1 hover:bg-hover">
+              <span className="mt-0.5">{FEED_ICON[item.kind]}</span>
+              <span className="min-w-0 flex-1 text-xs">
+                <span className="flex items-baseline gap-1.5">
+                  <span className="num text-muted">{ist(item.time)}</span>
+                  {item.trade ? <button type="button" className="font-semibold text-primary underline-offset-2 hover:underline" onClick={() => onOpenTrade(item.trade!)}>T{item.trade}</button> : null}
+                  {item.side ? <span className={cx("font-semibold", item.side === "CALL" ? "text-profit" : "text-loss")}>{item.side}</span> : null}
+                  {item.pnl != null ? <span className={cx("num ml-auto font-semibold", tone(item.pnl))}>{inr(item.pnl, true)}</span> : null}
+                </span>
+                <span className="block text-text-2">{item.text}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted">No activity{filter === "all" ? " yet" : " for this filter"}.</p>}
+    </section>
+  );
+}
+
+/** The manual exit's confirmation (shared by the trade card and the trade detail view). */
+export function ExitConfirm({ algo, position, cursor, onClose }: { algo: ChartAlgo; position: LivePosition; cursor: number | null; onClose: () => void }) {
+  return (
+    <Dialog title="Exit this position?" onClose={onClose}>
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+        <Item label="Contract" value={`${position.contract.underlying} ${position.contract.strike} ${position.contract.right} · ${position.contract.expiry}`} />
+        <Item label="Quantity to close" value={String(position.quantity)} />
+        <Item label="Current premium" value={inr(position.premium)} />
+        <Item label="Estimated exit value" value={inr(position.value)} />
+        <Item label="Unrealized P&L" value={inr(position.unrealized, true)} tone={tone(position.unrealized)} />
+        <Item label="Stop-loss / target" value={`${inr(position.stop)} / ${inr(position.target)}`} />
+      </dl>
+      <p className="mt-3 text-xs text-muted">The exit fills at the last completed 1-minute premium at the replay time ({ist(cursor)} IST), less one tick of slippage per your settings, whether the replay is playing or paused. Minutes up to the replay time are checked first, so a stop-loss or target already reached is applied instead. Final realized P&amp;L includes charges and can differ from the estimate.</p>
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onClose}>Cancel</button>
+        <button type="button" className="h-8 rounded-md bg-loss px-3 font-semibold text-on-signal disabled:opacity-50" disabled={Boolean(algo.busy) || cursor == null || Boolean(position.exit)} onClick={() => { onClose(); if (cursor != null) void algo.exit(cursor); }}>Confirm Exit</button>
+      </div>
+    </Dialog>
+  );
+}
+
+function Metric({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="truncate text-[0.9375rem] font-medium">{children}</dd>
+    </div>
+  );
+}
+
 /** Stop — entry — target on the option premium, with the current premium marked. */
-function PremiumBar({ stop, entry, target, current }: { stop: number; entry: number; target: number; current: number | null }) {
+export function PremiumBar({ stop, entry, target, current }: { stop: number; entry: number; target: number; current: number | null }) {
   const span = target - stop;
   const at = (value: number) => `${Math.min(100, Math.max(0, ((value - stop) / span) * 100))}%`;
   return (
@@ -279,7 +398,7 @@ function PremiumBar({ stop, entry, target, current }: { stop: number; entry: num
   );
 }
 
-function Item({ label, value, tone: color, hint }: { label: string; value: string; tone?: string; hint?: string }) {
+export function Item({ label, value, tone: color, hint }: { label: string; value: string; tone?: string; hint?: string }) {
   return (
     <div className="min-w-0">
       <dt className="text-micro text-muted">{label}</dt>
@@ -290,7 +409,8 @@ function Item({ label, value, tone: color, hint }: { label: string; value: strin
 
 export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    // Above the trade detail drawer (z-50): a confirmation asked from it, or from Play while it is open, must be on top.
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-black/40 p-4" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-md rounded-2xl border border-border bg-panel p-4 text-data shadow-e4" onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}>
         <h2 className="text-dense font-semibold">{title}</h2>
         <div className="mt-2">{children}</div>

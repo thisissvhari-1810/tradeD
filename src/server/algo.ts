@@ -234,6 +234,8 @@ async function algoWallet(userId: string) {
     realizedToday: bundle.realizedToday,
     charges: bundle.charges,
     equity: bundle.equity,
+    /** Total P&L = equity − starting capital (realized + unrealized, after charges; never counted twice). */
+    netPnl: bundle.netPnl,
     completedTrades: bundle.completedTrades,
     sides: await algoSides(userId, bundle.positions),
   };

@@ -4,7 +4,9 @@ import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
 import { ALGO_DEFAULTS, initialState, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
-import { algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, skippedSignals, tradeMarkers } from "../src/lib/algo/chart-replay";
+import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
+import { money, rupeesOf } from "../src/components/algo/live-value";
+import { tradeSummary } from "../src/components/algo/algo-trade-drawer";
 import { algoConfigProblems, switchToChartReplay } from "../src/lib/algo/config";
 import { algoRequest } from "../src/lib/algo/request";
 import { callPutBreakdown } from "../src/lib/algo/breakdown";
@@ -443,7 +445,7 @@ describe("chart wiring for the algo replay", () => {
   it("the manual exit has its own confirmation, separate from Pause and Exit Replay", () => {
     expect(panel).toMatch(/Exit this position\?/);
     expect(panel).toMatch(/Confirm Exit/);
-    expect(panel).toMatch(/disabled=\{Boolean\(algo\.busy\) \|\| Boolean\(position\.exit\)/);
+    expect(panel).toMatch(/disabled=\{Boolean\(algo\.busy\) \|\| cursor == null \|\| Boolean\(position\.exit\)\}/);
   });
 
   it("leaving replay only stops new entries; it never claims the position closed", () => {
@@ -785,7 +787,7 @@ describe("replay clock, validation and the trade pipeline end to end", () => {
     expect(panel).toMatch(/aria-label="Rejected and skipped signals"/);
     expect(panel).toMatch(/aria-label="Algo processing"/);
     expect(panel).toMatch(/runDiagnostics\(run\.events, run\.enabledLines\)/);
-    expect(panel).toMatch(/onSelectTrade\(/);
+    expect(panel).toMatch(/onOpenTrade\(trade\.entryKey\)/);
   });
 });
 
@@ -821,5 +823,110 @@ describe("CALL and PUT profit and loss on the dashboards", () => {
     expect(readFileSync("src/app/api/portfolio/route.ts", "utf8")).toMatch(/sides: await algoSides\(user\.id, bundle\.positions\)/);
     expect(readFileSync("src/server/algo.ts", "utf8")).toMatch(/sides: await algoSides\(userId, bundle\.positions\)/);
     expect(readFileSync("src/components/algo/algo-account.tsx", "utf8")).toMatch(/<SideTable sides=\{account\.sides\} \/>/);
+  });
+});
+
+describe("trade dashboard and trade detail view", () => {
+  /** Flat, a down crossing at `down`, then an up crossing at `up`. */
+  function twoCrossings(down: number, up: number): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < down ? LINE + 10 : index < up ? LINE - 10 : LINE + 10;
+      const open = index === down ? LINE + 8 : index === up ? LINE - 8 : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+  async function session() {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const result = await run(twoCrossings(30, 60), { cursor: m(70) });
+    const open = result.state.position ? { entryKey: result.state.position.entryKey, exitPending: false } : null;
+    return { result, trades: algoTrades(result.events, open) };
+  }
+
+  it("every trade has its own id, timeline and figures; a completed trade keeps its final result", async () => {
+    const { result, trades } = await session();
+    expect(new Set(trades.map((trade) => trade.entryKey)).size).toBe(2);
+    const first = tradeTimeline(result.events, trades[0].entryKey);
+    const second = tradeTimeline(result.events, trades[1].entryKey);
+    expect(first.map((event) => event.kind)).toEqual(["signal", "order", "opened", "exit", "closed"]);
+    expect(second.map((event) => event.kind)).toEqual(["signal", "order", "opened"]);
+    expect(first.every((event, index) => index === 0 || event.time >= first[index - 1].time)).toBe(true);
+    expect(first.at(-1)?.text).toMatch(/Realized \+₹/);
+    // Later replay minutes never change the completed trade.
+    const later = await run(twoCrossings(30, 60), { state: result.state, processedThrough: m(70), cursor: m(90) });
+    const again = algoTrades([...result.events, ...later.events], null)[0];
+    expect(again.realized).toBe(trades[0].realized);
+    expect(again.exitPremium).toBe(trades[0].exitPremium);
+    expect(trades[0].entryCharges).toBeGreaterThan(0);
+    expect(trades[0].exitCharges).toBeGreaterThan(0);
+    expect(trades[0].linePrices).toEqual([LINE]);
+    expect(trades[0].direction).toBe("DOWN");
+  });
+
+  it("the three slots show Open / Completed / Waiting, a pending order, or the latest rejection with its reason", async () => {
+    const { result, trades } = await session();
+    const skipped = skippedSignals(result.events);
+    expect(tradeSlots(trades, skipped, false, 3).map((slot) => slot.state)).toEqual(["Completed", "Open", "Waiting"]);
+    expect(tradeSlots(trades.slice(0, 1), skipped, true, 3).map((slot) => slot.state)).toEqual(["Completed", "Order pending", "Waiting"]);
+    const rejected = tradeSlots([], [{ id: "x", time: m(5), side: "CALL", reason: "Stale option quote", lines: [] }], false, 3);
+    expect(rejected[0]).toMatchObject({ state: "Rejected", reason: "Stale option quote", trade: null });
+    expect(tradeSlots([], [], false, 3).every((slot) => slot.state === "Waiting" && slot.trade == null)).toBe(true);
+  });
+
+  it("the activity feed lists actual events newest first, tagged with trade numbers, sides and P&L", async () => {
+    const { result } = await session();
+    const feedItems = activityFeed(result.events);
+    expect(feedItems[0]).toMatchObject({ kind: "opened", trade: 2, side: "CALL" });
+    const closed = feedItems.find((item) => item.kind === "closed");
+    expect(closed).toMatchObject({ trade: 1, side: "PUT" });
+    expect(closed?.pnl).toBeGreaterThan(0);
+    expect(feedItems.filter((item) => item.kind === "signal").map((item) => item.side).sort()).toEqual(["CALL", "PUT"]);
+    expect(feedItems.every((item, index) => index === 0 || item.time <= feedItems[index - 1].time)).toBe(true);
+  });
+
+  it("copied trade details are the trade's own figures", async () => {
+    const { trades } = await session();
+    const text = tradeSummary(trades[0], 3, null);
+    expect(text).toMatch(/^Trade 1\/3 · BUY PUT · NIFTY 23150 PE/);
+    expect(text).toMatch(/Exit \d\d:\d\d IST · ₹[\d,.]+ \(Target\) · realized \+₹/);
+    expect(text).toMatch(/simulated replay trade/);
+    const open = tradeSummary(trades[1], 3, null);
+    expect(open).toMatch(/Open · premium — · unrealized —/);
+  });
+
+  it("money parsing and formatting are exact and never invent a value", () => {
+    expect(rupeesOf("+₹1,250.40")).toBe(1250.4);
+    expect(rupeesOf("−₹12.05")).toBe(-12.05);
+    expect(rupeesOf("-₹3.00")).toBe(-3);
+    expect(rupeesOf("₹1,00,000.00")).toBe(100000);
+    expect(rupeesOf(null)).toBeNull();
+    expect(rupeesOf("—")).toBeNull();
+    expect(money(1250.4, true)).toBe("+₹1,250.40");
+    expect(money(-12.05, true)).toBe("−₹12.05");
+    const live = readFileSync("src/components/algo/live-value.tsx", "utf8");
+    expect(live).toMatch(/if \(value == null \|\| !Number\.isFinite\(value\)\) return <span className=\{cx\("text-muted", className\)\}>\{missing\}<\/span>;/);
+    expect(live).not.toMatch(/Math\.random/);
+  });
+
+  it("opening, closing and using the trade view never touches the replay clock, and it reads the live run", () => {
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    const show = desk.slice(desk.indexOf("const showTrade = useCallback"), desk.indexOf("const showTrade = useCallback") + 700);
+    expect(show).not.toMatch(/setReplay/);
+    expect(desk).toMatch(/const closeTrade = useCallback\(\(\) => \{ setOpenTrade\(null\); setLineFocus\(null\); \}, \[\]\);/);
+    expect(desk).toMatch(/onClose=\{closeTrade\}/);
+    const drawer = readFileSync("src/components/algo/algo-trade-drawer.tsx", "utf8");
+    expect(drawer).toMatch(/const run = algo\.run;/);
+    expect(drawer).not.toMatch(/useState<.*(premium|pnl|unrealized)/i);
+    expect(drawer).toMatch(/<ExitConfirm algo=\{algo\}/);
+    expect(drawer).toMatch(/navigator\.clipboard\.writeText\(tradeSummary\(/);
+  });
+
+  it("cards, slots, activity rows and chart markers all open the same trade; Focus moves the chart", () => {
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    expect(desk).toMatch(/onMarkerClick=\{\(ids\) => \{[\s\S]{0,200}showTrade\(entryKey\)/);
+    expect(panel.match(/onOpenTrade\(/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(readFileSync("src/components/chart-panel.tsx", "utf8")).toMatch(/focus: \(from, to\) => \{[\s\S]{0,900}setVisibleLogicalRange/);
   });
 });

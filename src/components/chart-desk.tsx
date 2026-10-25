@@ -19,6 +19,7 @@ import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
+import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
@@ -820,7 +821,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         : { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: (marker.pnl ?? 0) >= 0 ? profit : loss, text: marker.text, size };
     });
   }, [algoTrades, desk.appearance.tokens, selectedTrade]);
-  const [markerPopover, setMarkerPopover] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  // The trade shown in the detail view, and a strategy line highlighted from it.
+  const [openTrade, setOpenTrade] = useState<string | null>(null);
+  const [lineFocus, setLineFocus] = useState<{ prices: number[]; label: string } | null>(null);
+  const closeTrade = useCallback(() => { setOpenTrade(null); setLineFocus(null); }, []);
+  const focusChart = useCallback((from: number, to: number) => handleRef.current?.focus?.(from, to), []);
+  /** Opens a trade (card, slot, activity row or chart marker): selects it, highlights its markers and shows it on the chart. */
+  const showTrade = useCallback((entryKey: string) => {
+    setSelectedTrade(entryKey);
+    setOpenTrade(entryKey);
+    setLineFocus(null);
+    const entry = algoTrades.find((marker) => marker.entryKey === entryKey && marker.kind === "entry");
+    const exit = algoTrades.find((marker) => marker.entryKey === entryKey && marker.kind === "exit");
+    if (entry) handleRef.current?.focus?.(entry.time, exit?.time ?? entry.time);
+  }, [algoTrades]);
   const algoEntryLevel = useMemo<ChartReference | null>(() => {
     if (!algoPosition || !algoRun || algoRun.underlying !== symbol) return null;
     const signal = algoRun.events.find((event) => event.evaluation && event.evaluation.time === algoPosition.signalTime);
@@ -1383,24 +1397,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 scheme={desk.theme}
                 paint={desk.appearance.chart}
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
-                references={algoEntryLevel ? [...sessionLevels, algoEntryLevel] : sessionLevels}
+                references={[...sessionLevels, ...(algoEntryLevel ? [algoEntryLevel] : []), ...(lineFocus ? lineFocus.prices.map((price) => ({ price, title: lineFocus.label || "Strategy line", color: desk.appearance.tokens.warning, style: "dashed" as const })) : [])]}
                 markers={algoMarkers}
-                onMarkerClick={(ids, point) => {
-                  setMarkerPopover({ ids, ...point });
-                  setSelectedTrade(algoTrades.find((marker) => ids.includes(marker.id))?.entryKey ?? null);
+                onMarkerClick={(ids) => {
+                  const entryKey = algoTrades.find((marker) => ids.includes(marker.id))?.entryKey;
+                  if (entryKey) showTrade(entryKey);
                 }}
                 pageScroll={variant === "positions" && phoneLayout}
               />
-            ) : null}
-            {markerPopover ? (
-              <div role="dialog" aria-label="Algo trade details" className="surface-overlay absolute z-40 w-64 rounded-lg p-2.5 text-data shadow-e4" style={{ left: Math.max(8, Math.min(markerPopover.x + 12, (chartAreaRef.current?.clientWidth ?? 600) - 272)), top: Math.max(8, markerPopover.y - 20) }}>
-                <div className="mb-1 flex items-center justify-between gap-2"><span className="font-semibold">Algo trade</span><button type="button" aria-label="Close trade details" className="grid h-6 w-6 place-items-center rounded-md text-muted hover:bg-hover" onClick={() => setMarkerPopover(null)}>×</button></div>
-                {algoTrades.filter((marker) => markerPopover.ids.includes(marker.id)).map((marker) => (
-                  <div key={marker.id} className="border-t border-border-soft py-1.5 first:border-t-0">
-                    {marker.detail.map((line, index) => <p key={line} className={index === 0 ? cx("font-semibold", marker.kind === "entry" ? (marker.side === "CALL" ? "text-profit" : "text-loss") : (marker.pnl ?? 0) >= 0 ? "text-profit" : "text-loss") : "text-text-2"}>{line}</p>)}
-                  </div>
-                ))}
-              </div>
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
             {shown.length > 0 ? (
@@ -1444,7 +1448,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               />
             ) : null}
           </div>
-        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onSelectTrade={setSelectedTrade} /> : null}
+        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onOpenTrade={showTrade} /> : null}
         </div>
       {replay.active ? (
         <ReplayBar
@@ -1641,6 +1645,17 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           onStart={() => void startAlgoReplay()}
           onJump={(to) => setReplay((current) => (current.cursor != null && current.cursor < to ? { ...current, cursor: to, status: "paused" } : current))}
           onReset={() => void algo.reset().then((ok) => { if (!ok) return; setAlgoDialog(false); returnToStart(); })}
+        />
+      ) : null}
+      {openTrade && algoAllowed ? (
+        <AlgoTradeDrawer
+          algo={algo}
+          entryKey={openTrade}
+          cursor={replay.cursor}
+          onClose={closeTrade}
+          onFocus={focusChart}
+          onShowLine={(prices, label) => setLineFocus(prices ? { prices, label } : null)}
+          lineShown={lineFocus != null}
         />
       ) : null}
       {algoHistory && algo.data ? <AlgoHistory data={algo.data} initial="chart" onClose={() => setAlgoHistory(false)} /> : null}

@@ -37,7 +37,7 @@ export type ChartReference = { price: number; title: string; color: string; styl
 export type ChartMarker = { id: string; time: number; position: "aboveBar" | "belowBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text: string; size?: number };
 export type ChartType = "candle" | "bar" | "line" | "area";
 
-export type ChartHandle = { fit: () => void; reset: () => void; png: (name: string) => void; range: (bars: number | null) => void; zoom: (direction: -1 | 1) => void };
+export type ChartHandle = { fit: () => void; reset: () => void; png: (name: string) => void; range: (bars: number | null) => void; zoom: (direction: -1 | 1) => void; focus?: (from: number, to: number) => void };
 export type ChartScheme = "dark" | "light";
 export type IndicatorSettings = {
   smaFast: number;
@@ -261,6 +261,16 @@ export function ChartPanel({
           }
           const last = candlesRef.current.length;
           chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, last - bars), to: last + 1 });
+        },
+        // Shows the bars from `from` to `to` (unix seconds) with some room either side; the data is untouched.
+        focus: (from, to) => {
+          const bars = candlesRef.current;
+          if (!bars.length) return;
+          const index = (time: number) => { let found = 0; for (let at = 0; at < bars.length; at += 1) if (bars[at].time <= time) found = at; return found; };
+          const start = index(Math.min(from, to));
+          const end = index(Math.max(from, to));
+          const pad = Math.max(10, Math.round((end - start) * 0.6));
+          chart.timeScale().setVisibleLogicalRange({ from: start - pad, to: end + pad });
         },
         zoom: (direction) => {
           const current = chart.timeScale().options().barSpacing ?? 9;

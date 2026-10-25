@@ -279,6 +279,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible, summary:focus-v
 @keyframes flash-down { from { background-color: color-mix(in srgb, var(--loss) 26%, transparent); } to { background-color: transparent; } }
 .flash-up { animation: flash-up 650ms var(--ease-ui, ease-out); }
 .flash-down { animation: flash-down 650ms var(--ease-ui, ease-out); }
+/* Live algo money: a short tint when a value moves (no animation at all with reduced motion). */
+.flash-up-fast { animation: flash-up 220ms ease-out; }
+.flash-down-fast { animation: flash-down 220ms ease-out; }
+@media (prefers-reduced-motion: reduce) { .flash-up-fast, .flash-down-fast { animation: none; } }
 
 @keyframes rise-in { from { opacity: 0; transform: translateY(0.25rem); } to { opacity: 1; transform: none; } }
 @keyframes slide-in-right { from { transform: translateX(100%); } to { transform: none; } }
