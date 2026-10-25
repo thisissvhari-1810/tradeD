@@ -20,13 +20,19 @@ export type StrategySettings = {
 };
 
 const KEY = "td-strategy";
+/**
+ * Saved-settings version. Version 2 made both boxes' fill fully transparent (opacity 0): settings saved
+ * before it have their fill opacity reset to 0 once; after that the learner's own choice is kept.
+ */
+const VERSION = 2;
 
 export const STRATEGY_DEFAULTS: StrategySettings = {
   enabled: false,
   boxSpan: "candles",
   cloneShift: "none",
-  closeBox: { border: "#7E22CE", fill: "#A855F7", width: 2, opacity: 0.15, dash: "solid", visible: true, mid: { color: "#7E22CE", width: 2, dash: "dashed", visible: true } },
-  openBox: { border: "#C2410C", fill: "#F97316", width: 2, opacity: 0.12, dash: "solid", visible: true, mid: { color: "#C2410C", width: 2, dash: "dashed", visible: true } },
+  // Transparent boxes: only the borders, midlines and labels show; candles stay fully visible inside.
+  closeBox: { border: "#7E22CE", fill: "#A855F7", width: 2, opacity: 0, dash: "solid", visible: true, mid: { color: "#7E22CE", width: 2, dash: "dashed", visible: true } },
+  openBox: { border: "#C2410C", fill: "#F97316", width: 2, opacity: 0, dash: "solid", visible: true, mid: { color: "#C2410C", width: 2, dash: "dashed", visible: true } },
   high: { color: "#15803D", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
   // Same solid dark green as the high line.
   low: { color: "#15803D", width: 2, dash: "solid", visible: true, label: true, extend: "right" },
@@ -52,9 +58,10 @@ function line(value: unknown, fallback: StrategyLine): StrategyLine {
   return { color: color(row.color, fallback.color), width: width(row.width, fallback.width), dash: dash(row.dash, fallback.dash), visible: flag(row.visible, fallback.visible) };
 }
 
-function box(value: unknown, fallback: StrategyBox): StrategyBox {
+function box(value: unknown, fallback: StrategyBox, current: boolean): StrategyBox {
   const row = (value && typeof value === "object" ? value : {}) as Partial<StrategyBox>;
-  const opacity = typeof row.opacity === "number" && Number.isFinite(row.opacity) ? Math.min(0.5, Math.max(0, row.opacity)) : fallback.opacity;
+  // Settings from before version 2 lose their fill (the boxes became transparent); later ones keep it.
+  const opacity = current && typeof row.opacity === "number" && Number.isFinite(row.opacity) ? Math.min(0.5, Math.max(0, row.opacity)) : fallback.opacity;
   return {
     border: color(row.border, fallback.border),
     fill: color(row.fill, fallback.fill),
@@ -73,19 +80,20 @@ function level(value: unknown, fallback: StrategyLevel): StrategyLevel {
 
 /** Reads saved settings, filling anything missing or invalid from the defaults. */
 export function parseStrategySettings(raw: string | null, legacyOn = false): StrategySettings {
-  let row: Partial<StrategySettings> = {};
+  let row: Partial<StrategySettings> & { version?: unknown } = {};
   try {
     const parsed = JSON.parse(raw ?? "{}") as unknown;
-    if (parsed && typeof parsed === "object") row = parsed as Partial<StrategySettings>;
+    if (parsed && typeof parsed === "object") row = parsed as Partial<StrategySettings> & { version?: unknown };
   } catch {
     row = {};
   }
+  const current = row.version === VERSION;
   return {
     enabled: flag(row.enabled, legacyOn),
     boxSpan: row.boxSpan === "session" ? "session" : "candles",
     cloneShift: row.cloneShift === "session" ? "session" : "none",
-    closeBox: box(row.closeBox, STRATEGY_DEFAULTS.closeBox),
-    openBox: box(row.openBox, STRATEGY_DEFAULTS.openBox),
+    closeBox: box(row.closeBox, STRATEGY_DEFAULTS.closeBox, current),
+    openBox: box(row.openBox, STRATEGY_DEFAULTS.openBox, current),
     high: level(row.high, STRATEGY_DEFAULTS.high),
     // The low line's old default red becomes the new default green; a colour the user chose stays.
     low: level(row.low && typeof row.low === "object" && (row.low as Partial<StrategyLevel>).color?.toUpperCase() === "#B91C1C" ? { ...row.low, color: STRATEGY_DEFAULTS.low.color } : row.low, STRATEGY_DEFAULTS.low),
@@ -103,7 +111,7 @@ export function loadStrategySettings(): StrategySettings {
 
 export function saveStrategySettings(settings: StrategySettings) {
   try {
-    localStorage.setItem(KEY, JSON.stringify(settings));
+    localStorage.setItem(KEY, JSON.stringify({ ...settings, version: VERSION }));
   } catch {
     // Storage unavailable: settings last for this page only.
   }

@@ -74,8 +74,8 @@ describe("strategy drawings and styles", () => {
 
   it("uses the dark default colours and 2px lines", () => {
     const [closeBox, openBox, high, low] = view.drawings;
-    expect([closeBox.color, closeBox.fill, closeBox.fillOpacity, closeBox.width]).toEqual(["#7E22CE", "#A855F7", 0.15, 2]);
-    expect([openBox.color, openBox.fill, openBox.fillOpacity]).toEqual(["#C2410C", "#F97316", 0.12]);
+    expect([closeBox.color, closeBox.fill, closeBox.fillOpacity, closeBox.width]).toEqual(["#7E22CE", "#A855F7", 0, 2]);
+    expect([openBox.color, openBox.fill, openBox.fillOpacity]).toEqual(["#C2410C", "#F97316", 0]);
     expect(closeBox.center).toEqual({ color: "#7E22CE", width: 2, dash: "dashed", visible: true });
     expect([high.color, high.width, high.dash, high.kind]).toEqual(["#15803D", 2, "solid", "hray"]);
     expect([low.color, low.width, low.dash]).toEqual(["#15803D", 2, "solid"]);
@@ -109,12 +109,31 @@ describe("strategy drawings and styles", () => {
 
 describe("strategy settings persistence", () => {
   it("fills missing or invalid values from the defaults and clamps opacity to 50%", () => {
-    const parsed = parseStrategySettings(JSON.stringify({ enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
+    const parsed = parseStrategySettings(JSON.stringify({ version: 2, enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
     expect(parsed.enabled).toBe(true);
     expect(parsed.closeBox.border).toBe("#7E22CE");
     expect(parsed.closeBox.opacity).toBe(0.5);
     expect(parsed.closeBox.width).toBe(2);
     expect(parsed.high).toMatchObject({ color: "#000000", extend: "session", width: 2 });
+  });
+
+  it("draws both boxes with a fully transparent fill by default, keeping borders, midlines and labels", () => {
+    expect([STRATEGY_DEFAULTS.closeBox.opacity, STRATEGY_DEFAULTS.openBox.opacity]).toEqual([0, 0]);
+    const boxes = strategyView(data, null, STRATEGY_DEFAULTS).drawings.filter((drawing) => drawing.kind === "rect");
+    expect(boxes).toHaveLength(2);
+    for (const box of boxes) {
+      expect(box.fillOpacity).toBe(0);
+      expect(box.borderVisible).not.toBe(false);
+      expect(box.center?.visible).toBe(true);
+      expect(box.text).toBeTruthy();
+    }
+  });
+
+  it("resets a fill saved before the transparent boxes once, then keeps the user's later choice", () => {
+    const old = parseStrategySettings(JSON.stringify({ enabled: true, closeBox: { opacity: 0.15 }, openBox: { opacity: 0.12 } }));
+    expect([old.closeBox.opacity, old.openBox.opacity]).toEqual([0, 0]);
+    const chosen = parseStrategySettings(JSON.stringify({ version: 2, closeBox: { opacity: 0.2 } }));
+    expect(chosen.closeBox.opacity).toBe(0.2);
   });
 
   it("carries over the old S1 on / off", () => {
