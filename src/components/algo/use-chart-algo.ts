@@ -9,6 +9,15 @@ export type ChartAlgo = ReturnType<typeof useChartAlgo>;
 
 const enabledKey = (user: string) => `td-algo-replay:${user}`;
 
+/** A failed request as shown in the panel: its message and, when the server names one, the field. */
+function describe(caught: unknown, fallback: string) {
+  const error = caught as { message?: unknown; field?: unknown; code?: unknown } | null;
+  const message = typeof error?.message === "string" && error.message ? error.message : fallback;
+  const field = typeof error?.field === "string" && error.field ? ` (field: ${error.field})` : "";
+  if (process.env.NODE_ENV !== "production") console.error("[algo]", { message, field: error?.field, code: error?.code });
+  return `${message}${field}`;
+}
+
 function readEnabled(user: string) {
   try {
     return localStorage.getItem(enabledKey(user)) === "1";
@@ -69,7 +78,7 @@ export function useChartAlgo(input: {
       apply(await api<AlgoData>(`/api/algo${query}`));
       setError("");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The algo could not be loaded.");
+      setError(describe(caught, "The algo could not be loaded."));
     }
   }, [apply]);
 
@@ -85,7 +94,7 @@ export function useChartAlgo(input: {
       setError("");
       return true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The algo request failed.");
+      setError(describe(caught, "The algo request failed."));
       return false;
     } finally {
       setBusy("");
@@ -125,14 +134,14 @@ export function useChartAlgo(input: {
     if (run && minute * 60 <= run.processedThrough) return;
     stepping.current = true;
     let wait = 0;
-    api<AlgoData>("/api/algo", { action: "chartStep", session, cursor })
+    api<AlgoData>("/api/algo", { action: "chartStep", session, cursor: Math.floor(cursor) })
       .then((next) => {
         failures.current = 0;
         setError("");
         apply(next);
       })
       .catch((caught: unknown) => {
-        const message = caught instanceof Error ? caught.message : "The algo update failed.";
+        const message = describe(caught, "The algo update failed.");
         wait = 1_500;
         if (/busy/i.test(message)) return;
         failures.current += 1;
@@ -167,8 +176,8 @@ export function useChartAlgo(input: {
     clearError: () => setError(""),
     refresh: load,
     /** Confirms the run; `forSession` is the replay session just created for a first run. */
-    arm: (at: number, forSession: string | null = session) => (forSession ? command("arm", { action: "chartArm", session: forSession, cursor: at }) : Promise.resolve(false)),
-    exit: (at: number, emergency = false) => (session ? command(emergency ? "emergency" : "exit", { action: "chartExit", session, cursor: at, ...(emergency ? { emergency: true } : {}) }) : Promise.resolve(false)),
+    arm: (at: number, forSession: string | null = session) => (forSession ? command("arm", { action: "chartArm", session: forSession, cursor: Math.floor(at) }) : Promise.resolve(false)),
+    exit: (at: number, emergency = false) => (session ? command(emergency ? "emergency" : "exit", { action: "chartExit", session, cursor: Math.floor(at), ...(emergency ? { emergency: true } : {}) }) : Promise.resolve(false)),
     disarm: () => (session ? command("disarm", { action: "chartDisarm", session }) : Promise.resolve(false)),
     reset: () => (session ? command("reset", { action: "chartReset", session }) : Promise.resolve(false)),
   };

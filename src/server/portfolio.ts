@@ -10,6 +10,7 @@ import { loadOptionChain } from "@/server/option-chain";
 import { parseOptionLedgerSymbol } from "@/lib/options/contract";
 import { replaySessionOf } from "@/lib/options/replay-premium";
 import { rupeesToPaise } from "@/lib/money";
+import { callPutBreakdown } from "@/lib/algo/breakdown";
 import { evaluateOpenOrders } from "@/server/trading";
 import type { DataMode } from "@prisma/client";
 
@@ -368,3 +369,14 @@ export async function recentActivity(userId: string, mode: PracticeMode = "DEMO"
     })),
   };
 }
+
+/** CALL and PUT profit and loss of the Algo account (closed trades and marked open positions). */
+export async function algoSides(userId: string, positions: Array<{ symbol: string; unrealized: string | null; marketValue: string | null }>) {
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "ALGO") });
+  const closed = account?.currentPeriodId ? await prisma.closedTrade.findMany({ where: { accountId: account.id, practicePeriodId: account.currentPeriodId }, select: { symbol: true, netPaise: true } }) : [];
+  const paise = (value: string | null) => (value == null ? null : rupeesToPaise(value));
+  const sides = callPutBreakdown(closed, positions.map((row) => ({ symbol: row.symbol, unrealizedPaise: paise(row.unrealized), valuePaise: paise(row.marketValue) })));
+  const show = (side: typeof sides.call) => ({ trades: side.trades, wins: side.wins, losses: side.losses, realized: formatSignedInr(side.realizedPaise), open: side.open, unrealized: formatSignedInr(side.unrealizedPaise), openValue: formatInr(side.openValuePaise) });
+  return { call: show(sides.call), put: show(sides.put) };
+}
+

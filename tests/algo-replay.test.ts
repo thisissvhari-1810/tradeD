@@ -4,8 +4,10 @@ import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
 import { ALGO_DEFAULTS, initialState, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
-import { algoOrders, clampFill, minuteEnds, playGate, positionValuation, runStats, tradeMarkers } from "../src/lib/algo/chart-replay";
-import { switchToChartReplay } from "../src/lib/algo/config";
+import { algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, skippedSignals, tradeMarkers } from "../src/lib/algo/chart-replay";
+import { algoConfigProblems, switchToChartReplay } from "../src/lib/algo/config";
+import { algoRequest } from "../src/lib/algo/request";
+import { callPutBreakdown } from "../src/lib/algo/breakdown";
 
 /**
  * The Algo inside the chart's replay, end to end on the demo ledger: deterministic underlying candles,
@@ -451,7 +453,7 @@ describe("chart wiring for the algo replay", () => {
 
   it("trade markers are drawn on the chart from the run's entries and exits", () => {
     expect(desk).toMatch(/markers=\{algoMarkers\}/);
-    expect(desk).toMatch(/tradeMarkers\(algoRun\.events, replay\.cursor\)/);
+    expect(desk).toMatch(/tradeMarkers\(algoRun\.events, replay\.cursor, \{ max: algoRun\.config\.maxTrades, open: algoOpen \}\)/);
     expect(desk).toMatch(/onMarkerClick=/);
   });
 
@@ -645,9 +647,9 @@ describe("CALL/PUT execution in chart replay: orders, P&L, markers", () => {
     const markers = tradeMarkers(result.events, m(45));
     expect(markers.map((marker) => [marker.kind, marker.time])).toEqual([["entry", m(31)], ["exit", m(37)]]);
     expect(markers[0]).toMatchObject({ side: "PUT" });
-    expect(markers[0].text).toMatch(/^PUT BUY 23150PE @₹/);
+    expect(markers[0].text).toMatch(/^T1\/3 PUT BUY 23150PE @₹/);
     expect(markers[0].detail.join(" ")).toMatch(/Underlying at the signal: 23140\.00/);
-    expect(markers[1].text).toMatch(/^EXIT Target \+₹/);
+    expect(markers[1].text).toMatch(/^T1\/3 EXIT Target \+₹/);
     // The same events again (a reprocessed candle) never add markers; before the exit time only the entry shows.
     expect(tradeMarkers([...result.events, ...result.events], m(45))).toHaveLength(2);
     expect(tradeMarkers(result.events, m(36))).toHaveLength(1);
@@ -672,9 +674,152 @@ describe("CALL/PUT execution in chart replay: orders, P&L, markers", () => {
 
   it("the right panel renders the run's real position, orders and rejections", () => {
     const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
-    expect(panel).toMatch(/algoOrders\(run\.events, position\?\.entryKey \?\? null\)/);
-    expect(panel).toMatch(/"active", "completed", "rejected", "all"/);
+    expect(panel).toMatch(/algoTrades\(run\.events/);
+    expect(panel).toMatch(/skippedSignals\(run\.events\)/);
     expect(panel).toMatch(/Last rejection/);
     expect(panel).not.toMatch(/sample|mock/i);
+  });
+});
+
+describe("replay clock, validation and the trade pipeline end to end", () => {
+  /** Flat, a down crossing at `down`, flat, then an up crossing at `up`. */
+  function twoCrossings(down: number, up: number): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < down ? LINE + 10 : index < up ? LINE - 10 : LINE + 10;
+      const open = index === down ? LINE + 8 : index === up ? LINE - 8 : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+
+  it("the fractional replay clock is accepted and taken to the whole second (the 'Expected integer, received float' fix)", () => {
+    const parsed = algoRequest.safeParse({ action: "chartStep", session: SESSION, cursor: m(31) + 0.437 });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && "cursor" in parsed.data ? parsed.data.cursor : null).toBe(m(31));
+    const missing = algoRequest.safeParse({ action: "chartStep", session: SESSION });
+    expect(missing.success).toBe(false);
+    expect(missing.success ? "" : missing.error.issues[0].path.join(".")).toBe("cursor");
+  });
+
+  it("the client sends whole-second replay times", () => {
+    const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
+    expect(hook).toMatch(/action: "chartStep", session, cursor: Math\.floor\(cursor\)/);
+    expect(hook).toMatch(/action: "chartArm", session: forSession, cursor: Math\.floor\(at\)/);
+    expect(hook).toMatch(/\(field: \$\{error\.field\}\)/);
+  });
+
+  it("fractional premiums are accepted; fractional quantities are refused with a clear message", async () => {
+    expect(algoConfigProblems({ ...config, lots: 1.5 })).toContain("Quantity must be 1 to 50 lots.");
+    const fractional = await placeOptionReplay(student, { symbol: "NIFTY", expiry: "2026-10-20", strike: 23_150, right: "PE", action: "BUY", lots: 1.5, session: SESSION, cursor: m(31), idempotencyKey: "frac" }, NOW, "ALGO").catch((error: unknown) => error as { code?: string; field?: string });
+    expect(fractional).toMatchObject({ code: "INVALID_QUANTITY", field: "lots" });
+    feed.premiums = premiums(() => ({ low: 100.05, high: 100.95, close: 100.35 }));
+    await placeOptionReplay(student, { symbol: "NIFTY", expiry: "2026-10-20", strike: 23_150, right: "PE", action: "BUY", lots: 1, session: SESSION, cursor: m(31), idempotencyKey: "dec", fillPremium: 100.45 }, NOW, "ALGO");
+    expect(db.state.executions[0].pricePaise).toBe(10_045n);
+  });
+
+  it("every enabled line is compared on each candle, and a quiet candle says so", async () => {
+    const two: AlgoLine[] = [...lines, { id: `${DATE}:second`, type: "prev-high", label: "Prev high", price: 23_500, activeFrom: OPEN, source: "strategy" }];
+    const result = await stepChartRun({
+      user: student, wallet: "ALGO", runId: "lines", session: SESSION, date: DATE, config, lines: two, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: { ...initialState(DATE), running: true, entries: true }, processedThrough: OPEN, cursor: m(10),
+    });
+    const quiet = result.events.filter((event) => event.key.startsWith("eval:")).at(-1)!;
+    expect(quiet.evaluation?.evaluated).toBe(2);
+    expect(quiet.message).toBe("No qualifying line crossing (2 lines checked).");
+    const off = await stepChartRun({
+      user: student, wallet: "ALGO", runId: "lines2", session: SESSION, date: DATE, config: { ...config, disabledLines: ["prev-high"] }, lines: two, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: { ...initialState(DATE), running: true, entries: true }, processedThrough: OPEN, cursor: m(10),
+    });
+    expect(off.events.filter((event) => event.key.startsWith("eval:")).at(-1)?.evaluation?.evaluated).toBe(1);
+  });
+
+  it("diagnostics count candles, crossings, signals, accepted and rejected orders and the last rejection", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const result = await run(twoCrossings(30, 60), { cursor: m(70), config: { ...config, maxTrades: 1 } });
+    const diagnostics = runDiagnostics(result.events, 1);
+    expect(diagnostics).toMatchObject({ enabledLines: 1, crossings: 2, signals: 2, accepted: 1, rejected: 1 });
+    expect(diagnostics.candlesEvaluated).toBeGreaterThan(60);
+    expect(diagnostics.lastRejection?.reason).toMatch(/Daily trade limit reached \(1\)/);
+  });
+
+  it("the entry limit is enforced: a signal after the limit is rejected and listed, never filled", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const result = await run(twoCrossings(30, 60), { cursor: m(70), config: { ...config, maxTrades: 1 } });
+    expect(buys()).toHaveLength(1);
+    const trades = algoTrades(result.events, null);
+    expect(trades).toHaveLength(1);
+    const skipped = skippedSignals(result.events);
+    expect(skipped).toEqual([expect.objectContaining({ side: "CALL", time: m(61), lines: ["Test line ↑"] })]);
+  });
+
+  it("each accepted entry becomes a numbered trade with its line, premiums, exit and realized P&L, and gets markers", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const result = await run(twoCrossings(30, 60), { cursor: m(70) });
+    const trades = algoTrades(result.events, result.state.position ? { entryKey: result.state.position.entryKey, exitPending: false } : null);
+    expect(trades.map((trade) => [trade.number, trade.side, trade.status])).toEqual([[1, "PUT", "COMPLETED"], [2, "CALL", "OPEN"]]);
+    expect(trades[0]).toMatchObject({ lines: ["Test line"], signalTime: m(30), entryTime: m(31), quantity: 75, exitReason: "Target", exitTime: m(37), durationMinutes: 6 });
+    expect(trades[0].realized).toBeGreaterThan(0);
+    expect(trades[0].returnPercent).toBeGreaterThan(0);
+    const markers = tradeMarkers(result.events, m(70), { max: 3, open: { entryKey: trades[1].entryKey, exitPending: false, unrealized: 12.5 } });
+    expect(markers.map((marker) => [marker.kind, marker.time, marker.text.slice(0, 13)])).toEqual([["entry", m(31), "T1/3 PUT BUY "], ["exit", m(37), "T1/3 EXIT Tar"], ["entry", m(61), "T2/3 CALL BUY"]]);
+    expect(markers[2].detail.join(" ")).toMatch(/Open · running P&L \+₹12\.50/);
+    expect(markers[0].detail.join(" ")).toMatch(/Test line/);
+    // The same events twice (a reprocessed candle) never duplicate trades or markers.
+    expect(tradeMarkers([...result.events, ...result.events], m(70))).toHaveLength(3);
+    expect(algoTrades([...result.events, ...result.events], null)).toHaveLength(2);
+  });
+
+  it("the ledger stays consistent across two trades: cash = start − costs + exit proceeds", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    await run(twoCrossings(30, 60), { cursor: m(70) });
+    const [buy1, sell1, buy2] = db.state.executions as Array<Row & { pricePaise: bigint; chargesPaise: bigint; quantity: number }>;
+    const expected = START - (buy1.pricePaise * 75n + buy1.chargesPaise) + (sell1.pricePaise * 75n - sell1.chargesPaise) - (buy2.pricePaise * 75n + buy2.chargesPaise);
+    expect(cash()).toBe(expected);
+  });
+
+  it("the panel shows trade slots, the active trade, completed trades and rejected/skipped signals from the run", () => {
+    const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    expect(panel).toMatch(/aria-label="Trade slots"/);
+    expect(panel).toMatch(/aria-label="Completed trades"/);
+    expect(panel).toMatch(/aria-label="Rejected and skipped signals"/);
+    expect(panel).toMatch(/aria-label="Algo processing"/);
+    expect(panel).toMatch(/runDiagnostics\(run\.events, run\.enabledLines\)/);
+    expect(panel).toMatch(/onSelectTrade\(/);
+  });
+});
+
+describe("CALL and PUT profit and loss on the dashboards", () => {
+  it("splits closed trades and open positions by CALL and PUT from the ledger", () => {
+    const sides = callPutBreakdown(
+      [
+        { symbol: "NIFTY|2026-10-20|23150|PE|R:2026-10-16.a", netPaise: 25_000n },
+        { symbol: "NIFTY|2026-10-20|23150|PE|R:2026-10-16.a", netPaise: -4_000n },
+        { symbol: "NIFTY|2026-10-20|23150|CE|R:2026-10-16.a", netPaise: 10_000n },
+      ],
+      [{ symbol: "NIFTY|2026-10-20|23200|CE|R:2026-10-16.a", unrealizedPaise: -1_550n, valuePaise: 900_000n }],
+    );
+    expect(sides.put).toMatchObject({ trades: 2, wins: 1, losses: 1, realizedPaise: 21_000n, open: 0 });
+    expect(sides.call).toMatchObject({ trades: 1, wins: 1, losses: 0, realizedPaise: 10_000n, open: 1, unrealizedPaise: -1_550n, openValuePaise: 900_000n });
+  });
+
+  it("a completed replay PUT trade and an open CALL appear on the right side with the ledger's figures", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const down = underlying("DOWN");
+    const both: Candle[] = down.map((candle, index) => (index < 60 ? candle : { ...candle, open: index === 60 ? LINE - 8 : LINE + 10, close: LINE + 10, high: LINE + 11, low: index === 60 ? LINE - 9 : LINE + 9 }));
+    await run(both, { cursor: m(70) });
+    const closed = db.state.closed.map((row) => ({ symbol: String(row.symbol), netPaise: row.netPaise as bigint }));
+    const open = db.state.positions.filter((row) => (row.quantity as number) > 0).map((row) => ({ symbol: String(db.state.instruments.find((item) => item.id === row.instrumentId)?.symbol), unrealizedPaise: null, valuePaise: null }));
+    const sides = callPutBreakdown(closed, open);
+    expect(sides.put.trades).toBe(1);
+    expect(sides.put.realizedPaise).toBe(db.state.closed[0].netPaise);
+    expect(sides.put.realizedPaise > 0n).toBe(true);
+    expect(sides.call).toMatchObject({ trades: 0, open: 1 });
+  });
+
+  it("Home, Portfolio and the Algo panel all show the same CALL/PUT figures", () => {
+    expect(readFileSync("src/app/api/portfolio/route.ts", "utf8")).toMatch(/sides: await algoSides\(user\.id, bundle\.positions\)/);
+    expect(readFileSync("src/server/algo.ts", "utf8")).toMatch(/sides: await algoSides\(userId, bundle\.positions\)/);
+    expect(readFileSync("src/components/algo/algo-account.tsx", "utf8")).toMatch(/<SideTable sides=\{account\.sides\} \/>/);
   });
 });

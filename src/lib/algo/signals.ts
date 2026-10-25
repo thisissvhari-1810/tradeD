@@ -44,6 +44,8 @@ export type CandleEvaluation = {
   candle: Candle;
   events: CrossEvent[];
   notes: LineNote[];
+  /** Lines compared on this candle (enabled, and known when the previous candle formed). */
+  evaluated?: number;
   decision: Decision;
   /** Plain-language reason for the decision. */
   explanation: string;
@@ -66,14 +68,17 @@ export function evaluateCandle(input: { previous: Candle | null; candle: Candle;
   if (!previous || !sameSession(previous.time, candle.time) || previous.time >= candle.time) {
     return { ...base, decision: "NO_PREVIOUS", explanation: "No earlier completed candle in this session to compare with." };
   }
+  let evaluated = 0;
   for (const line of lines) {
     // Disabled lines, and lines not yet known when the previous candle formed, are not compared.
     if (!enabled(line) || previous.time < line.activeFrom) continue;
+    evaluated += 1;
     const result = bodyCross(previous, candle, line.price);
     if (result.kind === "CROSS" && result.direction) base.events.push({ lineId: line.id, lineType: line.type, label: line.label, price: line.price, direction: result.direction });
     else if (result.kind !== "NONE" && result.kind !== "CROSS") base.notes.push({ lineId: line.id, label: line.label, price: line.price, kind: result.kind, detail: result.detail });
   }
-  return { ...base, ...consolidate(base.events, base.notes) };
+  const result = consolidate(base.events, base.notes);
+  return { ...base, evaluated, ...result, explanation: result.decision === "NO_SIGNAL" && !base.notes.length ? `No qualifying line crossing (${evaluated} line${evaluated === 1 ? "" : "s"} checked).` : result.explanation };
 }
 
 /**

@@ -6,7 +6,7 @@ import { formatInr } from "@/lib/money";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { query } from "@/server/http";
 import { requireUser } from "@/server/auth";
-import { getStudentBundle } from "@/server/portfolio";
+import { algoSides, getStudentBundle } from "@/server/portfolio";
 
 export const GET = query(async (request) => {
   const user = await requireUser(PRACTICE_ROLES);
@@ -16,5 +16,6 @@ export const GET = query(async (request) => {
   if (mode === "ALGO" && !(await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "ALGO") }))) {
     return Response.json({ exists: false, startingCapital: formatInr(ALGO_STARTING_CAPITAL_PAISE), simulated: true });
   }
-  return Response.json({ ...(await getStudentBundle(user.id, mode)), exists: true, simulated: true });
+  const bundle = await getStudentBundle(user.id, mode);
+  return Response.json({ ...bundle, ...(mode === "ALGO" ? { sides: await algoSides(user.id, bundle.positions) } : {}), exists: true, simulated: true });
 });

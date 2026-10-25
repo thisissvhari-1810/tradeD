@@ -802,13 +802,24 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const algoPosition = algoRun?.position ?? null;
   const algoHolds = algoAllowed && algo.enabled;
   // Entry / exit markers at their simulated fill times, one per event (the same rules as the tests).
-  const algoTrades = useMemo(() => (algoRun && algoRun.underlying === symbol ? tradeMarkers(algoRun.events, replay.cursor) : []), [algoRun, symbol, replay.cursor]);
+  const [selectedTrade, setSelectedTrade] = useState<string | null>(null);
+  const algoOpen = algoPosition ? { entryKey: algoPosition.entryKey, exitPending: Boolean(algoPosition.exit), unrealized: algoPosition.unrealized } : null;
+  const algoTrades = useMemo(
+    () => (algoRun && algoRun.underlying === symbol ? tradeMarkers(algoRun.events, replay.cursor, { max: algoRun.config.maxTrades, open: algoOpen }) : []),
+    // algoOpen is rebuilt each render; its fields are the real dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [algoRun, symbol, replay.cursor, algoOpen?.entryKey, algoOpen?.exitPending, algoOpen?.unrealized],
+  );
   const algoMarkers = useMemo<ChartMarker[]>(() => {
     const { profit, loss } = desk.appearance.tokens;
-    return algoTrades.map((marker) => marker.kind === "entry"
-      ? { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "belowBar" : "aboveBar", shape: marker.side === "CALL" ? "arrowUp" : "arrowDown", color: marker.side === "CALL" ? profit : loss, text: marker.text }
-      : { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: (marker.pnl ?? 0) >= 0 ? profit : loss, text: marker.text });
-  }, [algoTrades, desk.appearance.tokens]);
+    return algoTrades.map((marker) => {
+      // The trade picked in the panel is drawn larger, both its entry and its exit.
+      const size = marker.entryKey === selectedTrade ? 2 : 1;
+      return marker.kind === "entry"
+        ? { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "belowBar" : "aboveBar", shape: marker.side === "CALL" ? "arrowUp" : "arrowDown", color: marker.side === "CALL" ? profit : loss, text: marker.text, size }
+        : { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: (marker.pnl ?? 0) >= 0 ? profit : loss, text: marker.text, size };
+    });
+  }, [algoTrades, desk.appearance.tokens, selectedTrade]);
   const [markerPopover, setMarkerPopover] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   const algoEntryLevel = useMemo<ChartReference | null>(() => {
     if (!algoPosition || !algoRun || algoRun.underlying !== symbol) return null;
@@ -1374,7 +1385,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
                 references={algoEntryLevel ? [...sessionLevels, algoEntryLevel] : sessionLevels}
                 markers={algoMarkers}
-                onMarkerClick={(ids, point) => setMarkerPopover({ ids, ...point })}
+                onMarkerClick={(ids, point) => {
+                  setMarkerPopover({ ids, ...point });
+                  setSelectedTrade(algoTrades.find((marker) => ids.includes(marker.id))?.entryKey ?? null);
+                }}
                 pageScroll={variant === "positions" && phoneLayout}
               />
             ) : null}
@@ -1430,7 +1444,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               />
             ) : null}
           </div>
-        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} /> : null}
+        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onSelectTrade={setSelectedTrade} /> : null}
         </div>
       {replay.active ? (
         <ReplayBar

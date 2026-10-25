@@ -142,6 +142,8 @@ export function algoOrders(events: AlgoEvent[], openEntryKey: string | null): Or
 
 export type TradeMarker = {
   id: string;
+  /** The trade the marker belongs to (its entry order key), to highlight both of its markers. */
+  entryKey: string;
   time: number;
   kind: "entry" | "exit";
   side: "CALL" | "PUT";
@@ -153,40 +155,44 @@ export type TradeMarker = {
 
 const ist = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16);
 const rupee = (value: number) => `₹${value.toFixed(2)}`;
+const signedRupee = (value: number) => `${value >= 0 ? "+" : "−"}${rupee(Math.abs(value))}`;
 
 /**
- * Entry and exit markers at their simulated fill times (never past the replay time). One marker per
- * event key, so a reprocessed candle never draws twice.
+ * Entry and exit markers at their simulated fill times (never past the replay time), one per trade
+ * event, so a reprocessed candle never draws twice. Each carries its trade number out of the session
+ * limit, the signal line, the contract, premiums, status and P&L (running while open).
  */
-export function tradeMarkers(events: AlgoEvent[], cursor: number | null): TradeMarker[] {
-  const seen = new Set<string>();
-  const entries = new Map(events.filter((event) => event.kind === "ENTRY" && event.order).map((event) => [event.order!.key, event]));
-  const signalClose = (time: number) => events.find((event) => event.evaluation && event.evaluation.time === time)?.evaluation?.candle.close ?? null;
+export function tradeMarkers(events: AlgoEvent[], cursor: number | null, options: { max?: number; open?: { entryKey: string; exitPending: boolean; unrealized: number | null } | null } = {}): TradeMarker[] {
+  const max = options.max ?? 3;
+  const open = options.open ?? null;
   const list: TradeMarker[] = [];
-  for (const event of events) {
-    if (seen.has(event.key)) continue;
-    if (event.kind === "ENTRY" && event.order?.price != null && event.side) {
-      seen.add(event.key);
-      const time = entryFillTime(event);
-      const contract = event.contract ? `${event.contract.underlying} ${event.contract.strike} ${event.contract.right} · ${event.contract.expiry}` : "";
-      const underlying = signalClose(event.time);
+  for (const trade of algoTrades(events, open)) {
+    const label = `T${trade.number}/${max}`;
+    const contract = `${trade.underlying} ${trade.strike ?? ""} ${trade.right} · ${trade.expiry}`;
+    const status = trade.status === "OPEN" ? `Open · running P&L ${open?.unrealized == null ? "—" : signedRupee(open.unrealized)}` : trade.status === "EXIT_PENDING" ? "Exit pending" : `Completed · realized ${trade.realized == null ? "—" : signedRupee(trade.realized)}`;
+    list.push({
+      id: `marker:${trade.entryKey}:entry`, entryKey: trade.entryKey, time: trade.entryTime, kind: "entry", side: trade.side, pnl: null,
+      text: `${label} ${trade.side} BUY ${trade.strike ?? ""}${trade.right} @${rupee(trade.entryPremium)}`,
+      detail: [
+        `Trade ${trade.number}/${max} · BUY ${trade.side}`,
+        `Signal ${ist(trade.signalTime + MINUTE)} IST${trade.lines.length ? ` · ${trade.lines.join(", ")}` : ""}`,
+        trade.underlyingAtSignal != null ? `Underlying at the signal: ${trade.underlyingAtSignal.toFixed(2)}` : "",
+        contract,
+        `Entry ${ist(trade.entryTime)} IST · premium ${rupee(trade.entryPremium)} × ${trade.quantity}`,
+        trade.stop != null && trade.target != null ? `Stop-loss ${rupee(trade.stop)} · Target ${rupee(trade.target)} (option premium)` : "",
+        status,
+      ].filter(Boolean),
+    });
+    if (trade.exitTime != null && trade.realized != null) {
       list.push({
-        id: event.key, time, kind: "entry", side: event.side, pnl: null,
-        text: `${event.side} BUY ${event.contract?.strike ?? ""}${event.contract?.right ?? ""} @${rupee(event.order.price)}`,
-        detail: [`${event.side} BUY at ${ist(time)} IST`, contract, underlying != null ? `Underlying at the signal: ${underlying.toFixed(2)}` : "", `Entry premium ${rupee(event.order.price)} × ${event.order.quantity ?? "—"}`, event.stop != null && event.target != null ? `Stop-loss ${rupee(event.stop)} · Target ${rupee(event.target)} (option premium)` : ""].filter(Boolean),
-      });
-    }
-    if (event.kind === "EXIT" && event.order?.price != null && event.pnl != null) {
-      seen.add(event.key);
-      const entry = entries.get(event.order.key.replace(/:exit:\d+$/, ""));
-      const cost = entry?.order?.price != null && event.order.quantity ? entry.order.price * event.order.quantity : null;
-      const percent = cost ? (event.pnl / cost) * 100 : null;
-      const reason = EXIT_LABEL[exitReasonOf(event.message)] ?? "Exit";
-      const signed = `${event.pnl >= 0 ? "+" : "−"}${rupee(Math.abs(event.pnl))}${percent == null ? "" : ` (${percent >= 0 ? "+" : ""}${percent.toFixed(1)}%)`}`;
-      list.push({
-        id: event.key, time: event.time, kind: "exit", side: entry?.side ?? event.side ?? "CALL", pnl: event.pnl,
-        text: `EXIT ${reason} ${signed}`,
-        detail: [`Exit (${reason}) at ${ist(event.time)} IST`, event.contract ? `${event.contract.underlying} ${event.contract.strike} ${event.contract.right} · ${event.contract.expiry}` : "", `Exit premium ${rupee(event.order.price)} × ${event.order.quantity ?? "—"}`, `Realized ${signed} after charges`].filter(Boolean),
+        id: `marker:${trade.entryKey}:exit`, entryKey: trade.entryKey, time: trade.exitTime, kind: "exit", side: trade.side, pnl: trade.realized,
+        text: `${label} EXIT ${trade.exitReason ?? ""} ${signedRupee(trade.realized)}${trade.returnPercent == null ? "" : ` (${trade.returnPercent >= 0 ? "+" : ""}${trade.returnPercent.toFixed(1)}%)`}`,
+        detail: [
+          `Trade ${trade.number}/${max} · exit (${trade.exitReason ?? "Exit"})`,
+          `Exit ${ist(trade.exitTime)} IST · premium ${trade.exitPremium == null ? "—" : rupee(trade.exitPremium)} × ${trade.quantity}`,
+          contract,
+          `Realized ${signedRupee(trade.realized)}${trade.returnPercent == null ? "" : ` (${trade.returnPercent.toFixed(2)}%)`} after charges · ${trade.durationMinutes ?? "—"} min`,
+        ],
       });
     }
   }
@@ -205,4 +211,141 @@ export function positionValuation(position: { avg: number; quantity: number; ent
   const value = round(premium * position.quantity);
   const unrealized = round(value - invested - position.entryCharges);
   return { invested, value, unrealized, unrealizedPercent: invested ? round((unrealized / invested) * 100) : null };
+}
+
+export type RunDiagnostics = {
+  /** The last candle the algo evaluated (its open time) and what happened on it. */
+  lastCandle: number | null;
+  lastOutcome: string;
+  enabledLines: number;
+  /** Lines compared on the last evaluated candle. */
+  linesEvaluated: number;
+  candlesEvaluated: number;
+  crossings: number;
+  signals: number;
+  accepted: number;
+  rejected: number;
+  lastRejection: { time: number; reason: string } | null;
+};
+
+/** What the algo has processed so far, from its own log (shown so a quiet replay is never a mystery). */
+export function runDiagnostics(events: AlgoEvent[], enabledLines: number): RunDiagnostics {
+  const evaluations = events.filter((event) => event.evaluation && event.key.startsWith("eval:"));
+  const last = evaluations.at(-1) ?? null;
+  const rejections = events.filter((event) => event.kind === "REJECTED" && event.key.startsWith("eval:"));
+  const latestRejection = rejections.at(-1) ?? null;
+  return {
+    lastCandle: last?.evaluation?.time ?? null,
+    lastOutcome: last ? last.message : "Waiting for the first completed candle.",
+    enabledLines,
+    linesEvaluated: last?.evaluation?.evaluated ?? 0,
+    candlesEvaluated: evaluations.length,
+    crossings: evaluations.reduce((sum, event) => sum + (event.evaluation?.events.length ?? 0), 0),
+    signals: evaluations.filter((event) => event.evaluation?.decision === "CALL" || event.evaluation?.decision === "PUT").length,
+    accepted: events.filter((event) => event.kind === "ENTRY").length,
+    rejected: rejections.length,
+    lastRejection: latestRejection ? { time: latestRejection.time + MINUTE, reason: (latestRejection.reasons ?? [latestRejection.message]).join(" ") } : null,
+  };
+}
+
+export type AlgoTrade = {
+  /** 1-based entry number in the session (only filled entries count toward the limit). */
+  number: number;
+  entryKey: string;
+  side: "CALL" | "PUT";
+  contract: string;
+  underlying: string;
+  strike: number | null;
+  right: string;
+  expiry: string;
+  lines: string[];
+  signalTime: number;
+  underlyingAtSignal: number | null;
+  entryTime: number;
+  entryPremium: number;
+  quantity: number;
+  lotSize: number | null;
+  stop: number | null;
+  target: number | null;
+  status: "OPEN" | "EXIT_PENDING" | "COMPLETED";
+  exitTime: number | null;
+  exitPremium: number | null;
+  exitReason: string | null;
+  realized: number | null;
+  returnPercent: number | null;
+  durationMinutes: number | null;
+};
+
+/**
+ * The session's trades, in entry order: each filled entry is one trade (rejected signals never take a
+ * slot), with its exit fills added up (a partial exit leaves it open).
+ */
+export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPending: boolean } | null): AlgoTrade[] {
+  const signal = (time: number) => events.find((event) => event.evaluation && event.evaluation.time === time && event.key.startsWith("eval:"))?.evaluation ?? null;
+  const trades: AlgoTrade[] = [];
+  for (const event of events) {
+    if (event.kind !== "ENTRY" || !event.order || event.order.price == null || !event.side) continue;
+    if (trades.some((trade) => trade.entryKey === event.order!.key)) continue;
+    const evaluation = event.key.startsWith("entry:") ? signal(event.time) : null;
+    const contract = event.contract;
+    trades.push({
+      number: trades.length + 1,
+      entryKey: event.order.key,
+      side: event.side,
+      contract: contract ? `${contract.underlying} ${contract.strike} ${contract.right} · ${contract.expiry}` : "—",
+      underlying: contract?.underlying ?? "",
+      strike: contract?.strike ?? null,
+      right: contract?.right ?? "",
+      expiry: contract?.expiry ?? "",
+      lines: evaluation?.events.map((cross) => cross.label) ?? [],
+      signalTime: evaluation?.time ?? event.time,
+      underlyingAtSignal: evaluation?.candle.close ?? null,
+      entryTime: entryFillTime(event),
+      entryPremium: event.order.price,
+      quantity: event.order.quantity ?? 0,
+      lotSize: contract?.lotSize ?? null,
+      stop: event.stop ?? null,
+      target: event.target ?? null,
+      status: "COMPLETED",
+      exitTime: null,
+      exitPremium: null,
+      exitReason: null,
+      realized: null,
+      returnPercent: null,
+      durationMinutes: null,
+    });
+  }
+  for (const trade of trades) {
+    const exits = events.filter((event) => event.kind === "EXIT" && event.order?.key.startsWith(`${trade.entryKey}:exit`) && event.pnl != null);
+    if (exits.length) {
+      const last = exits.at(-1)!;
+      const sold = exits.reduce((sum, event) => sum + (event.order?.quantity ?? 0), 0);
+      trade.exitTime = last.time;
+      trade.exitPremium = sold ? Math.round((exits.reduce((sum, event) => sum + (event.order?.price ?? 0) * (event.order?.quantity ?? 0), 0) / sold) * 100) / 100 : last.order?.price ?? null;
+      trade.exitReason = EXIT_LABEL[exitReasonOf(last.message)] ?? "Exit";
+      trade.realized = Math.round(exits.reduce((sum, event) => sum + (event.pnl ?? 0), 0) * 100) / 100;
+      const cost = trade.entryPremium * trade.quantity;
+      trade.returnPercent = cost ? Math.round((trade.realized / cost) * 10_000) / 100 : null;
+      trade.durationMinutes = Math.round((last.time - trade.entryTime) / MINUTE);
+    }
+    if (open && open.entryKey === trade.entryKey) trade.status = open.exitPending ? "EXIT_PENDING" : "OPEN";
+  }
+  return trades;
+}
+
+export type SkippedSignal = { id: string; time: number; side: "CALL" | "PUT" | null; reason: string; lines: string[] };
+
+/** Signals that did not become trades (rejected or conflicting), newest first, with their reasons. */
+export function skippedSignals(events: AlgoEvent[]): SkippedSignal[] {
+  const list: SkippedSignal[] = [];
+  for (const event of events) {
+    if (!event.key.startsWith("eval:") || !event.evaluation) continue;
+    const decision = event.evaluation.decision;
+    const side = decision === "CALL" || decision === "PUT" ? decision : null;
+    const lines = event.evaluation.events.map((cross) => `${cross.label} ${cross.direction === "DOWN" ? "↓" : "↑"}`);
+    if (event.kind === "REJECTED") list.push({ id: event.key, time: event.time + MINUTE, side, reason: (event.reasons ?? [event.message]).join(" "), lines });
+    else if (decision === "CONFLICTING_SIGNAL") list.push({ id: event.key, time: event.time + MINUTE, side: null, reason: event.evaluation.explanation, lines });
+    else if (side && event.reasons?.length) list.push({ id: event.key, time: event.time + MINUTE, side, reason: event.reasons.join(" "), lines });
+  }
+  return list.sort((a, b) => b.time - a.time);
 }

@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { Bot, ChevronDown, History, OctagonX, Play } from "lucide-react";
 import { cx } from "@/components/ui";
-import { algoOrders } from "@/lib/algo/chart-replay";
+import { algoTrades, runDiagnostics, skippedSignals } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
@@ -36,12 +36,19 @@ const BADGE: Partial<Record<AlgoStatus, { label: string; tone: string }>> = {
  * replay P&L, stop-loss and target on the option's own premium, and the manual exit. Phones show it as a
  * collapsible section under the chart.
  */
-export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo: ChartAlgo; cursor: number | null; chartSymbol: string; onHistory: () => void }) {
+export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selectedTrade, onSelectTrade }: {
+  algo: ChartAlgo;
+  cursor: number | null;
+  chartSymbol: string;
+  onHistory: () => void;
+  /** The trade highlighted on the chart (its entry order key). */
+  selectedTrade: string | null;
+  onSelectTrade: (entryKey: string | null) => void;
+}) {
   // Phones start with the panel folded to its header (the chart keeps the screen); desktops show it open.
   const [open, setOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 1023px)").matches);
   const [confirmExit, setConfirmExit] = useState(false);
   const [confirmEmergency, setConfirmEmergency] = useState(false);
-  const [filter, setFilter] = useState<"active" | "completed" | "rejected" | "all">("all");
   const data = algo.data;
   const run = algo.run;
   const position = run?.position ?? null;
@@ -52,9 +59,11 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
   const badge = position?.exit ? BADGE.EXIT_PENDING! : BADGE[status] ?? BADGE.DISABLED!;
   const account = data?.account;
   const legacyRun = data?.runWallet === "DEMO" && run != null;
-  const orders = run ? algoOrders(run.events, position?.entryKey ?? null) : [];
-  const shownOrders = orders.filter((row) => filter === "all" || row.group === filter).slice(0, 30);
-  const lastRejection = orders.find((row) => row.group === "rejected");
+  const trades = run ? algoTrades(run.events, position ? { entryKey: position.entryKey, exitPending: Boolean(position.exit) } : null) : [];
+  const activeTrade = position ? trades.find((trade) => trade.entryKey === position.entryKey) ?? null : null;
+  const completed = trades.filter((trade) => trade.status === "COMPLETED" && trade.realized != null).reverse();
+  const skipped = run ? skippedSignals(run.events) : [];
+  const diagnostics = run ? runDiagnostics(run.events, run.enabledLines) : null;
   const optionSymbol = position ? `${position.contract.underlying} ${position.contract.strike} ${position.contract.right === "CE" ? "CE" : "PE"}` : "";
 
   return (
@@ -104,22 +113,64 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
           </details>
         ) : null}
 
-        {/* B. Active position */}
+        {/* Processing diagnostics: what the algo has done with the replay so far */}
+        {run && diagnostics ? (
+          <section className="rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5 text-micro" aria-label="Algo processing">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="eyebrow">Processing</span>
+              <span className="num text-muted">replay {ist(cursor)} · processed to {ist(run.processedThrough)} IST</span>
+            </div>
+            <p className="mt-0.5 text-text-2" role="status">{diagnostics.lastCandle != null ? `${ist(diagnostics.lastCandle)} candle: ` : ""}{diagnostics.lastOutcome}</p>
+            <dl className="mt-1 grid grid-cols-4 gap-x-2 gap-y-0.5">
+              <Item label="Lines on" value={`${diagnostics.enabledLines}/${run.lineCount}`} />
+              <Item label="Checked" value={String(diagnostics.linesEvaluated)} />
+              <Item label="Candles" value={String(diagnostics.candlesEvaluated)} />
+              <Item label="Crossings" value={String(diagnostics.crossings)} />
+              <Item label="Signals" value={String(diagnostics.signals)} />
+              <Item label="Accepted" value={String(diagnostics.accepted)} />
+              <Item label="Rejected" value={String(diagnostics.rejected)} />
+              <Item label="Entries" value={`${trades.length}/${run.config.maxTrades}`} />
+            </dl>
+            {diagnostics.lastRejection ? <p className="mt-1 text-loss">Last rejection {ist(diagnostics.lastRejection.time)} IST: {diagnostics.lastRejection.reason}</p> : null}
+          </section>
+        ) : null}
+
+        {/* A. Trade slots: only filled entries take a slot; rejected signals are listed below */}
+        {run ? (
+          <ol className="grid grid-cols-3 gap-1.5" aria-label="Trade slots">
+            {Array.from({ length: run.config.maxTrades }, (_, index) => {
+              const trade = trades[index];
+              const label = !trade ? (index === trades.length && state?.pending ? "Signal detected" : "Waiting") : trade.status === "OPEN" ? "Open" : trade.status === "EXIT_PENDING" ? "Exit pending" : "Completed";
+              return (
+                <li key={index}>
+                  <button type="button" disabled={!trade} aria-pressed={trade ? selectedTrade === trade.entryKey : undefined} className={cx("w-full rounded-md border px-1.5 py-1 text-left disabled:cursor-default", trade && selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft", trade?.status === "OPEN" ? "bg-profit-soft/40" : "")} onClick={() => trade && onSelectTrade(selectedTrade === trade.entryKey ? null : trade.entryKey)}>
+                    <span className="block text-micro text-muted">Trade {index + 1}/{run.config.maxTrades}</span>
+                    <span className={cx("block text-micro font-semibold", trade ? (trade.side === "CALL" ? "text-profit" : "text-loss") : "text-muted")}>{trade ? `BUY ${trade.side}` : "—"}</span>
+                    <span className={cx("block truncate text-micro", trade?.realized != null ? tone(trade.realized) : "text-text-2")}>{trade?.realized != null ? inr(trade.realized, true) : label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        ) : null}
+
+        {/* B. Active trade */}
         {position ? (
           <section className="rounded-md border-2 border-border p-2" aria-label="Open algo position">
             <div className="flex items-baseline justify-between gap-2">
-              <p className="font-semibold">{optionSymbol} — <span className={position.side === "CALL" ? "text-profit" : "text-loss"}>{position.side} BUY</span></p>
+              <p className="font-semibold">{activeTrade ? `Trade ${activeTrade.number}/${run?.config.maxTrades ?? 3} — ` : ""}<span className={position.side === "CALL" ? "text-profit" : "text-loss"}>BUY {position.side}</span></p>
               <span className="whitespace-nowrap rounded-pill bg-sunken px-1.5 text-micro font-medium">{position.exit ? "EXIT PENDING" : "OPEN"}</span>
             </div>
-            <p className="text-micro text-muted">Expiry {position.contract.expiry} · lot {position.contract.lotSize} · entered {ist(position.openedAt)} IST</p>
+            <p className="text-text-2">{optionSymbol} · exp {position.contract.expiry}</p>
+            <p className="text-micro text-muted">Signal {activeTrade ? `${ist(activeTrade.signalTime + 60)} IST${activeTrade.lines.length ? ` · ${activeTrade.lines.join(", ")}` : ""}` : "—"} · entered {ist(position.openedAt)} IST</p>
             <p className={cx("num mt-1 text-xl font-semibold leading-tight", tone(position.unrealized))}>{inr(position.unrealized, true)} <span className="text-data font-medium">{position.unrealizedPercent == null ? "" : `(${position.unrealizedPercent > 0 ? "+" : ""}${position.unrealizedPercent.toFixed(2)}%)`}</span></p>
             <p className="text-micro text-muted">Unrealized P&amp;L, after entry charges · premium as of {ist(position.premiumAt)} IST</p>
             <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} />
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
               <Item label="Entry premium" value={inr(position.avg)} />
               <Item label="Current premium" value={inr(position.premium)} />
-              <Item label="Quantity" value={`${position.quantity} (${position.lots} lot × ${position.contract.lotSize})`} />
-              <Item label="Replay time" value={`${ist(cursor)} IST`} />
+              <Item label="Lots × lot size" value={`${position.lots} × ${position.contract.lotSize}`} />
+              <Item label="Quantity" value={String(position.quantity)} />
               <Item label="Entry cost" value={inr(position.invested)} />
               <Item label="Current value" value={inr(position.value)} />
               <Item label="Stop-loss (premium)" value={inr(position.stop)} tone="text-loss" hint={position.premium != null ? (position.premium <= position.stop ? "reached" : `${inr(position.premium - position.stop)} away`) : undefined} />
@@ -130,42 +181,47 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
             </button>
           </section>
         ) : run ? (
-          <section className="rounded-md border border-dashed border-border p-2 text-micro" aria-label="No open algo position">
-            <p className="font-medium text-text-2">No open position</p>
-            <p className="mt-1 text-muted">Last signal: {state?.lastSignal ? `${ist(state.lastSignal.time + 60)} IST · ${state.lastSignal.explanation}` : `none yet (processed to ${ist(run.processedThrough)} IST)`}</p>
-            {lastRejection ? <p className="mt-1 text-loss">Last rejection ({ist(lastRejection.time)} IST): {lastRejection.reason}</p> : null}
-          </section>
+          <p className="rounded-md border border-dashed border-border p-2 text-micro text-muted">No open position. {state?.lastSignal ? `Last signal ${ist(state.lastSignal.time + 60)} IST: ${state.lastSignal.explanation}` : "No signal yet in this session."}</p>
         ) : data ? (
           <p className="text-micro leading-snug text-muted">When enabled and confirmed, the algo checks each completed 1-minute candle of {data.config.underlying} against your enabled Strategy lines. A body crossing down buys the ATM PUT, up buys the ATM CALL, priced from that contract&apos;s real 1-minute premium history at the replay time.</p>
         ) : null}
 
-        {/* C. Orders */}
+        {/* C. Completed trades */}
+        {completed.length ? (
+          <section aria-label="Completed trades">
+            <p className="eyebrow mb-1">Completed trades</p>
+            <ol className="space-y-1">
+              {completed.map((trade) => (
+                <li key={trade.entryKey}>
+                  <button type="button" aria-pressed={selectedTrade === trade.entryKey} className={cx("w-full rounded-md border px-2 py-1 text-left hover:bg-hover", selectedTrade === trade.entryKey ? "border-primary" : "border-border-soft")} onClick={() => onSelectTrade(selectedTrade === trade.entryKey ? null : trade.entryKey)}>
+                    <span className="flex items-baseline gap-1.5 text-micro">
+                      <span className="font-semibold">T{trade.number}</span>
+                      <span className={trade.side === "CALL" ? "font-semibold text-profit" : "font-semibold text-loss"}>{trade.side}</span>
+                      <span className="text-muted">{trade.strike} {trade.right} × {trade.quantity}</span>
+                      <span className={cx("num ml-auto font-semibold", tone(trade.realized))}>{inr(trade.realized, true)}{trade.returnPercent == null ? "" : ` (${trade.returnPercent.toFixed(1)}%)`}</span>
+                    </span>
+                    <span className="num block text-micro text-text-2">{ist(trade.entryTime)} ₹{trade.entryPremium.toFixed(2)} → {ist(trade.exitTime)} ₹{trade.exitPremium?.toFixed(2) ?? "—"} · {trade.exitReason} · {trade.durationMinutes ?? "—"} min</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+
+        {/* D. Rejected / skipped signals */}
         {run ? (
-          <section aria-label="Algo orders">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="eyebrow">Orders</span>
-              <div className="flex rounded-md border border-border-soft p-0.5" role="group" aria-label="Filter orders">
-                {(["active", "completed", "rejected", "all"] as const).map((key) => (
-                  <button key={key} type="button" aria-pressed={filter === key} className={cx("h-6 rounded px-1.5 text-micro", filter === key ? "bg-primary-soft font-semibold text-primary" : "text-muted hover:text-text")} onClick={() => setFilter(key)}>{key === "active" ? "Active" : key === "completed" ? "Completed" : key === "rejected" ? "Rejected" : "All"}</button>
-                ))}
-              </div>
-            </div>
-            {shownOrders.length ? (
-              <ol className="space-y-1">
-                {shownOrders.map((row) => (
-                  <li key={row.id} className="rounded-md border border-border-soft px-2 py-1">
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="num text-micro text-muted">{ist(row.time)}</span>
-                      <span className={cx("text-micro font-semibold", row.action === "BUY" ? "text-profit" : row.action === "SELL" ? "text-info" : "text-muted")}>{row.action}</span>
-                      <span className="text-micro font-medium">{row.side ?? ""}</span>
-                      <span className={cx("ml-auto rounded-pill px-1.5 text-micro font-semibold", row.status === "REJECTED" ? "bg-loss-soft text-loss" : row.status === "FILLED" || row.status === "COMPLETED" ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{row.status}</span>
-                    </div>
-                    <p className="truncate text-micro text-text-2" title={row.contract}>{row.contract}{row.quantity != null ? ` · ${row.quantity} @ ${inr(row.premium)}` : ""}</p>
-                    {row.pnl != null ? <p className={cx("num text-micro font-medium", tone(row.pnl))}>{row.reason} · realized {inr(row.pnl, true)}</p> : row.group === "active" && position && row.action === "BUY" ? <p className={cx("num text-micro font-medium", tone(position.unrealized))}>Open · unrealized {inr(position.unrealized, true)}</p> : row.group === "rejected" ? <p className="text-micro text-loss">{row.reason}</p> : null}
+          <section aria-label="Rejected and skipped signals">
+            <p className="eyebrow mb-1">Rejected / skipped ({skipped.length})</p>
+            {skipped.length ? (
+              <ol className="max-h-40 space-y-1 overflow-y-auto">
+                {skipped.slice(0, 20).map((row) => (
+                  <li key={row.id} className="rounded-md border border-loss/20 px-2 py-1 text-micro">
+                    <span className="flex items-baseline gap-1.5"><span className="num text-muted">{ist(row.time)}</span><span className="font-semibold">{row.side ? `BUY ${row.side}` : "No entry"}</span>{row.lines.length ? <span className="truncate text-muted">{row.lines.join(", ")}</span> : null}</span>
+                    <span className="block text-loss">{row.reason}</span>
                   </li>
                 ))}
               </ol>
-            ) : <p className="text-micro text-muted">{filter === "all" ? "No orders yet in this replay session." : `No ${filter} orders.`}</p>}
+            ) : <p className="text-micro text-muted">None. Candles without a qualifying line crossing are counted under Processing.</p>}
           </section>
         ) : null}
 

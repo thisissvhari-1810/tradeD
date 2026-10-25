@@ -34,7 +34,7 @@ export type { Drawing, DrawTool } from "@/components/drawing-model";
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 export type ChartReference = { price: number; title: string; color: string; style?: "dashed" | "dotted" };
 /** A trade event on the chart (e.g. an algo entry or exit). Drawn on the displayed bar containing `time`. */
-export type ChartMarker = { id: string; time: number; position: "aboveBar" | "belowBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text: string };
+export type ChartMarker = { id: string; time: number; position: "aboveBar" | "belowBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text: string; size?: number };
 export type ChartType = "candle" | "bar" | "line" | "area";
 
 export type ChartHandle = { fit: () => void; reset: () => void; png: (name: string) => void; range: (bars: number | null) => void; zoom: (direction: -1 | 1) => void };
@@ -429,7 +429,7 @@ export function ChartPanel({
 
   // Trade markers follow the bars: each sits on the displayed bar that contains its time (any timeframe),
   // and one id is drawn once however often the same event arrives.
-  const markerKey = markers.map((item) => `${item.id}:${item.time}:${item.text}:${item.color}`).join("|");
+  const markerKey = markers.map((item) => `${item.id}:${item.time}:${item.text}:${item.color}:${item.size ?? 1}`).join("|");
   const barCount = candles.length;
   const firstBar = candles[0]?.time ?? 0;
   useEffect(() => {
@@ -449,7 +449,7 @@ export function ChartPanel({
       }
       if (bar == null) continue;
       markerBars.current.set(bar, [...(markerBars.current.get(bar) ?? []), item.id]);
-      placed.push({ time: bar as UTCTimestamp, position: item.position, shape: item.shape, color: item.color, text: item.text, size: 1 });
+      placed.push({ time: bar as UTCTimestamp, position: item.position, shape: item.shape, color: item.color, text: item.text, size: item.size ?? 1 });
     }
     placed.sort((a, b) => a.time - b.time);
     if (!markerApi.current) markerApi.current = createSeriesMarkers(series, placed);

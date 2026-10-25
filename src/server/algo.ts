@@ -22,7 +22,7 @@ import { exitChartRun, stepChartRun, walletPaperAdapter } from "@/server/algo-re
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { featuresOf } from "@/lib/auth/features";
 import { premiumFrom } from "@/lib/premium/entitlements";
-import { getStudentBundle } from "@/server/portfolio";
+import { algoSides, getStudentBundle } from "@/server/portfolio";
 
 /**
  * The Strategy Algo on the server: settings, the runner state, the signal / order log and the execution
@@ -235,6 +235,7 @@ async function algoWallet(userId: string) {
     charges: bundle.charges,
     equity: bundle.equity,
     completedTrades: bundle.completedTrades,
+    sides: await algoSides(userId, bundle.positions),
   };
 }
 
@@ -762,9 +763,13 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
       position = { ...state.position, premium, premiumAt: candle ? candle.time + 60 : null, ...positionValuation(state.position, premium) };
     }
     const events = eventsOf(current.id);
+    const runLines = Array.isArray(current.lines) ? (current.lines as unknown as AlgoLine[]) : [];
     run = {
       id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, armed: current.armed, status: current.status, endReason: current.endReason,
       processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: events.slice(-400), stats: runStats(events), config: readAlgoConfig(current.config),
+      // The strategy lines this run compares (fixed for its date) and how many of them are switched on.
+      lineCount: runLines.length,
+      enabledLines: runLines.filter((line) => !readAlgoConfig(current.config).disabledLines.includes(line.type)).length,
     };
   }
   return {
