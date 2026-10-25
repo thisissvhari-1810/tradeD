@@ -18,14 +18,19 @@ import { ensurePracticeAccount, walletKey } from "@/server/practice-account";
 import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
 import { runStats } from "@/lib/algo/chart-replay";
-import { exitChartRun, stepChartRun } from "@/server/algo-replay";
-import { paperCapitalPaise } from "@/server/options-paper";
+import { exitChartRun, stepChartRun, walletPaperAdapter } from "@/server/algo-replay";
+import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
+import { featuresOf } from "@/lib/auth/features";
+import { premiumFrom } from "@/lib/premium/entitlements";
+import { getStudentBundle } from "@/server/portfolio";
 
 /**
  * The Strategy Algo on the server: settings, the runner state, the signal / order log and the execution
- * adapters. Paper trading uses the options paper ledger (the same cash, orders and positions as the
- * options desk, tagged source "algo"); historical replay simulates a past session from real 1-minute
- * option premiums without touching any account; live execution stays unavailable (see liveAvailability).
+ * adapters. Every algo order (paper at live prices, and chart replay) goes to the Algo wallet: its own
+ * practice account on the shared ledger, opened once with ₹1,00,000 (ALGO_STARTING_CAPITAL_PAISE). The
+ * options desk's paper account and the demo / live wallets never fund it. Positions opened before the Algo
+ * wallet existed are closed on the account they were opened on. The quick backtest uses a virtual account
+ * with the same starting capital; live execution stays unavailable (see liveAvailability).
  */
 
 const paise = (rupees: number) => BigInt(Math.round(rupees * 100));
@@ -87,7 +92,9 @@ async function saveRun(sessionId: string, state: AlgoState, events: AlgoEvent[],
 /* ---------------- paper adapter (the options paper ledger) ---------------- */
 
 async function paperAccountId(userId: string) {
-  const account = await prisma.optionPaperAccount.upsert({ where: { userId }, update: {}, create: { userId, cashPaise: paperCapitalPaise(), dayKey: todayIst() } });
+  // Legacy positions only: the options desk's account already exists for them; it is never opened for the algo.
+  const account = await prisma.optionPaperAccount.findUnique({ where: { userId } });
+  if (!account) throw new AppError("The options paper account for this earlier algo position was not found.", 409, "NO_LEGACY_ACCOUNT");
   return account.id;
 }
 
@@ -102,7 +109,8 @@ function chainInput(view: Awaited<ReturnType<typeof loadOptionChain>>): ChainInp
 }
 
 /**
- * Simulated execution on the options paper ledger. Fills use the real option-chain quote: a buy pays the
+ * Legacy: simulated execution on the options desk's paper ledger, used only to protect and close a position
+ * the algo opened there before it had its own wallet (see adapterFor). Fills use the real option-chain quote: a buy pays the
  * ask plus the configured slippage, a sell gets the bid less it (the runner sets the price), with the
  * educational charges model. Cash, the order and the position change in one transaction, keyed by the
  * order's idempotency key, so a repeated request returns the first result.
@@ -192,6 +200,41 @@ export function paperAdapter(userId: string, config: AlgoConfig): ExecutionAdapt
       const order = await prisma.optionPaperOrder.findUnique({ where: { accountId_idempotencyKey: { accountId: await account(), idempotencyKey: key } } });
       return order ? fillOf(order) : null;
     },
+  };
+}
+
+/** Positions and pending orders opened on the Algo wallet carry wallet "ALGO"; anything else is legacy. */
+function onLegacyAccount(state: AlgoState) {
+  return Boolean((state.position && state.position.wallet !== "ALGO") || (state.pending && state.pending.wallet !== "ALGO"));
+}
+
+/** Live-price paper execution for this state: the Algo wallet, or the legacy account until its position is closed. */
+function adapterFor(user: SessionUser, config: AlgoConfig, state: AlgoState): ExecutionAdapter {
+  const legacy = paperAdapter(user.id, config);
+  return onLegacyAccount(state) ? legacy : walletPaperAdapter(user, legacy);
+}
+
+/** Tags what the Algo wallet adapter opened, so later ticks keep using the Algo wallet for it. */
+function tagWallet(state: AlgoState, legacy: boolean) {
+  if (legacy) return;
+  if (state.position && !state.position.wallet) state.position.wallet = "ALGO";
+  if (state.pending && !state.pending.wallet) state.pending.wallet = "ALGO";
+}
+
+/** The Algo wallet's balances, from the same ledger summary Portfolio and Home use. */
+async function algoWallet(userId: string) {
+  const bundle = await getStudentBundle(userId, "ALGO");
+  return {
+    startingCapital: bundle.startingCapital,
+    cashAvailable: bundle.cashAvailable,
+    cashReserved: bundle.cashReserved,
+    holdingsValue: bundle.holdingsValue,
+    unrealized: bundle.unrealized,
+    realized: bundle.realized,
+    realizedToday: bundle.realizedToday,
+    charges: bundle.charges,
+    equity: bundle.equity,
+    completedTrades: bundle.completedTrades,
   };
 }
 
@@ -297,11 +340,12 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   }
   let mark: Mark | null = null;
   if (state.position) mark = await paperAdapter(user.id, config).mark(state.position.contract, Math.floor(Date.now() / 1000)).catch(() => null);
+  // Opening the Algo panel opens the Algo wallet (once, with its starting capital) so every figure is the ledger's.
+  const wallet = await algoWallet(user.id);
   const unrealized = state.position && mark?.bid != null ? Math.round(((mark.bid - state.position.avg) * state.position.quantity - state.position.entryCharges) * 100) / 100 : null;
-  const [events, replays, account] = await Promise.all([
+  const [events, replays] = await Promise.all([
     prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "PAPER" }, orderBy: [{ time: "desc" }, { createdAt: "desc" }], take: 150 }),
     prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "REPLAY" }, orderBy: [{ createdAt: "desc" }], take: 400 }),
-    prisma.optionPaperAccount.findUnique({ where: { userId: user.id } }),
   ]);
   const latestRun = replays[0]?.runId ?? null;
   return {
@@ -314,7 +358,8 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     position: state.position ? { ...state.position, bid: mark?.bid ?? null, ask: mark?.ask ?? null, unrealized, markedAt: mark?.asOf ?? null } : null,
     events: events.map((event) => event.payload as unknown as AlgoEvent),
     replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
-    paper: { cash: account ? rupees(account.cashPaise) : rupees(paperCapitalPaise()) },
+    /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
+    account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
     monitoring: "The algo checks completed candles and its open position each time TradeD runs a check: while this page is open (every 15 seconds), or from the server scheduler when one is configured. Stop-loss and target are watched by TradeD, not held at a broker, so they are not guaranteed protection; exits fill at the quote available when checked.",
   };
@@ -389,7 +434,7 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
       case "emergency": {
         if (command.action === "emergency") { state.entries = false; note("emergency", "Emergency stop: new entries blocked; exiting any open position.", "ERROR"); }
         if (state.position) {
-          await startExit(state, { sessionId: session.id, sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: paperAdapter(user.id, config) }, command.action === "emergency" ? "EMERGENCY" : "MANUAL", null, (event) => events.push({ time: now, ...event }));
+          await startExit(state, { sessionId: session.id, sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, state) }, command.action === "emergency" ? "EMERGENCY" : "MANUAL", null, (event) => events.push({ time: now, ...event }));
         } else if (command.action === "exit") throw new AppError("There is no open algo position.", 409);
         break;
       }
@@ -402,7 +447,7 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
         break;
     }
     if (command.action === "tick" || command.action === "start") {
-      const ran = await runTick(user.id, session.id, config, state);
+      const ran = await runTick(user, session.id, config, state);
       await saveRun(session.id, ran.state, [...events, ...ran.events], "PAPER");
       await syncPaperLevels(user.id, ran.state);
       return;
@@ -415,20 +460,28 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
 }
 
 /** One paper tick: today's strategy levels and 1-minute candles through the runner. */
-async function runTick(userId: string, sessionId: string, config: AlgoConfig, state: AlgoState) {
+async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState) {
   if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
   const today = todayIst();
   const data = await getS1Data(config.underlying);
   // Before today's session (or on a closed day) the levels belong to an earlier day: nothing is evaluated.
   const candles = data.date === today ? await sessionMinuteTape(config.underlying, today) : [];
   const lines = data.date === today ? strategyLines(data, config.custom) : [];
-  return advance(state, { sessionId, sessionDate: today, config, candles, lines, now: Math.floor(Date.now() / 1000), adapter: paperAdapter(userId, config) });
+  const legacy = onLegacyAccount(state);
+  const adapter = adapterFor(user, config, state);
+  // A legacy position is only protected and closed on its old account: no new entry is ever made there,
+  // so candles are evaluated (and entries made on the Algo wallet) from the tick after it is flat.
+  const input = legacy ? { ...state, running: false } : state;
+  const result = await advance(input, { sessionId, sessionDate: today, config, candles, lines, now: Math.floor(Date.now() / 1000), adapter });
+  if (legacy) result.state.running = state.running;
+  tagWallet(result.state, legacy);
+  return result;
 }
 
-/** Keeps the paper position's stored stop and target equal to the runner's. */
+/** Keeps a legacy paper position's stored stop and target equal to the runner's. */
 async function syncPaperLevels(userId: string, state: AlgoState) {
   const position = state.position;
-  if (!position) return;
+  if (!position || position.wallet === "ALGO") return;
   const account = await prisma.optionPaperAccount.findUnique({ where: { userId } });
   if (!account) return;
   await prisma.optionPaperPosition.updateMany({ where: { accountId: account.id, source: "algo", status: "OPEN", contractKey: contractKeyOf(position.contract) }, data: { stopPremiumPaise: paise(position.stop), targetPremiumPaise: paise(position.target) } });
@@ -436,14 +489,16 @@ async function syncPaperLevels(userId: string, state: AlgoState) {
 
 /** Ticks every running paper session (for a server scheduler; see /api/algo/cron). */
 export async function tickAllSessions() {
-  const sessions = await prisma.algoSession.findMany({ include: { user: true } });
+  const sessions = await prisma.algoSession.findMany({ include: { user: { include: { subscriptions: { where: { status: "ACTIVE" }, orderBy: { endsAt: "desc" }, take: 5 } } } } });
   let ran = 0;
   for (const session of sessions) {
     const state = stateOf(session);
     if (!state.running && !state.position) continue;
     try {
       await withLease(session.id, async () => {
-        const result = await runTick(session.userId, session.id, readAlgoConfig(session.config), state);
+        const row = session.user;
+        const user: SessionUser = { id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt };
+        const result = await runTick(user, session.id, readAlgoConfig(session.config), state);
         await saveRun(session.id, result.state, result.events, "PAPER");
         await syncPaperLevels(session.userId, result.state);
       });
@@ -470,7 +525,7 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
   const chain = await loadOptionChain(config.underlying, config.expiry === "nearest" ? null : config.expiry);
   if (!chain.available || !chain.expiry) throw new AppError(`No option chain for ${config.underlying}: ${chain.message}`, 409);
   if (chain.expiry < date) throw new AppError(`The expiry ${chain.expiry} is before ${date}.`, 409);
-  const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain, config, capital: rupees(paperCapitalPaise()) });
+  const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain, config, capital: rupees(ALGO_STARTING_CAPITAL_PAISE) });
   if (adapter.kind !== "replay") throw new AppError("Replay must use the replay adapter.", 500);
   const runId = `replay:${date}:${Date.now()}`;
   const lines = strategyLines(data, config.custom);
@@ -528,8 +583,8 @@ function chartBounds(session: string, cursor: number | null) {
   return { date, ...bounds };
 }
 
-async function demoCash(userId: string) {
-  const account = await ensurePracticeAccount(userId, "DEMO");
+async function walletCash(userId: string, wallet: "ALGO" | "DEMO") {
+  const account = await ensurePracticeAccount(userId, wallet);
   return account.cashAvailable;
 }
 
@@ -578,7 +633,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const candles = await dayTape(config.underlying, date);
     if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date}.`, 409, "NO_CANDLES");
     const chain = await runChain(config, date);
-    const cash = await demoCash(user.id);
+    const cash = await walletCash(user.id, "ALGO");
     const lines = strategyLines(data, config.custom);
     // Starting mid-session never trades history: evaluation starts with the first minute after the cursor.
     const processedThrough = Math.max(open, minute);
@@ -586,10 +641,10 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const run = await prisma.algoRun.create({
       data: {
         sessionId, replaySession: command.session, date, underlying: config.underlying, config: config as unknown as Prisma.InputJsonValue, lines: lines as unknown as Prisma.InputJsonValue,
-        state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, startCashPaise: cash,
+        state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, wallet: "ALGO", startCashPaise: cash,
       },
     });
-    await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `Algo replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Demo wallet; no broker orders.` }]);
+    await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `Algo replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Algo wallet (₹1,00,000 practice capital); no broker orders.` }]);
     return;
   }
 
@@ -600,8 +655,9 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
   const runConfig = readAlgoConfig(existing.config);
   const { date, open, close } = chartBounds(command.session, "cursor" in command ? command.cursor : null);
   const state = runStateOf(existing);
+  const wallet = existing.wallet === "ALGO" ? "ALGO" as const : "DEMO" as const;
   const context = async () => ({
-    user, runId: existing.id, session: command.session, date, config: runConfig, lines: (existing.lines as unknown as AlgoLine[]) ?? [],
+    user, wallet, runId: existing.id, session: command.session, date, config: runConfig, lines: (existing.lines as unknown as AlgoLine[]) ?? [],
     candles: await dayTape(existing.underlying, date), chain: await runChain(runConfig, date), sessionOpen: open, sessionClose: close,
   });
 
@@ -616,7 +672,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
   if (command.action === "chartReset") {
     if (state.position || state.pending) throw new AppError("Exit the open algo position before resetting the replay session.", 409, "POSITION_OPEN");
     if (existing.status === "ENDED") return;
-    await saveChartRun(existing, { status: "ENDED", armed: false, endedAt: new Date(), endReason: "RESET", endCashPaise: await demoCash(user.id), state: { ...state, running: false, entries: false, status: "COMPLETED" } as unknown as Prisma.InputJsonValue }, [note("reset", existing.processedThrough, "Replay session reset. A new session starts a new algo run; this run's trades stay in history.")]);
+    await saveChartRun(existing, { status: "ENDED", armed: false, endedAt: new Date(), endReason: "RESET", endCashPaise: await walletCash(user.id, wallet), state: { ...state, running: false, entries: false, status: "COMPLETED" } as unknown as Prisma.InputJsonValue }, [note("reset", existing.processedThrough, "Replay session reset. A new session starts a new algo run; this run's trades stay in history.")]);
     return;
   }
 
@@ -630,7 +686,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     if (ran.ended) ran.state.status = ran.state.recovery ? "RECOVERY_REQUIRED" : ran.state.position ? "EXIT_PENDING" : "COMPLETED";
     await saveChartRun(existing, {
       state: ran.state as unknown as Prisma.InputJsonValue, processedThrough: ran.processedThrough,
-      ...(ran.ended ? { status: ran.state.position ? "ACTIVE" : "ENDED", armed: false, endedAt: ran.state.position ? null : new Date(), endReason: "SESSION_END", endCashPaise: await demoCash(user.id) } : {}),
+      ...(ran.ended ? { status: ran.state.position ? "ACTIVE" : "ENDED", armed: false, endedAt: ran.state.position ? null : new Date(), endReason: "SESSION_END", endCashPaise: await walletCash(user.id, wallet) } : {}),
     }, [...ran.events, ...(ran.ended ? [{ key: "session-end", time: close, kind: "INFO" as const, message: ran.state.position ? "Replay reached the session close but the square-off is not confirmed: the position is still open on the demo ledger." : "Replay reached the session close: the algo session ended." }] : [])]);
     return;
   }
@@ -669,7 +725,6 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
   const ids = [...new Set([...runs.map((run) => run.id), ...(current ? [current.id] : [])])];
   const rows = ids.length ? await prisma.algoEvent.findMany({ where: { sessionId, mode: "CHART", runId: { in: ids } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 4000 }) : [];
   const eventsOf = (runId: string) => rows.filter((row) => row.runId === runId).map((row) => row.payload as unknown as AlgoEvent);
-  const wallet = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO"), include: { currentPeriod: true } });
   let run = null;
   if (current) {
     const state = runStateOf(current);
@@ -680,6 +735,7 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
       const tape = await sessionTape({ underlying: contract.underlying, name: contract.underlying, expiry: contract.expiry, strike: contract.strike, right: contract.right, securityId: contract.securityId, kind: findIndex(contract.underlying) ? "index" : "equity", lotSize: contract.lotSize }, current.date, new Date()).catch(() => []);
       const candle = tape.filter((item) => item.time + 60 <= at).at(-1) ?? null;
       const premium = candle?.close ?? null;
+      if (candle) await cacheReplayMark(current.replaySession, contract, candle.close, candle.time + 60, at);
       const invested = state.position.avg * state.position.quantity;
       const value = premium == null ? null : premium * state.position.quantity;
       const unrealized = value == null ? null : Math.round((value - invested - state.position.entryCharges) * 100) / 100;
@@ -704,6 +760,23 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
         trades: events.filter((event) => event.kind === "ENTRY" || event.kind === "EXIT"),
       };
     }),
-    wallet: wallet ? { cash: rupees(wallet.cashAvailable), reserved: rupees(wallet.cashReserved), startingCapital: wallet.currentPeriod ? rupees(wallet.currentPeriod.startingCapital) : null } : null,
+    /** A run started before the Algo wallet existed finishes on the demo wallet. */
+    runWallet: current ? current.wallet : "ALGO",
   };
+}
+
+/**
+ * Stores the replay mark of an algo replay position on its session instrument, as the chart's own replay
+ * marks do, so Portfolio and Home value the Algo wallet's replay position at the same replay price.
+ */
+async function cacheReplayMark(session: string, contract: ContractRef, premium: number, candleEnd: number, cursor: number) {
+  const symbol = `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}|R:${session}`;
+  const instrument = await prisma.instrument.findUnique({ where: { symbol } });
+  if (!instrument) return;
+  const markPaise = paise(premium);
+  const cache = {
+    lastPaise: markPaise, bidPaise: markPaise, askPaise: markPaise, openPaise: markPaise, highPaise: markPaise, lowPaise: markPaise, previousClosePaise: markPaise,
+    volume: 0n, asOf: new Date(candleEnd * 1000), mode: "HISTORICAL" as const, source: `last-completed-1m-close at replay ${new Date(cursor * 1000).toISOString()}`, marketOpen: false, message: "Replay mark. Not a live price.",
+  };
+  await prisma.quoteCache.upsert({ where: { instrumentId: instrument.id }, create: { instrumentId: instrument.id, ...cache }, update: cache }).catch(() => undefined);
 }

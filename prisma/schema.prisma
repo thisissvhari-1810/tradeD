@@ -325,6 +325,8 @@ model ClassMembership {
 enum PracticeMode {
   DEMO
   LIVE
+  /// The Strategy Algo's own wallet (₹1,00,000 by default); never funds or is funded by DEMO or LIVE.
+  ALGO
 }
 
 model VirtualAccount {
@@ -1148,6 +1150,8 @@ model AlgoRun {
   armed            Boolean     @default(false)
   /// The replay minute (unix seconds) through which candles have been processed.
   processedThrough Int
+  /// The practice wallet whose ledger holds this run's orders: ALGO (new runs) or DEMO (runs started before the Algo wallet existed).
+  wallet           PracticeMode @default(DEMO)
   startCashPaise   BigInt
   endCashPaise     BigInt?
   startedAt        DateTime    @default(now())

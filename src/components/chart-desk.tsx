@@ -793,7 +793,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     session: optionSession,
     cursor: replay.cursor,
     advancing: replay.status === "playing" || replay.status === "completed",
-    onLedger: () => { refreshPractice.current(); setLedgerTick((value) => value + 1); },
+    // Every ledger view (this chart, the Algo account card) reloads from the server.
+    onLedger: () => { window.dispatchEvent(new Event("td-ledger")); setLedgerTick((value) => value + 1); },
     onPause: () => setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current)),
     notify,
   });

@@ -6,6 +6,7 @@ import { cx } from "@/components/ui";
 import { EXIT_LABEL } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
+import { AlgoAccountFigures } from "@/components/algo/algo-account";
 
 const inr = (value: number | null | undefined, signed = false) => {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -48,7 +49,8 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
   const status: AlgoStatus = !algo.enabled && !position ? "DISABLED" : state?.status ?? (algo.enabled ? "READY" : "DISABLED");
   const badge = position?.exit ? BADGE.EXIT_PENDING! : BADGE[status] ?? BADGE.DISABLED!;
   const lastExit = [...(run?.events ?? [])].reverse().find((event) => event.kind === "EXIT");
-  const wallet = data?.wallet;
+  const account = data?.account;
+  const legacyRun = data?.runWallet === "DEMO" && run != null;
 
   return (
     <aside className="flex min-h-0 shrink-0 flex-col border-border bg-panel text-data max-lg:max-h-[45dvh] max-lg:border-t lg:w-[19rem] lg:border-l" aria-label="Algo trading">
@@ -130,12 +132,12 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
           </dl>
         ) : null}
 
-        {wallet ? (
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft p-2">
-            <Item label="Demo cash" value={inr(wallet.cash)} />
-            <Item label="Starting capital" value={inr(wallet.startingCapital)} />
-            {wallet.reserved ? <Item label="Reserved" value={inr(wallet.reserved)} /> : null}
-          </dl>
+        {account ? (
+          <div className="rounded-md border border-border-soft p-2">
+            <p className="eyebrow mb-1">Algo account</p>
+            <AlgoAccountFigures account={account} compact />
+            {legacyRun ? <p className="mt-1 text-micro text-warning">This replay session started before the Algo account existed, so its trades stay on your demo wallet until it ends. New sessions use the Algo account.</p> : null}
+          </div>
         ) : null}
 
         {run && (run.armed || position) ? (
@@ -144,7 +146,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
             <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md border border-loss/50 px-2.5 font-medium text-loss hover:bg-loss-soft disabled:opacity-50" style={{ color: "var(--loss)" }} disabled={Boolean(algo.busy) || cursor == null} onClick={() => setConfirmEmergency(true)}><OctagonX className="h-3.5 w-3.5" aria-hidden />Emergency stop</button>
           </div>
         ) : null}
-        <p className="text-micro leading-snug text-muted">Demo wallet only: fills come from historical 1-minute option data at the replay time and update Portfolio and Home. No broker order is ever sent from replay.</p>
+        <p className="text-micro leading-snug text-muted">Algo account only (₹1,00,000 practice capital, separate from your demo funds): fills come from historical 1-minute option data at the replay time and show under Algo account in Portfolio and Home. No broker order is ever sent from replay.</p>
       </div>
 
       {confirmExit && position ? (
@@ -252,7 +254,8 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Signal timeframe", "1 minute (completed candles)"],
     ["Replay", `${date} from ${ist(cursor)} IST`],
     ["Replay speed", `${speed}x`],
-    ["Demo cash", inr(data.wallet?.cash)],
+    ["Algo account cash", data.account.cashAvailable],
+    ["Algo account equity", data.account.equity],
     ["Quantity", `${config.lots} lot${config.lots === 1 ? "" : "s"} (ATM CALL / PUT)`],
     ["Stop-loss", config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
     ["Target", config.target.mode === "percent" ? `${config.target.value}% of premium` : `₹${config.target.value} above entry`],
@@ -268,7 +271,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
       <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
         {rows.map(([label, value]) => <Item key={label} label={label} value={value} />)}
       </dl>
-      <p className="mt-3 rounded-md bg-demo-soft px-2 py-1.5 text-micro text-demo">Simulated trading on the demo wallet. Fills use historical 1-minute option premiums; nothing is sent to a broker.</p>
+      <p className="mt-3 rounded-md bg-demo-soft px-2 py-1.5 text-micro text-demo">Simulated trading on the Algo account (its own practice capital). Fills use historical 1-minute option premiums; nothing is sent to a broker.</p>
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onCancel}>Cancel</button>
         {ended ? <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onReset}>Reset session</button> : null}

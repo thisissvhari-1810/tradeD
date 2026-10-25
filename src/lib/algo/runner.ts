@@ -92,9 +92,11 @@ export type OpenPosition = {
   lineIds: string[];
   exit: { key: string; reason: string; attempt: number; uncertain: boolean } | null;
   exitAttempts: number;
+  /** "ALGO" when held on the Algo wallet; absent on positions opened before it existed. */
+  wallet?: "ALGO";
 };
 
-export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean };
+export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean; wallet?: "ALGO" };
 
 export type AlgoState = {
   /** The session is started (monitoring); false = stopped. */
@@ -337,6 +339,7 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
   state.position = {
     entryKey: pending.key, contract: pending.contract, side: pending.side, lots: pending.lots, quantity: fill.quantity, avg: fill.price,
     stop, target, entryCharges: fill.charges, openedAt: input.now, signalTime: pending.signalTime, lineIds: pending.lineIds, exit: null, exitAttempts: 0,
+    ...(pending.wallet ? { wallet: pending.wallet } : {}),
   };
   state.pending = null;
   state.tradesToday += 1;

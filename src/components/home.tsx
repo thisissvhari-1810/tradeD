@@ -1,5 +1,6 @@
 "use client";
 
+import { AlgoAccountCard } from "@/components/algo/algo-account";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CandlestickChart, GitBranch, History, Layers, ReceiptText, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
@@ -110,6 +111,9 @@ export function Home() {
             <div className="min-w-0 max-lg:order-2 lg:contents"><AccountCard state={portfolioState} portfolio={portfolio} live={live} onRetry={() => { setPortfolioState("loading"); void loadPortfolio(); }} /></div>
             <div className="min-w-0 max-lg:hidden lg:contents"><MarketPulse indices={desk.indices} note={desk.indexNote} onOpen={desk.openChart} /></div>
           </div>
+
+          {/* The Strategy Algo's own practice account (Demo view only; it never mixes with the demo funds above). */}
+          {!live ? <div className="min-w-0 max-lg:order-2"><AlgoAccountCard /></div> : null}
 
           <div className={cx("min-w-0 max-lg:order-7", !mobile.homeMarketCards && "max-lg:hidden")}><QuickActions live={live} replayAllowed={replayAllowed} /></div>
 

@@ -820,13 +820,15 @@ export async function placeOptionReplay(
     fillPremium?: number;
   },
   now = new Date(),
+  /** DEMO for the chart's own replay orders; ALGO only for the Strategy Algo (never chosen by a request). */
+  mode: "DEMO" | "ALGO" = "DEMO",
 ) {
   if (!mayPractice(user)) throw new AppError("This account cannot buy or sell practice options.", 403, "ROLE_NOT_ALLOWED");
   if (user.status !== "ACTIVE" || !user.tradingEnabled) throw new AppError("Trading is disabled for this account. Ask your instructor to enable it.", 403, "TRADING_DISABLED");
   if (!Number.isInteger(input.lots) || input.lots <= 0 || input.lots > 50) throw new AppError("Enter between 1 and 50 lots.", 400, "INVALID_QUANTITY", { field: "lots" });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expiry)) throw new AppError("Choose an expiry from the option chain.", 400, "INVALID_EXPIRY", { field: "expiry" });
   const { date } = checkReplayClock(input.session, input.cursor, now);
-  const account = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
+  const account = mode === "ALGO" ? await ensurePracticeAccount(user.id, "ALGO") : await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO") });
   if (!account?.currentPeriodId) throw new AppError("No demo capital has been assigned to this account yet. Ask your instructor to assign capital.", 409, "NO_DEMO_ACCOUNT");
   const prefix = `optreplay:${input.session}:`;
   const key = `${prefix}${input.idempotencyKey.replace(/^optreplay:[^:]*:/, "")}`;

@@ -1,5 +1,6 @@
 "use client";
 
+import { AlgoAccountCard } from "@/components/algo/algo-account";
 import { useHydrated } from "@/components/use-hydrated";
 import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -379,6 +380,8 @@ export function HoldingsScreen() {
         <StatCard size="sm" label="Realized P&L" value={portfolio?.realized ?? "—"} tone={signOf(portfolio?.realized)} loading={loading} />
         <StatCard size="sm" label="Unrealized P&L" value={portfolio?.unrealized ?? "—"} tone={signOf(portfolio?.unrealized)} loading={loading} />
       </div>
+
+      <AlgoAccountCard />
 
       <Section title="Performance" description="Capital is separate from profit and loss. Drawdown uses saved equity snapshots and stays blank until two exist.">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">

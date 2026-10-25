@@ -24,6 +24,7 @@ const db = vi.hoisted(() => {
     ledger: [] as Row[],
     quotes: [] as Row[],
     closed: [] as Row[],
+    periods: [] as Row[],
     seq: 0,
   };
   const id = (prefix: string) => `${prefix}${++state.seq}`;
@@ -57,7 +58,10 @@ const db = vi.hoisted(() => {
     virtualAccount: {
       findUnique: async ({ where }: { where: { id?: string; userId?: string; userId_mode?: { userId: string; mode: string } } }) => state.accounts.find((row) => (where.id ? row.id === where.id : where.userId_mode ? row.userId === where.userId_mode.userId && ((row as { mode?: string }).mode ?? "DEMO") === where.userId_mode.mode : row.userId === where.userId)) ?? null,
       update: async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(state.accounts.find((row) => row.id === where.id)!, data),
+      create: async ({ data }: { data: Row }) => { const row = { ...data, id: id("acc") }; state.accounts.push(row as Row); return row; },
     },
+    practicePeriod: { create: async ({ data }: { data: Row }) => { const row = { ...data, id: id("per") }; state.periods.push(row as Row); return row; } },
+    watchlist: { create: async () => null },
     order: {
       findUnique: async ({ where, include }: { where: Parameters<typeof findOrder>[0]; include?: unknown }) => { const row = findOrder(where); return row ? (include ? withIncludes(row) : row) : null; },
       findUniqueOrThrow: async ({ where, include }: { where: Parameters<typeof findOrder>[0]; include?: unknown }) => { const row = findOrder(where); if (!row) throw new Error("not found"); return include ? withIncludes(row) : row; },
@@ -128,6 +132,7 @@ const DATE = "2026-10-16";
 const SESSION = "2026-10-16.algo1234";
 const NOW = new Date("2026-10-16T12:00:00.000Z");
 const START = 10_000_000n; // ₹1,00,000
+const DEMO_FUNDS = 500_000_000n; // ₹50,00,000 in a separate demo wallet
 const LINE = 23_150;
 /** Minute index → unix seconds. */
 const m = (index: number) => OPEN + index * 60;
@@ -153,6 +158,8 @@ vi.mock("@/server/option-chain", () => ({
 const { stepChartRun, exitChartRun } = await import("../src/server/algo-replay");
 const { clearReplayTapes } = await import("../src/server/option-replay");
 const { loadOptionChain } = await import("../src/server/option-chain");
+const { ensurePracticeAccount, practiceModeOf, viewModeOf } = await import("../src/server/practice-account");
+const { placeOptionReplay } = await import("../src/server/trading");
 
 const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 
@@ -187,7 +194,7 @@ const config: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", stop: { mode: "pe
 
 async function run(candles: Candle[], options: { state?: AlgoState; processedThrough?: number; cursor: number; config?: AlgoConfig }) {
   return stepChartRun({
-    user: student, runId: "run1", session: SESSION, date: DATE, config: options.config ?? config, lines, candles, chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW,
+    user: student, wallet: "ALGO", runId: "run1", session: SESSION, date: DATE, config: options.config ?? config, lines, candles, chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW,
     state: options.state ?? { ...initialState(DATE), running: true, entries: true }, processedThrough: options.processedThrough ?? OPEN, cursor: options.cursor,
   });
 }
@@ -197,8 +204,10 @@ const buys = () => db.state.orders.filter((row) => row.side === "BUY");
 const sells = () => db.state.orders.filter((row) => row.side === "SELL");
 
 beforeEach(() => {
-  Object.assign(db.state, { accounts: [], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], seq: 0 });
-  db.state.accounts.push({ id: "acc1", userId: "u1", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n });
+  Object.assign(db.state, { accounts: [], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], periods: [], seq: 0 });
+  // The Algo wallet (₹1,00,000) and a separate ₹50,00,000 demo wallet that the Algo must never touch.
+  db.state.accounts.push({ id: "acc1", userId: "u1", mode: "ALGO", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n });
+  db.state.accounts.push({ id: "acc2", userId: "u1", mode: "DEMO", currentPeriodId: "p2", cashAvailable: DEMO_FUNDS, cashReserved: 0n });
   feed.premiums = premiums();
   feed.missing = false;
   clearReplayTapes();
@@ -323,7 +332,7 @@ describe("algo orders on the demo ledger during chart replay", () => {
     feed.premiums = premiums((index) => (index >= 33 ? { low: 109.5, high: 110.5, close: 110 } : null));
     const opened = await run(underlying("DOWN"), { cursor: m(34) });
     const before = cash();
-    const base = { user: student, runId: "run1", session: SESSION, date: DATE, config, lines, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
+    const base = { user: student, wallet: "ALGO" as const, runId: "run1", session: SESSION, date: DATE, config, lines, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
     const exited = await exitChartRun({ ...base, state: opened.state, at: m(34), reason: "MANUAL" });
     expect(exited.state.position).toBeNull();
     expect(sells()).toHaveLength(1);
@@ -341,7 +350,7 @@ describe("algo orders on the demo ledger during chart replay", () => {
   it("an exit already in progress refuses a duplicate", async () => {
     const opened = await run(underlying("DOWN"), { cursor: m(34) });
     const state = { ...opened.state, position: { ...opened.state.position!, exit: { key: "k", reason: "MANUAL", attempt: 1, uncertain: false } } };
-    const base = { user: student, runId: "run1", session: SESSION, date: DATE, config, lines, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
+    const base = { user: student, wallet: "ALGO" as const, runId: "run1", session: SESSION, date: DATE, config, lines, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
     await expect(exitChartRun({ ...base, state, at: m(34), reason: "MANUAL" })).rejects.toThrow(/already being processed/i);
   });
 
@@ -374,7 +383,7 @@ describe("algo orders on the demo ledger during chart replay", () => {
       through = step.processedThrough;
     }
     const stepped = { orders: db.state.orders.length, cash: cash() };
-    Object.assign(db.state, { accounts: [{ id: "acc1", userId: "u1", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n }], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], seq: 0 });
+    Object.assign(db.state, { accounts: [{ id: "acc1", userId: "u1", mode: "ALGO", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n }], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], seq: 0 });
     await run(underlying("DOWN"), { cursor: through });
     expect({ orders: db.state.orders.length, cash: cash() }).toEqual(stepped);
   });
@@ -447,5 +456,137 @@ describe("chart wiring for the algo replay", () => {
   it("steps are sent one at a time with the replay clock, never the computer clock", () => {
     expect(hook).toMatch(/action: "chartStep", session, cursor/);
     expect(hook).not.toMatch(/Date\.now\(\)/);
+  });
+});
+
+describe("the Algo's own ₹1,00,000 account", () => {
+  const algoAccount = () => db.state.accounts.find((row) => row.mode === "ALGO")!;
+  const demoAccount = () => db.state.accounts.find((row) => row.mode === "DEMO")!;
+  const order = (lots: number, cursor: number, key: string) => placeOptionReplay(student, { symbol: "NIFTY", expiry: "2026-10-20", strike: 23_150, right: "PE", action: "BUY", lots, session: SESSION, cursor, idempotencyKey: key }, NOW, "ALGO");
+
+  it("a new Algo account opens with exactly ₹1,00,000: cash 1,00,000, reserved 0, opening ledger entry", async () => {
+    db.state.accounts = db.state.accounts.filter((row) => row.mode !== "ALGO");
+    const opened = await ensurePracticeAccount("u1", "ALGO");
+    expect(opened.cashAvailable).toBe(10_000_000n);
+    expect(opened.cashReserved).toBe(0n);
+    expect(db.state.periods.at(-1)?.startingCapital).toBe(10_000_000n);
+    expect(db.state.ledger.find((row) => row.type === "OPENING_BALANCE")?.cashDelta).toBe(10_000_000n);
+  });
+
+  it("opening it again (refresh, restart, another replay date) never resets the balance", async () => {
+    await run(underlying("DOWN"), { cursor: m(40) });
+    const after = cash();
+    const again = await ensurePracticeAccount("u1", "ALGO");
+    expect(again.cashAvailable).toBe(after);
+    expect(db.state.accounts.filter((row) => row.mode === "ALGO")).toHaveLength(1);
+    expect(after).toBeLessThan(START);
+  });
+
+  it("algo orders use only the Algo account; the ₹50,00,000 demo wallet is untouched", async () => {
+    await run(underlying("DOWN"), { cursor: m(40) });
+    expect(demoAccount().cashAvailable).toBe(DEMO_FUNDS);
+    expect(db.state.orders.every((row) => row.accountId === algoAccount().id)).toBe(true);
+  });
+
+  it("an entry costing more than ₹1,00,000 is rejected even though the demo wallet holds ₹50,00,000", async () => {
+    feed.premiums = premiums(() => ({ low: 1_999, high: 2_001, close: 2_000 })); // 75 × ₹2,000 = ₹1,50,000
+    const result = await run(underlying("DOWN"), { cursor: m(40) });
+    expect(db.state.orders).toHaveLength(0);
+    expect(result.state.lastOrder?.status).toBe("REJECTED");
+    expect(cash()).toBe(START);
+    expect(demoAccount().cashAvailable).toBe(DEMO_FUNDS);
+  });
+
+  it("several orders together cannot overspend the account", async () => {
+    feed.premiums = premiums(() => ({ low: 599, high: 601, close: 600 })); // ₹45,000 a lot
+    await order(1, m(31), "a");
+    const second = await order(2, m(32), "b").catch((error: unknown) => error as { code?: string });
+    expect((second as { code?: string }).code).toBe("INSUFFICIENT_FUNDS");
+    expect(cash() > 0n).toBe(true);
+    expect(db.state.executions).toHaveLength(1);
+  });
+
+  it("market fills reserve nothing; cash falls by exactly the fill plus charges, once", async () => {
+    await order(1, m(31), "c");
+    await order(1, m(31), "c"); // the same order event again
+    const fill = db.state.executions[0];
+    expect(db.state.executions).toHaveLength(1);
+    expect(algoAccount().cashReserved).toBe(0n);
+    expect(cash()).toBe(START - (fill.pricePaise as bigint) * 75n - (fill.chargesPaise as bigint));
+  });
+
+  it("equity = cash + reserved + open value, and unrealized = (premium − average) × quantity", async () => {
+    await order(1, m(31), "d");
+    const position = db.state.positions[0];
+    const premium = 11_000n; // a later premium of ₹110
+    const value = premium * BigInt(position.quantity as number);
+    const unrealized = (premium - (position.avgCostPaise as bigint)) * BigInt(position.quantity as number);
+    const equity = cash() + (algoAccount().cashReserved as bigint) + value;
+    const fill = db.state.executions[0];
+    // The ledger puts entry charges into the average cost, so unrealized P&L is already net of them and
+    // equity − starting capital equals it (to under a paisa per unit of rounding in the average).
+    const quantity = BigInt(position.quantity as number);
+    const abs = (value: bigint) => (value < 0n ? -value : value);
+    expect(abs((position.avgCostPaise as bigint) * quantity - ((fill.pricePaise as bigint) * quantity + (fill.chargesPaise as bigint))) <= quantity / 2n).toBe(true);
+    expect(abs(equity - (START + unrealized)) <= quantity / 2n).toBe(true);
+  });
+
+  it("an exit adds the proceeds once, even when the exit event repeats", async () => {
+    await order(1, m(31), "e");
+    const sell = { symbol: "NIFTY", expiry: "2026-10-20", strike: 23_150, right: "PE" as const, action: "SELL" as const, lots: 1, session: SESSION, cursor: m(35), idempotencyKey: "e-exit" };
+    await placeOptionReplay(student, sell, NOW, "ALGO");
+    const after = cash();
+    await placeOptionReplay(student, sell, NOW, "ALGO");
+    expect(cash()).toBe(after);
+    expect(db.state.executions).toHaveLength(2);
+    expect(db.state.positions[0].quantity).toBe(0);
+  });
+
+  it("a new replay date (new session) continues from the same balance", async () => {
+    await run(underlying("DOWN"), { cursor: m(40) });
+    const after = cash();
+    const other = await stepChartRun({
+      user: student, wallet: "ALGO", runId: "run2", session: "2026-10-16.other999", date: DATE, config, lines, candles: underlying("UP"), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: { ...initialState(DATE), running: true, entries: true }, processedThrough: OPEN, cursor: m(40),
+    });
+    expect(other.state.position).not.toBeNull();
+    expect(cash()).toBeLessThan(after);
+    expect(db.state.accounts.filter((row) => row.mode === "ALGO")).toHaveLength(1);
+  });
+
+  it("a run started before the Algo account existed finishes on the demo wallet it began on", async () => {
+    await stepChartRun({
+      user: student, wallet: "DEMO", runId: "legacy", session: SESSION, date: DATE, config, lines, candles: underlying("DOWN"), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: { ...initialState(DATE), running: true, entries: true }, processedThrough: OPEN, cursor: m(40),
+    });
+    expect(db.state.orders[0].accountId).toBe(demoAccount().id);
+    expect(cash()).toBe(START);
+  });
+
+  it("no request can pick the Algo account for an order; only read-only views can show it", () => {
+    const request = (url: string, mode = "") => new Request(url, { headers: mode ? { "x-td-mode": mode } : {} });
+    expect(practiceModeOf(request("http://x/api/orders?wallet=algo", "algo"))).toBe("DEMO");
+    expect(viewModeOf(request("http://x/api/portfolio?wallet=algo"))).toBe("ALGO");
+    for (const route of ["src/app/api/orders/route.ts", "src/app/api/demo/option/route.ts", "src/app/api/demo/option-replay/route.ts"]) {
+      expect(readFileSync(route, "utf8")).not.toMatch(/viewModeOf|"ALGO"/);
+    }
+  });
+
+  it("the Algo panel, Portfolio and Home read the same ledger summary; nothing shows the ₹50,00,000 options-desk balance", () => {
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    expect(server).toMatch(/getStudentBundle\(userId, "ALGO"\)/);
+    expect(server).not.toMatch(/paperCapitalPaise/);
+    expect(readFileSync("src/app/api/portfolio/route.ts", "utf8")).toMatch(/getStudentBundle\(user\.id, mode\)/);
+    const panel = readFileSync("src/components/algo/algo-panel.tsx", "utf8");
+    expect(panel).not.toMatch(/Paper cash|data\.paper/);
+    expect(panel).toMatch(/AlgoAccountFigures account=\{data\.account\}/);
+    expect(readFileSync("src/components/home.tsx", "utf8")).toMatch(/<AlgoAccountCard \/>/);
+    expect(readFileSync("src/components/screens.tsx", "utf8")).toMatch(/<AlgoAccountCard \/>/);
+  });
+
+  it("the options desk keeps its own paper account and is never opened for the Algo", () => {
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    expect(server).not.toMatch(/optionPaperAccount\.upsert/);
+    expect(readFileSync("src/server/options-paper.ts", "utf8")).toMatch(/export function paperCapitalPaise/);
   });
 });

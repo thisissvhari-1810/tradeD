@@ -5,6 +5,7 @@ import { History, OctagonX, Play, Plus, Square, Trash2 } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
+import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
 import type { algoView } from "@/server/algo";
@@ -138,10 +139,12 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       </div>
 
       {/* Live readouts */}
+      <div className="rounded-md border border-border-soft bg-sunken/50 p-2">
+        <p className="eyebrow mb-1">Algo account</p>
+        <AlgoAccountFigures account={data.account} compact extra={[["Entries today", `${state.tradesToday} / ${data.config.maxTrades}`]]} />
+        {data.account.legacyPosition ? <p className="mt-1 text-micro text-warning">An earlier algo position is still on the options paper account. It is protected and closed there; new entries start on this account once it is flat.</p> : null}
+      </div>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
-        <Info label="Paper cash" text={inr(data.paper.cash)} />
-        <Info label="Trades today" text={`${state.tradesToday} / ${data.config.maxTrades}`} />
-        <Info label="Realized today" text={inr(state.realizedToday)} tone={state.realizedToday > 0 ? "text-profit" : state.realizedToday < 0 ? "text-loss" : undefined} />
         <Info label="Last candle" text={clock(state.lastCandle)} />
         <div className="col-span-2 min-w-0">
           <dt className="text-micro text-muted">Last signal</dt>
