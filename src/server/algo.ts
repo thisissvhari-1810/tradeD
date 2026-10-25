@@ -11,7 +11,8 @@ export { liveAdapter } from "@/lib/algo/live";
 import { advance, initialState, startExit, ALGO_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
-import { getS1Data, sessionMinuteTape } from "@/server/market";
+import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
+import { buildPlan } from "@/lib/algo/plan";
 import { loadOptionChain } from "@/server/option-chain";
 import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/option-replay";
 import { ensurePracticeAccount } from "@/server/practice-account";
@@ -562,8 +563,10 @@ async function simulateDay(sessionId: string, date: string, config: AlgoConfig) 
     const result = await advance(state, { sessionId, sessionDate: date, config, candles, lines, now: clock, adapter });
     state = result.state;
     events.push(...result.events);
-    // Like chart replay: the session stops once its trades are all done.
+    // Like chart replay: the session stops once its trades are all done, or once the entry window has
+    // closed with nothing open (no later candle can enter).
     if (sessionComplete(state, config.maxTrades)) break;
+    if (!state.position && !state.pending && new Date((clock + 19_800) * 1000).toISOString().slice(11, 16) > config.entryCutoff) break;
   }
   if (state.position) {
     const last = candles.at(-1)!.time + 60;
@@ -590,22 +593,45 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
  * settings with every entry filter and the structure stop off ("baseline") to compare. Read-only: nothing
  * is written and no order is placed anywhere.
  */
-export async function backtestDay(user: SessionUser, date: string, variant: "saved" | "baseline") {
+export async function backtestDay(user: SessionUser, date: string, variant: string) {
   assertAllowed(user);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date.", 400);
   const session = await loadSession(user.id);
   const saved = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
-  const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false } : saved;
+  // "baseline": the entry filters and the structure stop off; "score:NN": the saved settings with another minimum score.
+  const score = /^score:(\d{1,3})$/.exec(variant);
+  const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false } : score ? { ...saved, minScore: Math.min(100, Number(score[1])) } : saved;
   const problems = algoConfigProblems(config);
   if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
   try {
     const { events, expiry } = await simulateDay(session.id, date, config);
     const trades = algoTrades(events, null);
-    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized })), rejected: skippedSignals(events).length };
+    // The planned risk of each entry (risk sizing), in entry order, for results in R (multiples of risk).
+    const risks = events.filter((event) => event.kind === "ENTRY").map((event) => event.setup?.risk ?? null);
+    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade, index) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized, risk: risks[index] ?? null })), rejected: skippedSignals(events).length, dailyTarget: config.risk.dailyTarget };
   } catch (error) {
     // A day without data (a holiday, missing history) is reported, not fatal.
     return { date, variant, ok: false as const, reason: error instanceof Error ? error.message : "This day could not be simulated." };
   }
+}
+
+/**
+ * The provisional pre-market plan for a session (today before or after 09:15, or a past date): the
+ * previous day's levels, recent daily volatility, gaps and swing levels, and the scenarios with their
+ * triggers and invalidations. Read-only.
+ */
+export async function marketPlan(user: SessionUser, date: string) {
+  assertAllowed(user);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > todayIst()) throw new AppError("Choose today or a past date.", 400);
+  const session = await loadSession(user.id);
+  const config = readAlgoConfig(session.config);
+  const data = await getS1Data(config.underlying, date);
+  if (!data.previous) return { ok: false as const, reason: data.message || `No previous-day data for ${config.underlying} before ${date}.` };
+  const start = Math.floor(Date.parse(`${date}T03:45:00Z`) / 1000);
+  const daily = (await getCandles(config.underlying, "1d").catch(() => ({ candles: [] as Candle[] }))).candles.filter((bar) => bar.time < start - 3_600);
+  const lotSize = await runChain(config, date).then((chain) => chain.lotSize ?? null).catch(() => null);
+  const open = start <= Math.floor(Date.now() / 1000) ? data.open : null;
+  return { ok: true as const, plan: buildPlan({ date, underlying: config.underlying, previous: data.previous, daily, open, risk: config.risk, maxDailyLoss: config.maxDailyLoss, lotSize, orbMinutes: config.patterns.orbMinutes }) };
 }
 
 /* ---------------- the algo inside the chart's replay ---------------- */

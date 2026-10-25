@@ -94,7 +94,7 @@ function fakeAdapter(options: { cash?: number; bid?: number | null; candle?: Mar
 
 const running = (patch: Partial<AlgoState> = {}): AlgoState => ({ ...initialState(DATE), running: true, entries: true, lastCandle: at(29), ...patch });
 // The core engine's tests run with the entry filters and the structure stop off (they have their own tests).
-const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false, ...patch });
+const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false, ...patch });
 
 async function step(state: AlgoState, candles: Candle[], adapter: ReturnType<typeof fakeAdapter>, now = candles.at(-1)!.time + 60, cfg = config(), useLines = lines) {
   adapter.tick(now);
@@ -234,7 +234,8 @@ describe("ATM option selection", () => {
     expect(adapter.calls.enter).toBe(0);
     expect(state.position).toBeNull();
     expect(events.find((event) => event.kind === "REJECTED")?.message).toMatch(/Insufficient buying power/);
-    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5 }))).toContain("Quantity must be 1 to 50 lots.");
+    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 4, sizing: "fixed" }))).toContain("Quantity must be 1 to 50 lots.");
+    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 4 }))).toContain("Maximum lots must be 1 to 50.");
   });
 });
 

@@ -821,6 +821,12 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const algoRun = algoAllowed ? algo.run : null;
   const algoPosition = algoRun?.position ?? null;
   const algoHolds = algoAllowed && algo.enabled;
+  // The open algo trade's stop and target on the index (risk sizing), on the underlying's chart.
+  const algoSetup = algoRun && algoRun.underlying === symbol ? algoPosition?.setup ?? null : null;
+  const algoLevels = useMemo<ChartReference[]>(() => (algoSetup?.stopIndex != null && algoSetup.targetIndex != null ? [
+    { price: algoSetup.stopIndex, title: "Algo stop", color: desk.appearance.tokens.loss, style: "dashed" },
+    { price: algoSetup.targetIndex, title: "Algo target", color: desk.appearance.tokens.profit, style: "dashed" },
+  ] : []), [algoSetup?.stopIndex, algoSetup?.targetIndex, desk.appearance.tokens.loss, desk.appearance.tokens.profit]);
   // Entry / exit markers at their simulated fill times, one per event (the same rules as the tests).
   const [selectedTrade, setSelectedTrade] = useState<string | null>(null);
   const algoOpen = algoPosition ? { entryKey: algoPosition.entryKey, exitPending: Boolean(algoPosition.exit), unrealized: algoPosition.unrealized } : null;
@@ -1484,7 +1490,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 scheme={desk.theme}
                 paint={desk.appearance.chart}
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
-                references={[...sessionLevels, ...(lineFocus ? lineFocus.prices.map((price) => ({ price, title: lineFocus.label || "Strategy line", color: desk.appearance.tokens.warning, style: "dashed" as const })) : [])]}
+                references={[...sessionLevels, ...algoLevels, ...(lineFocus ? lineFocus.prices.map((price) => ({ price, title: lineFocus.label || "Strategy line", color: desk.appearance.tokens.warning, style: "dashed" as const })) : [])]}
                 markers={algoMarkers}
                 onMarkerClick={(ids) => {
                   const entryKey = algoTrades.find((marker) => ids.includes(marker.id))?.entryKey;

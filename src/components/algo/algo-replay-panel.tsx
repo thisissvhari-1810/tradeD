@@ -11,6 +11,7 @@ import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
+import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
 import { useUnsavedSettings } from "@/components/algo/algo-settings-sync";
 import type { Confirmation } from "@/lib/algo/confirmations";
 
@@ -145,6 +146,8 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
         {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
+        {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} /> : null}
+        {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
         {run ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
         {run ? <StrategyRows analysis={state?.analysis} /> : null}
 

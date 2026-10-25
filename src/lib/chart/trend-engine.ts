@@ -161,7 +161,7 @@ export function readAutoTrendSettings(raw: unknown): AutoTrendSettings {
 }
 
 /** Average true range of the candles (a timeframe-independent unit for "a significant move"). */
-export function averageRange(candles: Candle[]): number {
+export function averageRange(candles: Array<Pick<Candle, "open" | "high" | "low" | "close">>): number {
   if (!candles.length) return 0;
   let sum = 0;
   for (let index = 0; index < candles.length; index += 1) {
@@ -224,6 +224,9 @@ export function significantSwings(swings: Swing[], minMove: number): Swing[] {
 
 const lineAt = (a: Swing, slope: number, index: number) => a.price + (index - a.index) * slope;
 
+/** A line's price on candle `index` (also past the last candle, to project it forward). */
+export const linePrice = (line: AutoLine, index: number) => lineAt(line.a, line.slope, index);
+
 type Candidate = AutoLine & { score: number };
 
 /**
@@ -247,7 +250,8 @@ function candidateLines(kind: AutoLine["kind"], candles: Candle[], swings: Swing
       if (a.index >= b.index || b.index - a.index < 2) continue;
       const slope = (b.price - a.price) / (b.index - a.index);
       if (Math.abs(slope) > atr * 1.5) continue;
-      const tolerance = (a.price * settings.tolerancePercent) / 100;
+      // At least 0.15 average ranges, so wide-candle instruments are not held to a hairline.
+      const tolerance = Math.max((a.price * settings.tolerancePercent) / 100, atr * 0.15);
       let valid = true;
       for (let index = a.index + 1; index < b.index && valid; index += 1) {
         const price = lineAt(a, slope, index);

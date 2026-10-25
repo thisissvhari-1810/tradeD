@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import type { Candle } from "../src/lib/algo/lines";
+import { openingRange, openingRangeBreak, sessionZones, zoneReaction } from "../src/lib/algo/setups";
+import { planTrade, RISK_DEFAULTS, type PlanInput } from "../src/lib/algo/sizing";
+import { setupScore } from "../src/lib/algo/quality";
+import { analyzeTrend, AUTO_TREND_DEFAULTS } from "../src/lib/chart/trend-engine";
+import { readAlgoConfig } from "../src/lib/algo/config";
+import { ALGO_DEFAULTS, ENGINE_LABEL } from "../src/lib/algo/runner";
+
+const OPEN = Date.UTC(2026, 9, 16, 3, 45) / 1000;
+const T = (index: number) => OPEN + index * 60;
+const candle = (index: number, open: number, high: number, low: number, close: number): Candle => ({ time: T(index), open, high, low, close });
+const flat = (count: number, price: number) => Array.from({ length: count }, (_, index) => candle(index, price, price + 2, price - 2, price));
+
+describe("defaults: the early session replaces the old all-day settings", () => {
+  it("09:15–10:30, no waiting, ₹500 a trade, ₹1,500 a day, ₹5,000 target, reward : risk 2; old saved settings move once", () => {
+    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "10:30", observationMinutes: 0, sizing: "risk", maxDailyLoss: 1_500, risk: { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2 } });
+    const migrated = readAlgoConfig({ settingsVersion: 3, entryCutoff: "15:00", observationMinutes: 30, maxDailyLoss: 5_000, lots: 1 });
+    expect(migrated).toMatchObject({ entryCutoff: "10:30", observationMinutes: 0, maxDailyLoss: 1_500, sizing: "risk", lots: 10 });
+    const kept = readAlgoConfig({ ...migrated, entryCutoff: "10:00", minScore: 70 });
+    expect([kept.entryCutoff, kept.minScore]).toEqual(["10:00", 70]);
+    expect(Object.values(ENGINE_LABEL)).toEqual(["BUY / LONG CANDIDATE", "SELL / SHORT CANDIDATE", "WAIT FOR CONFIRMATION", "NO TRADE", "DAILY RISK LIMIT REACHED", "TRADING WINDOW CLOSED"]);
+  });
+});
+
+describe("opening-range breakout", () => {
+  const range = flat(15, 100).map((item, index) => ({ ...item, high: index === 4 ? 105 : 102, low: index === 9 ? 95 : 98 }));
+  it("is building until its last candle closes; then the first body close above the high is a CALL, once", () => {
+    expect(openingRangeBreak(range.slice(0, 10), openingRange(range.slice(0, 10), OPEN, 15), 0).status).toContain("BUILDING");
+    const breakout = [...range, candle(15, 101, 104, 100, 103), candle(16, 103, 107, 102.5, 106)];
+    const orb = openingRange(breakout, OPEN, 15);
+    expect(orb).toMatchObject({ high: 105, low: 95, complete: true });
+    expect(openingRangeBreak(breakout, orb, 0).hit).toMatchObject({ direction: "CALL", level: 105, invalidation: 105 });
+    const again = [...breakout, candle(17, 106, 106.5, 104, 104.5), candle(18, 104.5, 108, 104, 107)];
+    expect(openingRangeBreak(again, openingRange(again, OPEN, 15), 0).hit).toBeNull();
+  });
+  it("a gap open beyond the range is not a body crossing", () => {
+    const gap = [...range, candle(15, 106, 108, 105.5, 107)];
+    expect(openingRangeBreak(gap, openingRange(gap, OPEN, 15), 0).hit).toBeNull();
+  });
+});
+
+describe("support bounce and resistance rejection", () => {
+  const zones = [{ price: 100, label: "previous-day low" }, { price: 110, label: "previous-day high" }];
+  it("a bounce needs the approach from above, a touch, a bullish close back above and a long lower wick", () => {
+    const bounce = [candle(0, 103, 103.5, 101.5, 102), candle(1, 101, 101.6, 99.98, 101.5)];
+    expect(zoneReaction(bounce, zones, 0.03, "CALL").hit).toMatchObject({ direction: "CALL", level: 100, invalidation: 99.98 });
+    // Closed below the zone: no bounce. No rejection wick: no bounce.
+    expect(zoneReaction([bounce[0], candle(1, 102, 102.4, 99, 99.5)], zones, 0.03, "CALL").hit).toBeNull();
+    expect(zoneReaction([bounce[0], candle(1, 100.1, 101.6, 100, 101.5)], zones, 0.03, "CALL").hit).toBeNull();
+  });
+  it("a rejection is the mirror image at resistance", () => {
+    const reject = [candle(0, 107, 108.5, 106.5, 108), candle(1, 109, 110.02, 108.3, 108.5)];
+    expect(zoneReaction(reject, zones, 0.03, "PUT").hit).toMatchObject({ direction: "PUT", level: 110, invalidation: 110.02 });
+  });
+  it("zones merge within tolerance and include the opening range once it is complete", () => {
+    const trend = analyzeTrend(flat(30, 100).map((item) => ({ ...item, volume: 0 })), 60, { ...AUTO_TREND_DEFAULTS, observationMinutes: 0 });
+    const merged = sessionZones([{ price: 100, label: "A" }, { price: 100.01, label: "B" }], trend, { high: 102, low: 98, end: T(15), complete: true }, 29, 0.03);
+    expect(merged.map((zone) => [zone.price, zone.label])).toEqual([[98, "opening-range low"], [100, "A / B"], [102, "opening-range high"]]);
+  });
+});
+
+describe("risk sizing and the setup score", () => {
+  const base: PlanInput = {
+    direction: "CALL", entryIndex: 23_160, invalidation: 23_155, zones: [], price: 100, lotSize: 75, slippageTicks: 1,
+    charges: () => 20, cash: 100_000, maxLots: 10, risk: RISK_DEFAULTS, minScore: 0,
+    score: { structure: "BULLISH", momentum: { fast: 2, slow: 1 }, candle: { open: 23_150, high: 23_161, low: 23_149, close: 23_160 }, agreeing: 1, volume: "UNAVAILABLE" },
+  };
+  it("the stop goes beyond the invalidation; the target is twice the distance; lots fit the ₹500 budget", () => {
+    const result = planTrade(base);
+    expect(result.ok).toBe(true);
+    const plan = result.plan;
+    // 0.03% of 23,160 ≈ 6.95 beyond the level: stop ≈ 23,148.05, ≈ 11.95 points; target 2 × that.
+    expect(plan.stopIndex).toBeCloseTo(23_148.05, 1);
+    expect(plan.targetIndex).toBeCloseTo(23_160 + 2 * plan.stopDistance, 1);
+    expect(plan.premiumStop).toBeCloseTo(100 - 0.5 * plan.stopDistance, 0);
+    expect(plan.risk).toBeLessThanOrEqual(500);
+    expect(plan.lots).toBe(Math.min(10, Math.floor(500 / ((100 - plan.premiumStop + 0.05) * 75 + 40))));
+  });
+  it("no trade when one lot risks more than the budget, when the next level leaves too little room, or below the minimum score", () => {
+    const wide = planTrade({ ...base, invalidation: 23_120 });
+    expect(wide.ok).toBe(false);
+    expect(!wide.ok && wide.reasons.join(" ")).toContain("above the ₹500.00 risk per trade: no trade");
+    const blocked = planTrade({ ...base, zones: [{ price: 23_170, label: "previous-day high" }] });
+    expect(!blocked.ok && blocked.reasons.join(" ")).toContain("Not enough room: the previous-day high at 23170.00");
+    const weak = planTrade({ ...base, minScore: 95 });
+    expect(!weak.ok && weak.reasons.join(" ")).toContain("below the minimum 95");
+  });
+  it("the score adds up its parts (each says what it measured); it is not a probability", () => {
+    const score = setupScore({ ...base.score, direction: "CALL", rewardRisk: 3, minRewardRisk: 2, costShare: 0.04 });
+    expect(score.parts.map((part) => part.label)).toEqual(["Trend alignment", "Momentum", "Confirmation candle", "Confluence", "Room (reward : risk)", "Volume", "Costs"]);
+    expect(score.score).toBe(score.parts.reduce((sum, part) => sum + part.points, 0));
+    expect(score.parts.reduce((sum, part) => sum + part.max, 0)).toBe(100);
+    const against = setupScore({ ...base.score, structure: "BEARISH", momentum: { fast: 1, slow: 2 }, direction: "CALL", rewardRisk: 1, minRewardRisk: 2, costShare: 0.5 });
+    expect(against.score).toBeLessThan(score.score);
+  });
+});
+
+describe("backtest metrics and the training / validation / out-of-sample split", async () => {
+  const { backtestTotals, splitDates, chooseOnTraining } = await import("../src/lib/algo/backtest");
+  const stats = (realized: number, wins: number, losses: number) => ({ signals: 0, accepted: 0, rejected: 0, trades: wins + losses, wins, losses, realized, maxDrawdown: 0, exits: {} });
+  const trade = (entryTime: number, realized: number, risk = 500) => ({ number: 1, side: "CALL" as const, strategy: "line", entryTime, entryPremium: 100, exitTime: entryTime + 60, exitPremium: 100, exitReason: "x", realized, risk });
+  const day = (date: string, trades: ReturnType<typeof trade>[], variant = "saved") => ({ date, variant, ok: true as const, expiry: null, stats: stats(trades.reduce((sum, item) => sum + item.realized, 0), trades.filter((item) => item.realized > 0).length, trades.filter((item) => item.realized <= 0).length), trades, rejected: 0, dailyTarget: 5_000 });
+  it("average win / loss, R multiples, losing streaks, no-trade days and target days", () => {
+    const totals = backtestTotals([day("2026-10-01", [trade(1, -500), trade(2, -500)]), day("2026-10-02", [trade(3, -250), trade(4, 1_000)]), day("2026-10-05", []), day("2026-10-06", [trade(5, 5_200, 1_000)])]);
+    expect(totals).toMatchObject({ averageWin: 3_100, averageLoss: -416.67, maxConsecutiveLosses: 3, noTradeDays: 25, targetDays: 25, tradesPerDay: 1.25 });
+    expect(totals.averageR).toBeCloseTo((-1 - 1 - 0.5 + 2 + 5.2) / 5, 2);
+  });
+  it("splits in time order 60 / 20 / 20, and chooses a variant on the training days only", () => {
+    const dates = Array.from({ length: 10 }, (_, index) => `2026-10-${String(index + 1).padStart(2, "0")}`);
+    expect(splitDates([...dates].reverse())).toEqual({ training: dates.slice(0, 6), validation: dates.slice(6, 8), test: dates.slice(8) });
+    // "score:70" wins on the training days; "saved" only does better later (which must not influence the choice).
+    const days = dates.flatMap((date, index) => [day(date, [trade(index, index < 6 ? -100 : 900)], "saved"), day(date, [trade(index, index < 6 ? 300 : -100)], "score:70")]);
+    expect(chooseOnTraining(days, ["saved", "score:70"])).toBe("score:70");
+  });
+});
+
+describe("pre-market plan", async () => {
+  const { buildPlan } = await import("../src/lib/algo/plan");
+  const DAY = 86_400;
+  const daily = Array.from({ length: 30 }, (_, index) => {
+    const open = 23_000 + Math.sin(index / 3) * 150;
+    const close = open + (index % 2 ? 40 : -30);
+    return { time: OPEN - (30 - index) * DAY, open, high: Math.max(open, close) + 60, low: Math.min(open, close) - 60, close };
+  });
+  it("is provisional; lists previous-day levels, scenarios with invalidations, volatility and the 1-lot stop room", () => {
+    const plan = buildPlan({ date: "2026-10-16", underlying: "NIFTY", previous: { date: "2026-10-15", high: 23_200, low: 23_050, close: 23_120 }, daily, open: null, risk: RISK_DEFAULTS, maxDailyLoss: 1_500, lotSize: 75, orbMinutes: 15 });
+    expect(plan.provisional).toBe(true);
+    expect(plan.gap).toBeNull();
+    expect(plan.levels.map((level) => level.label)).toEqual(expect.arrayContaining(["Previous-day high", "Previous-day low", "Previous-day close"]));
+    expect(plan.bullish[0]).toMatchObject({ title: "Breakout above the previous-day high", level: 23_200, invalidation: "A close back below 23200.00" });
+    expect(plan.bearish[0]).toMatchObject({ title: "Breakdown below the previous-day low", level: 23_050 });
+    expect(plan.risk).toMatchObject({ perTrade: 500, maxIndexStop: 13.33 });
+    expect(plan.volatility.days).toBe(20);
+    expect(plan.notes[0]).toContain("Provisional");
+    const opened = buildPlan({ date: "2026-10-16", underlying: "NIFTY", previous: { date: "2026-10-15", high: 23_200, low: 23_050, close: 23_120 }, daily, open: 23_180, risk: RISK_DEFAULTS, maxDailyLoss: 1_500, lotSize: 75, orbMinutes: 15 });
+    expect(opened.gap).toEqual({ open: 23_180, points: 60, percent: 0.26 });
+  });
+});

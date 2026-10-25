@@ -39,6 +39,11 @@ export type TradeSetup = {
   underlyingEntry: number;
   /** When the position was opened (unix seconds). */
   entryTime: number;
+  /** Risk sizing: the stop and target on the index, the planned risk (₹) and the setup score. */
+  stopIndex?: number;
+  targetIndex?: number;
+  risk?: number;
+  score?: number;
 };
 
 export const CONFIRMATION_LABEL: Record<ConfirmationCategory, string> = { price: "Price action", level: "Breakout level", candle: "Candle", volume: "Volume", momentum: "Momentum", risk: "Risk / exit" };

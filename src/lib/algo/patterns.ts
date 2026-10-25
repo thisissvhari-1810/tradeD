@@ -1,4 +1,5 @@
 import type { Candle } from "./lines";
+import { openingRange as buildOpeningRange, openingRangeBreak, sessionTrend, sessionZones, trendlineBreak, zoneReaction, type OpeningRange, type Zone } from "./setups";
 
 /**
  * Price-action add-ons to the line-break strategy: swing points, the opening range, market structure,
@@ -12,9 +13,9 @@ import type { Candle } from "./lines";
  * move: a confirmed pivot is a fixed candle's price.
  */
 
-export type StrategyId = "line" | "trendline" | "w" | "m";
-export const STRATEGY_IDS: StrategyId[] = ["line", "trendline", "w", "m"];
-export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern" };
+export type StrategyId = "line" | "trendline" | "w" | "m" | "orb" | "bounce" | "rejection";
+export const STRATEGY_IDS: StrategyId[] = ["line", "trendline", "orb", "bounce", "rejection", "w", "m"];
+export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern", orb: "Opening-range breakout", bounce: "Support bounce", rejection: "Resistance rejection" };
 export type Direction = "CALL" | "PUT";
 
 export type PatternSettings = {
@@ -32,9 +33,13 @@ export type PatternSettings = {
   retestBars: number;
   /** Require breakout volume above its recent average (only where the feed has volume). */
   volume: boolean;
+  /** Opening-range breakout: the range is the session's first this many minutes. */
+  orbMinutes: number;
+  /** Support bounce / resistance rejection: how close (% of price) a candle must come to the zone. */
+  zoneTolerancePercent: number;
 };
 
-export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false };
+export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false, orbMinutes: 15, zoneTolerancePercent: 0.03 };
 
 export type Pivot = { kind: "HIGH" | "LOW"; index: number; time: number; price: number; confirmedAt: number };
 
@@ -113,6 +118,7 @@ export type MarketAnalysis = {
   observationEnd: number;
   observationComplete: boolean;
   openingRange: { high: number; low: number } | null;
+  /** Swing structure from the trendline engine's confirmed swings (higher / lower highs and lows). */
   trend: "BULLISH" | "BEARISH" | "SIDEWAYS" | "UNCONFIRMED";
   /** The latest confirmed swing points (at most 12). */
   pivots: Pivot[];
@@ -122,6 +128,10 @@ export type MarketAnalysis = {
   m: PatternState | null;
   /** Nearest level above / below the last close among the computed structure. */
   levels: { above: number | null; below: number | null };
+  /** Every support / resistance zone the session can react to (merged within tolerance), low to high. */
+  zones?: Zone[];
+  /** The opening range for the opening-range breakout (configurable length). */
+  orb?: OpeningRange | null;
   strategies: Record<StrategyId, StrategyStatus>;
 };
 
@@ -245,8 +255,10 @@ function breakoutOn(candles: Candle[], from: number, direction: Direction, level
  * Analyses the session's completed candles (the last one is the candle being evaluated) and returns the
  * market analysis and the pattern strategies' signals on that last candle. Deterministic; no look-ahead.
  */
-export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; observationMinutes: number; settings: PatternSettings; enabled: Record<StrategyId, boolean>; lineDecision?: { direction: Direction | null; status: string; trigger: number | null; lastSignal: { time: number; direction: Direction } | null } }): { analysis: MarketAnalysis; signals: StrategySignal[] } {
-  const { candles, sessionOpen, settings, enabled } = input;
+export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; observationMinutes: number; settings: Partial<PatternSettings>; enabled: Partial<Record<StrategyId, boolean>>; lineDecision?: { direction: Direction | null; status: string; trigger: number | null; lastSignal: { time: number; direction: Direction } | null }; zones?: Zone[] }): { analysis: MarketAnalysis; signals: StrategySignal[] } {
+  const { candles, sessionOpen } = input;
+  const settings: PatternSettings = { ...PATTERN_DEFAULTS, ...input.settings };
+  const enabled: Record<StrategyId, boolean> = { line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false, ...input.enabled };
   const observationEnd = sessionOpen + input.observationMinutes * 60;
   const last = candles.at(-1) ?? null;
   const asOf = last ? last.time + 60 : sessionOpen;
@@ -255,9 +267,14 @@ export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; o
   const openingRange = observationComplete && opening.length ? { high: Math.max(...opening.map((candle) => candle.high)), low: Math.min(...opening.map((candle) => candle.low)) } : null;
   // Only pivots already confirmed by the last candle's close.
   const pivots = swingPivots(candles, settings.pivotStrength).filter((pivot) => pivot.confirmedAt <= asOf);
-  const trend = marketTrend(pivots);
-  const lines = trendlines(pivots);
+  // Trendlines and swing structure come from the chart's automatic trendline engine (confirmed swings only).
+  const auto = sessionTrend(candles, settings);
+  const trend = auto.phase === "ACTIVE" ? auto.structure : "UNCONFIRMED";
+  const asTrendline = (line: typeof auto.support): Trendline | null => (line ? { kind: line.kind, a: { index: line.a.index, time: line.a.time, price: line.a.price }, b: { index: line.b.index, time: line.b.time, price: line.b.price }, slope: line.slope, confirmedAt: line.b.confirmedAt ?? asOf } : null);
+  const lines = { resistance: asTrendline(auto.resistance), support: asTrendline(auto.support) };
   const lastIndex = candles.length - 1;
+  const orb = buildOpeningRange(candles, sessionOpen, settings.orbMinutes);
+  const zones = sessionZones(input.zones ?? [], auto, orb, lastIndex, settings.zoneTolerancePercent);
   const signals: StrategySignal[] = [];
   const statuses = {} as Record<StrategyId, StrategyStatus>;
   const observing = !observationComplete;
@@ -271,25 +288,28 @@ export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; o
   // Trendline breakout: above a descending resistance (CALL) or below an ascending support (PUT).
   let trendStatus: StrategyStatus = { enabled: enabled.trendline, status: "WAITING FOR VALID TRENDLINE", direction: null, trigger: null, waiting: true, lastSignal: null };
   if (last && lastIndex >= 1) {
-    const checks: Array<[Trendline | null, Direction]> = [[lines.resistance, "CALL"], [lines.support, "PUT"]];
-    const found: string[] = [];
-    for (const [line, direction] of checks) {
-      if (!line) continue;
-      const from = candles.findIndex((candle) => candle.time + 60 > line.confirmedAt);
-      if (from < 0) continue;
-      const outcome = breakoutOn(candles, Math.max(from, line.b.index + 1), direction, (index) => lineAt(line, index), direction === "CALL" ? -Infinity : Infinity, settings);
-      const now = round(lineAt(line, lastIndex));
-      if (outcome.signal) {
-        const item = signal("trendline", direction, now, now, `${direction === "CALL" ? "Breakout above the descending resistance" : "Breakdown below the ascending support"} trendline at ${now.toFixed(2)}${settings.retest ? " after a retest" : ""}.`);
-        if (volumeOk(item)) signals.push(item);
-        trendStatus = { ...trendStatus, status: "BREAKOUT CONFIRMED", direction, trigger: now, waiting: false, lastSignal: { time: last.time, direction } };
-      } else if (trendStatus.status !== "BREAKOUT CONFIRMED") {
-        found.push(outcome.state === "RETEST" ? "RETEST IN PROGRESS" : outcome.state === "BROKEN" && settings.retest ? "WAITING FOR RETEST" : `WAITING FOR ${direction === "CALL" ? "BREAKOUT" : "BREAKDOWN"}`);
-        trendStatus = { ...trendStatus, status: found[0], trigger: trendStatus.trigger ?? now, waiting: true };
-      }
+    const outcome = trendlineBreak(auto, candles, settings);
+    if (outcome.hit) {
+      const item = signal("trendline", outcome.hit.direction, outcome.hit.level, outcome.hit.invalidation, outcome.hit.reason);
+      if (volumeOk(item)) signals.push(item);
+      trendStatus = { ...trendStatus, status: outcome.status, direction: outcome.hit.direction, trigger: outcome.hit.level, waiting: false, lastSignal: { time: last.time, direction: outcome.hit.direction } };
+    } else {
+      trendStatus = { ...trendStatus, status: outcome.status, trigger: lines.resistance ? round(lineAt(lines.resistance, lastIndex)) : lines.support ? round(lineAt(lines.support, lastIndex)) : null };
     }
   }
   statuses.trendline = trendStatus;
+
+  // Opening-range breakout, support bounce and resistance rejection.
+  const setupStatus = (id: StrategyId, outcome: { hit: { direction: Direction; level: number; invalidation: number; reason: string } | null; status: string }): StrategyStatus => {
+    const base: StrategyStatus = { enabled: enabled[id], status: outcome.status, direction: null, trigger: null, waiting: !outcome.hit, lastSignal: null };
+    if (!outcome.hit || !last) return base;
+    const item = signal(id, outcome.hit.direction, outcome.hit.level, outcome.hit.invalidation, outcome.hit.reason);
+    if (volumeOk(item)) signals.push(item);
+    return { ...base, direction: outcome.hit.direction, trigger: outcome.hit.level, lastSignal: { time: last.time, direction: outcome.hit.direction } };
+  };
+  statuses.orb = last ? setupStatus("orb", openingRangeBreak(candles, orb, settings.minBreakPercent)) : { enabled: enabled.orb, status: "BUILDING OPENING RANGE", direction: null, trigger: null, waiting: true, lastSignal: null };
+  statuses.bounce = setupStatus("bounce", zoneReaction(candles, zones, settings.zoneTolerancePercent, "CALL"));
+  statuses.rejection = setupStatus("rejection", zoneReaction(candles, zones, settings.zoneTolerancePercent, "PUT"));
 
   // W (CALL on a neckline breakout) and M (PUT on a neckline breakdown).
   const patternStatus = (kind: "W" | "M"): { state: PatternState | null; status: StrategyStatus } => {
@@ -316,17 +336,20 @@ export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; o
   statuses.w = w.status;
   statuses.m = m.status;
   statuses.line = { enabled: enabled.line, status: input.lineDecision?.status ?? "WAITING FOR LINE CROSSING", direction: input.lineDecision?.direction ?? null, trigger: input.lineDecision?.trigger ?? null, waiting: !input.lineDecision?.direction, lastSignal: input.lineDecision?.lastSignal ?? null };
-  if (observing) for (const id of ["trendline", "w", "m"] as const) statuses[id] = { ...statuses[id], status: "ANALYZING OPENING MARKET", waiting: true };
-  for (const id of ["trendline", "w", "m"] as const) if (!enabled[id]) statuses[id] = { ...statuses[id], status: "DISABLED", waiting: false };
+  const added = ["trendline", "w", "m", "orb", "bounce", "rejection"] as const;
+  if (observing) for (const id of added) statuses[id] = { ...statuses[id], status: "ANALYZING OPENING MARKET", waiting: true };
+  for (const id of added) if (!enabled[id]) statuses[id] = { ...statuses[id], status: "DISABLED", waiting: false };
 
   const close = last?.close ?? null;
-  const structure = [lines.resistance ? lineAt(lines.resistance, lastIndex) : null, lines.support ? lineAt(lines.support, lastIndex) : null, w.state?.neckline ?? null, m.state?.neckline ?? null, openingRange?.high ?? null, openingRange?.low ?? null].filter((value): value is number => value != null);
+  const structure = [lines.resistance ? lineAt(lines.resistance, lastIndex) : null, lines.support ? lineAt(lines.support, lastIndex) : null, w.state?.neckline ?? null, m.state?.neckline ?? null, openingRange?.high ?? null, openingRange?.low ?? null, ...zones.map((zone) => zone.price)].filter((value): value is number => value != null);
   const analysis: MarketAnalysis = {
     asOf, sessionOpen, observationEnd, observationComplete, openingRange, trend,
     pivots: pivots.slice(-12),
     resistance: lines.resistance ? { ...lines.resistance, now: round(lineAt(lines.resistance, lastIndex)) } : null,
     support: lines.support ? { ...lines.support, now: round(lineAt(lines.support, lastIndex)) } : null,
     w: w.state, m: m.state,
+    zones,
+    orb,
     levels: close == null ? { above: null, below: null } : { above: structure.filter((value) => value > close).sort((a, b) => a - b)[0] ?? null, below: structure.filter((value) => value < close).sort((a, b) => b - a)[0] ?? null },
     strategies: statuses,
   };

@@ -8,6 +8,7 @@ import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
+import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
 import { announceSaved, announceUnsaved } from "@/components/algo/algo-settings-sync";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
@@ -49,6 +50,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   // The time of the last tick (for the feed's staleness); set by the tick, never read from the clock while rendering.
   const [checkedAt, setCheckedAt] = useState<number | null>(null);
   const [yesterday] = useState(() => new Date(Date.now() + 19_800_000 - 86_400_000).toISOString().slice(0, 10));
+  const [today] = useState(() => new Date(Date.now() + 19_800_000).toISOString().slice(0, 10));
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
@@ -177,9 +179,12 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
         </div>
       </dl>
 
+      {paper ? <MarketPlanSection date={today} /> : null}
+
       {/* Live paper: the same market analysis, strategies and confirmations as the replay dashboard. */}
       {paper && (state.running || state.analysis) ? (
         <>
+          <EngineCard state={state} config={data.config} date={state.sessionDate} now={checkedAt ?? state.analysis?.asOf ?? null} unrealized={data.position?.unrealized ?? null} />
           <MarketAnalysisSection analysis={state.analysis} symbol={data.config.underlying} time={state.analysis?.asOf ?? null} />
           <StrategyRows analysis={state.analysis} />
           {!position ? <p className="text-micro font-semibold text-text-2" role="status">{waitingMessage(state.analysis, state.tradesToday, data.config.maxTrades)}</p> : null}
@@ -216,10 +221,44 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             <input type="date" className="compact-field w-[9.5rem]" aria-label="Expiry (empty = nearest)" value={draft.expiry === "nearest" ? "" : draft.expiry} onChange={(event) => set({ expiry: event.target.value || "nearest" })} />
           </Field>
           <p className="text-right text-micro text-muted">{draft.expiry === "nearest" ? "Nearest valid expiry" : "Fixed expiry"}</p>
-          <Field label="Quantity (lots)"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
-          <Protect label="Stop-loss" value={draft.stop} onChange={(stop) => set({ stop })} />
-          <Protect label="Target" value={draft.target} onChange={(target) => set({ target })} />
-          <Field label="Max daily loss (₹)"><NumberInput value={draft.maxDailyLoss} step={500} min={1} onChange={(maxDailyLoss) => set({ maxDailyLoss })} /></Field>
+          <p className="eyebrow pt-2">Trading window (IST)</p>
+          <Field label="Entries from"><input type="time" className="compact-field w-[9.5rem]" aria-label="Entries from" value={draft.entryStart} min="09:15" max="15:29" onChange={(event) => set({ entryStart: event.target.value || "09:15" })} /></Field>
+          <Field label="No new entries after"><input type="time" className="compact-field w-[9.5rem]" aria-label="No new entries after" value={draft.entryCutoff} min="09:16" max="15:29" onChange={(event) => set({ entryCutoff: event.target.value || "10:30" })} /></Field>
+          <Field label="At the window's end">
+            <select className="compact-field w-[9.5rem]" aria-label="At the window's end" value={draft.windowExit} onChange={(event) => set({ windowExit: event.target.value === "close" ? "close" : "hold" })}>
+              <option value="hold">Keep open</option>
+              <option value="close">Close it</option>
+            </select>
+          </Field>
+          <p className="text-micro text-muted">A setup is taken as soon as it is confirmed on a completed candle — at 09:17 if that is when it appears. No new entries after the window; the target, a loss limit or no valid setup also mean no trade.</p>
+          <p className="eyebrow pt-2">Capital and risk</p>
+          <Field label="Position sizing">
+            <select className="compact-field w-[9.5rem]" aria-label="Position sizing" value={draft.sizing} onChange={(event) => set({ sizing: event.target.value === "fixed" ? "fixed" : "risk" })}>
+              <option value="risk">By risk</option>
+              <option value="fixed">Fixed lots</option>
+            </select>
+          </Field>
+          {draft.sizing === "risk" ? (
+            <>
+              <Field label="Capital (₹)"><NumberInput value={draft.risk.capital} step={10_000} min={10_000} onChange={(capital) => set({ risk: { ...draft.risk, capital } })} /></Field>
+              <Field label="Risk per trade (%)"><NumberInput value={draft.risk.perTradePercent} step={0.1} min={0.1} onChange={(perTradePercent) => set({ risk: { ...draft.risk, perTradePercent } })} /></Field>
+              <p className="text-right text-micro text-muted">= ₹{Number.isFinite(draft.risk.capital * draft.risk.perTradePercent) ? (Math.round(draft.risk.capital * draft.risk.perTradePercent) / 100).toLocaleString("en-IN") : "—"} lost at most per trade (charges included)</p>
+              <Field label="Max lots per trade"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
+              <Field label="Min reward : risk"><NumberInput value={draft.risk.minRewardRisk} step={0.5} min={0.5} onChange={(minRewardRisk) => set({ risk: { ...draft.risk, minRewardRisk } })} /></Field>
+              <Field label="Min stop distance (%)"><NumberInput value={draft.risk.minStopPercent} step={0.01} min={0.01} onChange={(minStopPercent) => set({ risk: { ...draft.risk, minStopPercent } })} /></Field>
+              <Field label="Min setup score (0–100)"><NumberInput value={draft.minScore} step={5} min={0} onChange={(minScore) => set({ minScore })} /></Field>
+              <Field label="Daily profit target (₹)"><NumberInput value={draft.risk.dailyTarget} step={500} min={1} onChange={(dailyTarget) => set({ risk: { ...draft.risk, dailyTarget } })} /></Field>
+              <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Stop new entries at the target</span><input type="checkbox" className="oc-check" aria-label="Stop new entries at the target" checked={draft.risk.stopAtTarget} onChange={(event) => set({ risk: { ...draft.risk, stopAtTarget: event.target.checked } })} /></label>
+              <p className="text-micro text-muted">The stop goes on the index just beyond the setup&apos;s invalidation; lots are sized so a stop-out (charges and slippage included) loses at most the risk per trade. If even one lot risks more, the setup is skipped. The target is a goal, never a reason to add risk.</p>
+            </>
+          ) : (
+            <>
+              <Field label="Quantity (lots)"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
+              <Protect label="Stop-loss" value={draft.stop} onChange={(stop) => set({ stop })} />
+              <Protect label="Target" value={draft.target} onChange={(target) => set({ target })} />
+            </>
+          )}
+          <Field label={`Max daily loss (₹)${draft.sizing === "risk" && draft.risk.capital > 0 ? ` ${Math.round((draft.maxDailyLoss / draft.risk.capital) * 1000) / 10}%` : ""}`}><NumberInput value={draft.maxDailyLoss} step={500} min={1} onChange={(maxDailyLoss) => set({ maxDailyLoss })} /></Field>
           <Field label="Max trades / session"><NumberInput value={draft.maxTrades} step={1} min={1} onChange={(maxTrades) => set({ maxTrades })} /></Field>
           <Field label="Max open positions"><span className="w-[9.5rem] text-right text-text-2">1 (one per underlying)</span></Field>
           <Field label="Cooldown (minutes)"><NumberInput value={draft.cooldownMinutes} step={1} min={0} onChange={(cooldownMinutes) => set({ cooldownMinutes })} /></Field>
@@ -240,7 +279,6 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <Field label="Max bid/ask spread (%)"><NumberInput value={draft.maxSpreadPercent} step={0.5} min={0.5} onChange={(maxSpreadPercent) => set({ maxSpreadPercent })} /></Field>
           <Field label="Max quote age (s)"><NumberInput value={draft.maxQuoteAgeSeconds} step={5} min={5} onChange={(maxQuoteAgeSeconds) => set({ maxQuoteAgeSeconds })} /></Field>
           <Field label="Paper slippage (ticks)"><NumberInput value={draft.slippageTicks} step={1} min={0} onChange={(slippageTicks) => set({ slippageTicks })} /></Field>
-          <Field label="No entries after (IST)"><input type="time" className="compact-field w-[9.5rem]" value={draft.entryCutoff} min="09:16" max="15:29" onChange={(event) => set({ entryCutoff: event.target.value || "15:00" })} /></Field>
           <p className="eyebrow pt-2">Strategies</p>
           {STRATEGY_IDS.map((id) => (
             <label key={id} className="flex min-h-7 cursor-pointer items-center justify-between gap-2">
@@ -248,8 +286,11 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
               <input type="checkbox" className="oc-check" aria-label={`${STRATEGY_LABEL[id]} strategy`} checked={draft.strategies[id]} onChange={(event) => set({ strategies: { ...draft.strategies, [id]: event.target.checked } })} />
             </label>
           ))}
-          <Field label="Observation (minutes)"><NumberInput value={draft.observationMinutes} step={1} min={0} onChange={(observationMinutes) => set({ observationMinutes })} /></Field>
-          <p className="text-micro text-muted">No new entries in the first {Number.isFinite(draft.observationMinutes) ? draft.observationMinutes : "—"} minutes after 09:15: the opening is analysed only.</p>
+          <Field label="Opening range (minutes)"><NumberInput value={draft.patterns.orbMinutes} step={1} min={1} onChange={(orbMinutes) => set({ patterns: { ...draft.patterns, orbMinutes } })} /></Field>
+          <Field label="Zone tolerance (%)"><NumberInput value={draft.patterns.zoneTolerancePercent} step={0.01} min={0} onChange={(zoneTolerancePercent) => set({ patterns: { ...draft.patterns, zoneTolerancePercent } })} /></Field>
+          <p className="text-micro text-muted">Bounce and rejection: how close a candle must come to a support / resistance zone (0.03% ≈ 7 NIFTY points).</p>
+          <Field label="Wait before entries (min)"><NumberInput value={draft.observationMinutes} step={1} min={0} onChange={(observationMinutes) => set({ observationMinutes })} /></Field>
+          <p className="text-micro text-muted">{draft.observationMinutes ? `No new entries in the first ${draft.observationMinutes} minutes after 09:15.` : "No waiting period: setups are taken as soon as they are confirmed."}</p>
           <p className="eyebrow pt-2">Trade filters</p>
           <Field label="Breakout buffer (%)"><NumberInput value={draft.filters.breakoutBufferPercent} step={0.01} min={0} onChange={(breakoutBufferPercent) => set({ filters: { ...draft.filters, breakoutBufferPercent } })} /></Field>
           <p className="text-micro text-muted">A line break counts only when the candle body crosses the line and closes at least this far beyond it (0.03% ≈ 7 NIFTY points).</p>

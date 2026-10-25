@@ -2,7 +2,7 @@ import { readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
 import { mutation, query } from "@/server/http";
-import { algoCommand, algoHistory, algoReport, algoView, backtestDay } from "@/server/algo";
+import { algoCommand, algoHistory, algoReport, algoView, backtestDay, marketPlan } from "@/server/algo";
 import { ALGO_SESSION_ID, algoRequest } from "@/lib/algo/request";
 
 /** The Strategy Algo of the signed-in user: settings, state, position and signal log. */
@@ -16,6 +16,13 @@ export const GET = query(async (request: Request) => {
   if (report) {
     if (!/^[a-z0-9]{8,40}$/.test(report)) return Response.json({ error: "Invalid session.", code: "BAD_REQUEST" }, { status: 400 });
     return Response.json(await algoReport(user, report), { headers: { "Cache-Control": "no-store" } });
+  }
+  // The provisional pre-market plan for a date (read-only).
+  const plan = params.get("plan");
+  if (plan) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(plan)) return Response.json({ error: "Invalid date.", code: "BAD_REQUEST" }, { status: 400 });
+    rateLimit(`algo:plan:${user.id}`, 30, 60_000);
+    return Response.json(await marketPlan(user, plan), { headers: { "Cache-Control": "no-store" } });
   }
   const session = params.get("session");
   return Response.json(await algoView(user, session && ALGO_SESSION_ID.test(session) ? session : null), { headers: { "Cache-Control": "no-store" } });

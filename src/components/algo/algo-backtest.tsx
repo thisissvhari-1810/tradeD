@@ -4,41 +4,47 @@ import { useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
-import { backtestCsv, backtestTotals, lastTradingDays, tradingDays, type BacktestDay, type BacktestTotals } from "@/lib/algo/backtest";
+import { backtestCsv, backtestTotals, chooseOnTraining, lastTradingDays, SPLIT_LABEL, splitDates, tradingDays, variantLabel, type BacktestDay, type BacktestTotals, type BacktestVariant } from "@/lib/algo/backtest";
 
 const inr = (value: number | null | undefined) => (value == null ? "—" : `${value > 0 ? "+" : value < 0 ? "−" : ""}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const tone = (value: number | null | undefined) => (value == null ? "text-muted" : value > 0 ? "text-profit" : value < 0 ? "text-loss" : "text-text");
 const todayIst = () => new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
+const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : variant === "baseline" ? "No filters" : variant.replace("score:", "Score "));
 
 /**
  * Multi-day backtest of the saved settings: each day is simulated on the server (real 1-minute candles and
- * option premiums, a virtual account, nothing stored, no orders), one day per request so a long range never
- * times out. Optionally the same days without the trade filters and structure stop, to compare.
+ * option premiums, charges and slippage, a virtual account, nothing stored, no orders), one day per request
+ * so a long range never times out. Optional comparisons: the filters off, and other minimum scores. The
+ * days are split in time order into training / validation / out-of-sample parts; a variant is chosen on the
+ * training days only and then reported on the other two.
  */
 export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
   const [range] = useState(() => lastTradingDays(todayIst(), 20));
   const [from, setFrom] = useState(range[0]);
   const [to, setTo] = useState(range.at(-1)!);
-  const [compare, setCompare] = useState(true);
+  const [compare, setCompare] = useState(false);
+  const [scores, setScores] = useState("");
   const [days, setDays] = useState<BacktestDay[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState("");
   const cancel = useRef(false);
 
+  const scoreVariants = [...new Set(scores.split(/[\s,]+/).filter(Boolean).map(Number).filter((value) => Number.isInteger(value) && value >= 0 && value <= 100))].slice(0, 4).map((value) => `score:${value}`);
+  const planned: BacktestVariant[] = ["saved", ...(compare ? ["baseline"] : []), ...scoreVariants];
+  const plannedDates = tradingDays(from, to, 60).filter((date) => date < todayIst());
+
   async function start() {
-    const dates = tradingDays(from, to, 60).filter((date) => date < todayIst());
-    if (!dates.length) {
+    if (!plannedDates.length) {
       setError("Choose a range of past weekdays (up to 60).");
       return;
     }
-    const variants = compare ? (["saved", "baseline"] as const) : (["saved"] as const);
     cancel.current = false;
     setError("");
     setDays([]);
-    setProgress({ done: 0, total: dates.length * variants.length });
+    setProgress({ done: 0, total: plannedDates.length * planned.length });
     const results: BacktestDay[] = [];
-    for (const date of dates) {
-      for (const variant of variants) {
+    for (const date of plannedDates) {
+      for (const variant of planned) {
         if (cancel.current) break;
         try {
           results.push(await api<BacktestDay>("/api/algo", { action: "backtestDay", date, variant }));
@@ -46,7 +52,7 @@ export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
           results.push({ date, variant, ok: false, reason: caught instanceof Error ? caught.message : "The request failed." });
         }
         setDays([...results]);
-        setProgress({ done: results.length, total: dates.length * variants.length });
+        setProgress({ done: results.length, total: plannedDates.length * planned.length });
       }
       if (cancel.current) break;
     }
@@ -65,20 +71,26 @@ export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
     window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   }
 
-  const saved = days.filter((day) => day.variant === "saved");
-  const baseline = days.filter((day) => day.variant === "baseline");
+  const variants = [...new Set(days.map((day) => day.variant))];
   const dates = [...new Set(days.map((day) => day.date))].sort();
+  const split = splitDates(dates);
+  const chosen = !progress && variants.length > 1 ? chooseOnTraining(days, variants) : null;
+  const reported = chosen ?? (variants.includes("saved") ? "saved" : variants[0]);
   return (
     <details className="rounded-md border border-border-soft">
       <summary className="cursor-pointer px-2 py-1.5 font-medium text-text-2">Multi-day backtest</summary>
       <div className="space-y-2 border-t border-border-soft p-2">
-        <p className="text-micro leading-snug text-muted">Runs your <strong>saved</strong> settings over past days: real 1-minute candles and option premiums, a virtual account; nothing is stored or sent anywhere. Expired contracts cannot be looked up, so each day uses the nearest still-listed expiry; older days are less realistic.</p>
+        <p className="text-micro leading-snug text-muted">Runs your <strong>saved</strong> settings over past days: real 1-minute candles and option premiums, charges and slippage, a virtual account; nothing is stored or sent anywhere. Expired contracts cannot be looked up, so each day uses the nearest still-listed expiry; older days are less realistic.</p>
         <div className="flex flex-wrap items-center gap-1.5">
           <input type="date" className="compact-field w-[8.5rem]" aria-label="From" value={from} max={to} onChange={(event) => setFrom(event.target.value)} />
           <span className="text-micro text-muted">to</span>
           <input type="date" className="compact-field w-[8.5rem]" aria-label="To" value={to} min={from} max={range.at(-1)} onChange={(event) => setTo(event.target.value)} />
         </div>
-        <label className="flex cursor-pointer items-center gap-1.5 text-micro text-text-2"><input type="checkbox" className="oc-check" checked={compare} onChange={(event) => setCompare(event.target.checked)} />Also run without the trade filters and structure stop (to compare)</label>
+        <label className="flex cursor-pointer items-center gap-1.5 text-micro text-text-2"><input type="checkbox" className="oc-check" checked={compare} onChange={(event) => setCompare(event.target.checked)} />Also run with the entry filters and structure stop off</label>
+        <label className="flex items-center gap-1.5 text-micro text-text-2">Also compare minimum scores
+          <input className="compact-field w-[7.5rem]" aria-label="Minimum scores to compare" placeholder="e.g. 50, 70" value={scores} onChange={(event) => setScores(event.target.value)} />
+        </label>
+        <p className="text-micro text-muted">{plannedDates.length} day{plannedDates.length === 1 ? "" : "s"} × {planned.length} variant{planned.length === 1 ? "" : "s"} = {plannedDates.length * planned.length} simulations.</p>
         {disabled ? <p className="text-micro text-warning">{disabled}</p> : null}
         <div className="flex gap-1.5">
           {progress ? (
@@ -90,29 +102,40 @@ export function MultiDayBacktest({ disabled }: { disabled: string | null }) {
         </div>
         {progress ? <div className="h-1.5 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done}><div className="h-full bg-primary transition-[width]" style={{ width: `${(progress.done / progress.total) * 100}%` }} /></div> : null}
         {error ? <p className="text-micro text-loss" role="alert">{error}</p> : null}
-        {saved.length ? (
+        {variants.length ? (
           <div className="grid grid-cols-1 gap-2">
-            <Totals title="With fixes (your saved settings)" totals={backtestTotals(saved)} />
-            {baseline.length ? <Totals title="Without fixes (filters and structure stop off)" totals={backtestTotals(baseline)} /> : null}
+            {variants.map((variant) => <Totals key={variant} title={`${variantLabel(variant)}${variant === chosen ? " · chosen on training days" : ""}`} totals={backtestTotals(days.filter((day) => day.variant === variant))} />)}
+          </div>
+        ) : null}
+        {reported && dates.length >= 5 && !progress ? (
+          <div className="rounded-md border border-border-soft p-2">
+            <p className="text-micro font-semibold text-text-2">{variantLabel(reported)}: by period</p>
+            <p className="text-micro text-muted">{chosen ? "Chosen on the training days only; validation and out-of-sample were not used for the choice." : "Days in time order: settings should be judged on the later, untouched days."}</p>
+            <table className="mt-1 w-full whitespace-nowrap text-micro">
+              <thead className="text-left text-muted"><tr><th className="py-0.5">Part</th><th className="py-0.5 text-right">Trades</th><th className="py-0.5 text-right">Win %</th><th className="py-0.5 text-right">PF</th><th className="py-0.5 text-right">Net P&amp;L</th></tr></thead>
+              <tbody>
+                {(["training", "validation", "test"] as const).map((name) => {
+                  const totals = backtestTotals(days.filter((day) => day.variant === reported && split[name].includes(day.date)));
+                  return <tr key={name} className="border-t border-border-soft"><td className="py-0.5">{SPLIT_LABEL[name]}</td><td className="num py-0.5 text-right">{totals.trades}</td><td className="num py-0.5 text-right">{totals.winRate ?? "—"}</td><td className="num py-0.5 text-right">{totals.profitFactor ?? "—"}</td><td className={cx("num py-0.5 text-right", tone(totals.pnl))}>{inr(totals.pnl)}</td></tr>;
+                })}
+              </tbody>
+            </table>
           </div>
         ) : null}
         {dates.length ? (
           <div className="max-h-64 overflow-auto rounded-md border border-border-soft">
             <table className="w-full whitespace-nowrap text-micro">
-              <thead className="sticky top-0 bg-sunken text-left text-muted"><tr><th className="px-1.5 py-1">Day</th><th className="px-1.5 py-1 text-right">Trades</th><th className="px-1.5 py-1 text-right">With fixes</th>{baseline.length ? <th className="px-1.5 py-1 text-right">Without</th> : null}</tr></thead>
+              <thead className="sticky top-0 bg-sunken text-left text-muted"><tr><th className="px-1.5 py-1">Day</th>{variants.map((variant) => <th key={variant} className="px-1.5 py-1 text-right">{short(variant)}</th>)}</tr></thead>
               <tbody>
-                {dates.map((date) => {
-                  const a = saved.find((day) => day.date === date);
-                  const b = baseline.find((day) => day.date === date);
-                  return (
-                    <tr key={date} className="border-t border-border-soft">
-                      <td className="num px-1.5 py-1">{date}</td>
-                      <td className="num px-1.5 py-1 text-right">{a?.ok ? `${a.trades.length} (${a.stats.wins}/${a.stats.losses})` : ""}</td>
-                      <td className={cx("num px-1.5 py-1 text-right", a?.ok ? tone(a.stats.realized) : "text-muted")} title={a && !a.ok ? a.reason : undefined}>{a ? (a.ok ? inr(a.stats.realized) : "skipped") : "…"}</td>
-                      {baseline.length ? <td className={cx("num px-1.5 py-1 text-right", b?.ok ? tone(b.stats.realized) : "text-muted")} title={b && !b.ok ? b.reason : undefined}>{b ? (b.ok ? inr(b.stats.realized) : "skipped") : "…"}</td> : null}
-                    </tr>
-                  );
-                })}
+                {dates.map((date) => (
+                  <tr key={date} className="border-t border-border-soft">
+                    <td className="num px-1.5 py-1">{date}</td>
+                    {variants.map((variant) => {
+                      const day = days.find((item) => item.date === date && item.variant === variant);
+                      return <td key={variant} className={cx("num px-1.5 py-1 text-right", day?.ok ? tone(day.stats.realized) : "text-muted")} title={day && !day.ok ? day.reason : day?.ok ? `${day.trades.length} trade${day.trades.length === 1 ? "" : "s"} (${day.stats.wins}/${day.stats.losses})` : undefined}>{day ? (day.ok ? (day.trades.length ? inr(day.stats.realized) : "no trade") : "skipped") : "…"}</td>;
+                    })}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -126,13 +149,19 @@ function Totals({ title, totals }: { title: string; totals: BacktestTotals }) {
   return (
     <div className="rounded-md border border-border-soft p-2">
       <p className="text-micro font-semibold text-text-2">{title}</p>
-      <p className={cx("num text-lg font-semibold", tone(totals.pnl))}>{inr(totals.pnl)}</p>
+      <p className={cx("num text-lg font-semibold", tone(totals.pnl))}>{inr(totals.pnl)} <span className="text-micro font-normal text-muted">net, after charges</span></p>
       <dl className="grid grid-cols-3 gap-x-2 gap-y-1 text-micro">
         <Cell label="Trades (W/L)" value={`${totals.trades} (${totals.wins}/${totals.losses})`} />
         <Cell label="Win rate" value={totals.winRate == null ? "—" : `${totals.winRate}%`} />
         <Cell label="Profit factor" value={totals.profitFactor == null ? "—" : String(totals.profitFactor)} />
-        <Cell label="Avg / day" value={inr(totals.averagePerDay)} />
+        <Cell label="Avg win" value={inr(totals.averageWin)} />
+        <Cell label="Avg loss" value={inr(totals.averageLoss)} />
+        <Cell label="Avg R" value={totals.averageR == null ? "—" : `${totals.averageR}R`} />
         <Cell label="Max drawdown" value={`₹${totals.maxDrawdown.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`} />
+        <Cell label="Losing streak" value={String(totals.maxConsecutiveLosses)} />
+        <Cell label="Trades / day" value={totals.tradesPerDay == null ? "—" : String(totals.tradesPerDay)} />
+        <Cell label="No-trade days" value={totals.noTradeDays == null ? "—" : `${totals.noTradeDays}%`} />
+        <Cell label="Target days" value={totals.targetDays == null ? "—" : `${totals.targetDays}%`} />
         <Cell label="Days" value={`${totals.days - totals.daysSkipped} run · ${totals.daysSkipped} skipped`} />
       </dl>
     </div>

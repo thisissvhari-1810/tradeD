@@ -18,7 +18,7 @@ function build(closes: number[], first = 100): Candle[] {
 }
 const BASE = [100, 102, 104, 108, 104, 101, 100, 102, 104, 106, 103, 101, 100, 101, 102, 103, 110];
 const mirror = (closes: number[]) => closes.map((close) => 200 - close);
-const only = (id: StrategyId): Record<StrategyId, boolean> => ({ line: false, trendline: id === "trendline", w: id === "w", m: id === "m" });
+const only = (id: StrategyId): Partial<Record<StrategyId, boolean>> => ({ line: false, trendline: id === "trendline", w: id === "w", m: id === "m" });
 const settings: PatternSettings = { ...PATTERN_DEFAULTS };
 const analyse = (candles: Candle[], id: StrategyId, extra: Partial<PatternSettings> = {}, observationMinutes = 0) => analyzeMarket({ candles, sessionOpen: OPEN, observationMinutes, settings: { ...settings, ...extra }, enabled: only(id) });
 
@@ -217,9 +217,11 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     const drawings = algoAnalysisDrawings(done, { trendline: "#00f", neckline: "#fa0" });
     // Switched-off strategies draw nothing (M is off here; with only W on, no trendline either).
     expect(algoAnalysisDrawings(analyse(build(BASE), "w").analysis, { trendline: "#00f", neckline: "#fa0" }).map((drawing) => drawing.id)).toEqual(["algo:neckline:W"]);
-    expect(drawings.map((drawing) => drawing.id)).toEqual(["algo:trendline:resistance", "algo:neckline:W"]);
-    // A ray through the two fixed swing highs, extended to the right.
-    expect(drawings[0]).toMatchObject({ kind: "ray", points: [{ time: T(3), price: 108.5 }, { time: T(9), price: 106.5 }] });
+    // After the breakout candle the resistance is broken (no longer active); the support through the equal lows stays.
+    expect(drawings.map((drawing) => drawing.id)).toEqual(["algo:trendline:support", "algo:neckline:W"]);
+    // Before it: a ray through the two fixed swing highs, extended to the right.
+    const before = algoAnalysisDrawings(analyzeMarket({ candles: build(BASE).slice(0, 16), sessionOpen: OPEN, observationMinutes: 0, settings, enabled: both }).analysis, { trendline: "#00f", neckline: "#fa0" });
+    expect(before.find((drawing) => drawing.id === "algo:trendline:resistance")).toMatchObject({ kind: "ray", points: [{ time: T(3), price: 108.5 }, { time: T(9), price: 106.5 }] });
     expect(drawings[1]).toMatchObject({ dash: "solid", points: [{ time: T(6), price: 106.5 }, { time: T(16), price: 106.5 }] });
     const forming = algoAnalysisDrawings(analyse(build(BASE).slice(0, 12), "w").analysis, { trendline: "#00f", neckline: "#fa0" });
     expect(forming.find((drawing) => drawing.id === "algo:neckline:W")?.dash).toBe("dashed");
@@ -234,12 +236,12 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     const enabled = { line: false, trendline: true, w: true, m: false };
     const colors = { trendline: "#00f", neckline: "#fa0" };
     // The resistance is known from candle 11, but the window runs to minute 30: nothing on the chart yet.
-    const observing = analyzeMarket({ candles: build(BASE), sessionOpen: OPEN, observationMinutes: 30, settings, enabled }).analysis;
+    const observing = analyzeMarket({ candles: build(BASE).slice(0, 16), sessionOpen: OPEN, observationMinutes: 30, settings, enabled }).analysis;
     expect(observing.resistance).not.toBeNull();
     expect(algoAnalysisDrawings(observing, colors)).toEqual([]);
     expect(algoPivotMarkers(observing, "#888")).toEqual([]);
     // Once the window has passed (here 15 minutes, ending before the last candle) the ray is drawn.
-    const after = analyzeMarket({ candles: build(BASE), sessionOpen: OPEN, observationMinutes: 15, settings, enabled }).analysis;
+    const after = analyzeMarket({ candles: build(BASE).slice(0, 16), sessionOpen: OPEN, observationMinutes: 15, settings, enabled }).analysis;
     expect(after.observationComplete).toBe(true);
     expect(algoAnalysisDrawings(after, colors).map((drawing) => [drawing.id, drawing.kind])).toContainEqual(["algo:trendline:resistance", "ray"]);
   });
@@ -302,8 +304,8 @@ describe("multi-day backtest arithmetic", () => {
     expect(totals.bestDay).toEqual({ date: "2026-10-22", pnl: 2000 });
     expect(totals.worstDay).toEqual({ date: "2026-10-20", pnl: -1500 });
     const csv = backtestCsv(days);
-    expect(csv).toMatch(/2026-10-21,With fixes,Skipped/);
-    expect(csv).toMatch(/TOTAL with fixes,,4 days \(1 skipped\),4,2,2,1500\.00/);
+    expect(csv).toMatch(/2026-10-21,Saved settings,Skipped/);
+    expect(csv).toMatch(/TOTAL,Saved settings,All days: 4 days \(1 skipped\),4,2,2,1500\.00/);
   });
 
   it("the backtest runs one day per request on the server with the saved settings, or with the fixes off to compare", async () => {
@@ -312,7 +314,7 @@ describe("multi-day backtest arithmetic", () => {
     const start = server.indexOf("export async function backtestDay");
     const day = server.slice(start, start + server.slice(start).search(/\r?\n\}\r?\n/));
     expect(day.length).toBeGreaterThan(200);
-    expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \} : saved/);
+    expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \} : score \? \{ \.\.\.saved, minScore: Math\.min\(100, Number\(score\[1\]\)\) \} : saved/);
     expect(day).not.toMatch(/prisma\.\w+\.(update|create|upsert|delete)/);
     expect(server).toMatch(/if \(sessionComplete\(state, config\.maxTrades\)\) break;/);
     expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/return Response\.json\(await backtestDay\(user, input\.date, input\.variant\)\)/);

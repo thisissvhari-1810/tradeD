@@ -15,7 +15,7 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
   const lastCandle = analysis.asOf - 60;
   const list: Drawing[] = [];
   // Only what the switched-on strategies use is drawn.
-  const on = (id: "trendline" | "w" | "m") => analysis.strategies[id]?.enabled !== false;
+  const on = (id: "trendline" | "w" | "m" | "orb") => analysis.strategies[id]?.enabled !== false;
   for (const line of on("trendline") ? [analysis.resistance, analysis.support] : []) {
     if (!line) continue;
     list.push({
@@ -27,6 +27,12 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
       dash: "solid",
       locked: true,
     });
+  }
+  // The opening range of the opening-range breakout, once complete (dotted, from the open to the latest candle).
+  if (on("orb") && analysis.orb?.complete) {
+    for (const [side, price] of [["high", analysis.orb.high], ["low", analysis.orb.low]] as const) {
+      list.push({ id: `algo:orb:${side}`, kind: "trend", points: [{ time: analysis.sessionOpen, price }, { time: lastCandle, price }], color: colors.neckline, width: 1, dash: "dotted", locked: true });
+    }
   }
   for (const pattern of [on("w") ? analysis.w : null, on("m") ? analysis.m : null]) {
     if (!pattern || pattern.status === "INVALIDATED" || pattern.status === "EXPIRED") continue;

@@ -98,6 +98,7 @@ export const EXIT_LABEL: Record<string, string> = {
   SESSION_END: "Session end",
   SESSION_CLOSED: "Replay session closed",
   STRUCTURE: "Setup invalidated",
+  WINDOW_END: "Window end",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
 };
