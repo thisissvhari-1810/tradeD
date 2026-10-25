@@ -2,7 +2,7 @@ import { readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
 import { mutation, query } from "@/server/http";
-import { algoCommand, algoHistory, algoView } from "@/server/algo";
+import { algoCommand, algoHistory, algoReport, algoView } from "@/server/algo";
 import { ALGO_SESSION_ID, algoRequest } from "@/lib/algo/request";
 
 /** The Strategy Algo of the signed-in user: settings, state, position and signal log. */
@@ -11,6 +11,12 @@ export const GET = query(async (request: Request) => {
   const params = new URL(request.url).searchParams;
   // Home → Algo History: archived replay sessions only (read-only; never touches the active session).
   if (params.get("history") === "1") return Response.json(await algoHistory(user), { headers: { "Cache-Control": "no-store" } });
+  // One session's full record, for its downloadable report (only the user's own sessions).
+  const report = params.get("report");
+  if (report) {
+    if (!/^[a-z0-9]{8,40}$/.test(report)) return Response.json({ error: "Invalid session.", code: "BAD_REQUEST" }, { status: 400 });
+    return Response.json(await algoReport(user, report), { headers: { "Cache-Control": "no-store" } });
+  }
   const session = params.get("session");
   return Response.json(await algoView(user, session && ALGO_SESSION_ID.test(session) ? session : null), { headers: { "Cache-Control": "no-store" } });
 });

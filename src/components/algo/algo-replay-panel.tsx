@@ -1,7 +1,8 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, History, LogIn, LogOut, OctagonX, Play, Radio, ShieldCheck, Zap } from "lucide-react";
+import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, Download, History, LogIn, LogOut, OctagonX, Play, Radio, RotateCcw, ShieldCheck, Zap } from "lucide-react";
+import { downloadAlgoReport } from "@/components/algo/algo-report";
 import { cx } from "@/components/ui";
 import { activityFeed, algoTrades, runDiagnostics, skippedSignals, tradeSlots, type ActivityItem, type AlgoTrade, type SlotState } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
@@ -49,7 +50,7 @@ export type LivePosition = NonNullable<NonNullable<ChartAlgo["run"]>["position"]
  * slots, live trade cards (each opens its own detail view), the activity feed, completed trades and the
  * signals that were not traded. Phones show it folded under the chart.
  */
-export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selectedTrade, onOpenTrade }: {
+export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selectedTrade, onOpenTrade, onRetrade }: {
   algo: ChartAlgo;
   cursor: number | null;
   chartSymbol: string;
@@ -58,6 +59,8 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   selectedTrade: string | null;
   /** Opens a trade's detail view (and selects it). */
   onOpenTrade: (entryKey: string) => void;
+  /** Trade the same replay date again as a brand-new session. */
+  onRetrade: () => void;
 }) {
   // Phones start with the panel folded to its header (the chart keeps the screen); desktops show it open.
   const [open, setOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 1023px)").matches);
@@ -213,6 +216,9 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 
         {/* 5. Activity */}
         {run ? <ActivityFeed items={activityFeed(run.events)} onOpenTrade={(number) => { const trade = trades.find((item) => item.number === number); if (trade) onOpenTrade(trade.entryKey); }} /> : null}
+
+        {/* Session finished: download its full report, or trade the same day again as a new session. */}
+        {run && run.status === "ENDED" ? <SessionFinished runId={run.id} completed={run.endReason === "COMPLETED"} trades={trades.length} max={max} onRetrade={onRetrade} /> : null}
 
         {/* 6. Completed trades */}
         {completed.length ? (
@@ -542,6 +548,7 @@ export function AlgoEndDialog({ algo, cursor, onCancel, onConfirm, action }: { a
  * figures for the session, not a separate calculation) is shown once.
  */
 export function AlgoCompleteDialog({ run, onClose, onHistory, onNewReplay }: { run: NonNullable<ChartAlgo["run"]>; onClose: () => void; onHistory: () => void; onNewReplay: () => void }) {
+  const report = useReportDownload(run.id);
   const summary = run.summary;
   const stats = summary?.stats ?? run.stats;
   const max = summary?.maxTrades ?? run.config.maxTrades;
@@ -564,11 +571,43 @@ export function AlgoCompleteDialog({ run, onClose, onHistory, onNewReplay }: { r
         <p className="num mt-2 text-xs text-muted">Completed at {ist(run.processedThrough)} IST (replay time)</p>
       </div>
       <p className="mt-2 text-xs text-muted">Saved to Home → Algo History. No further signals or entries are processed in this session.</p>
+      {report.error ? <p className="mt-1 text-xs text-loss" role="alert">{report.error}</p> : null}
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onClose}>Close</button>
         <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover" onClick={onHistory}>View Trade History</button>
+        <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-3 hover:bg-hover disabled:opacity-50" disabled={report.busy} onClick={report.download}><Download className="h-3.5 w-3.5" aria-hidden />{report.busy ? "Preparing…" : "Download report"}</button>
         <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 font-semibold text-on-primary" onClick={onNewReplay}><Play className="h-3.5 w-3.5" aria-hidden />Start New Replay</button>
       </div>
     </Dialog>
+  );
+}
+
+/** Downloads a session's report, with its busy and error state. */
+function useReportDownload(runId: string) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const download = () => {
+    setBusy(true);
+    setError("");
+    downloadAlgoReport(runId)
+      .catch((caught: unknown) => setError(caught instanceof Error ? `The report could not be downloaded: ${caught.message}` : "The report could not be downloaded."))
+      .finally(() => setBusy(false));
+  };
+  return { busy, error, download };
+}
+
+/** A finished session in the panel: its full report as a download, and a retrade of the same day. */
+function SessionFinished({ runId, completed, trades, max, onRetrade }: { runId: string; completed: boolean; trades: number; max: number; onRetrade: () => void }) {
+  const report = useReportDownload(runId);
+  return (
+    <section className="rounded-xl border border-primary/40 bg-primary-soft/20 p-3" aria-label="Session finished">
+      <p className="text-sm font-semibold">{completed ? `All ${max} trades completed` : `Session ended · ${trades}/${max} trades`}</p>
+      <p className="mt-0.5 text-xs text-muted">Download the full trade flow (summary, every trade and every processed candle, signal, order, confirmation and exit), or trade this day again as a new session.</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={report.busy} onClick={report.download}><Download className="h-4 w-4" aria-hidden />{report.busy ? "Preparing…" : "Download trade report"}</button>
+        <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border px-3 font-semibold hover:bg-hover" onClick={onRetrade}><RotateCcw className="h-4 w-4" aria-hidden />Retrade this day</button>
+      </div>
+      {report.error ? <p className="mt-1.5 text-xs text-loss" role="alert">{report.error}</p> : null}
+    </section>
   );
 }

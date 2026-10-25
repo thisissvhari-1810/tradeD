@@ -47,7 +47,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     slippageTicks: Number.isFinite(num(row.slippageTicks)) ? num(row.slippageTicks) : ALGO_DEFAULTS.slippageTicks,
     entryCutoff: typeof row.entryCutoff === "string" && /^(09|1[0-5]):[0-5]\d$/.test(row.entryCutoff) ? row.entryCutoff : ALGO_DEFAULTS.entryCutoff,
     strategies: strategiesOf(row.strategies),
-    observationMinutes: Number.isFinite(num(row.observationMinutes)) ? num(row.observationMinutes) : ALGO_DEFAULTS.observationMinutes,
+    // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
+    observationMinutes: !Number.isFinite(num(row.observationMinutes)) || (num(row.settingsVersion) !== 2 && num(row.observationMinutes) === 15) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
+    settingsVersion: ALGO_DEFAULTS.settingsVersion,
     patterns: patternsOf(row.patterns),
   };
 }

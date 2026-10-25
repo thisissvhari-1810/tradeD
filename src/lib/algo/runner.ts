@@ -45,8 +45,10 @@ export type AlgoConfig = {
   entryCutoff: string;
   /** Which strategies may signal: the line break and the price-action add-ons. */
   strategies: Record<StrategyId, boolean>;
-  /** Minutes after the session open that are analysis only: no new entries (15 = 09:15–09:30). */
+  /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
   observationMinutes: number;
+  /** Settings format: 2 = the 30-minute observation default (older saved settings had 15). */
+  settingsVersion: number;
   /** Swing, pattern and breakout settings for the trendline, W and M strategies. */
   patterns: PatternSettings;
 };
@@ -73,7 +75,9 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   slippageTicks: 1,
   entryCutoff: "15:00",
   strategies: { line: true, trendline: true, w: true, m: true },
-  observationMinutes: 15,
+  // The first 30 minutes read the opening structure and trendlines before any trade.
+  observationMinutes: 30,
+  settingsVersion: 2,
   patterns: PATTERN_DEFAULTS,
 };
 

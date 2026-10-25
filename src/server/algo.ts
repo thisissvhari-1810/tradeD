@@ -906,3 +906,24 @@ export async function algoHistory(user: SessionUser) {
     }),
   };
 }
+
+/**
+ * One replay session's complete record for its report download: the run, its archived summary and every
+ * logged event (signals, every candle evaluation, orders, confirmations, exits), oldest first. Only the
+ * signed-in user's own sessions are readable. Read-only.
+ */
+export async function algoReport(user: SessionUser, runId: string) {
+  assertAllowed(user);
+  const session = await prisma.algoSession.findUnique({ where: { userId: user.id } });
+  const run = session ? await prisma.algoRun.findFirst({ where: { id: runId, sessionId: session.id } }) : null;
+  if (!session || !run) throw new AppError("This Algo session was not found.", 404, "NOT_FOUND");
+  const rows = await prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "CHART", runId: run.id }, orderBy: [{ time: "asc" }, { createdAt: "asc" }] });
+  const events = rows.map((row) => row.payload as unknown as AlgoEvent);
+  return {
+    id: run.id, sessionId: run.replaySession, underlying: run.underlying, date: run.date, status: run.status, endReason: run.endReason,
+    startedAt: run.startedAt.toISOString(), endedAt: run.endedAt?.toISOString() ?? null, processedThrough: run.processedThrough,
+    startCapital: rupees(run.startCashPaise), endCash: run.endCashPaise == null ? null : rupees(run.endCashPaise),
+    summary: (run.summary ?? null) as { account?: Awaited<ReturnType<typeof algoWallet>> | null } | null,
+    settings: readAlgoConfig(run.config), stats: runStats(events), events,
+  };
+}

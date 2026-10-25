@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { History } from "lucide-react";
+import { Download, History } from "lucide-react";
+import { downloadAlgoReport } from "@/components/algo/algo-report";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import { Drawer } from "@/components/ui/drawer";
@@ -92,8 +93,29 @@ export function AlgoSessionsCard({ className }: { className?: string }) {
 
 function SessionDetail({ session, onClose }: { session: ArchivedSession; onClose: () => void }) {
   const total = totalOf(session);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState("");
+  const download = () => {
+    setBusy(true);
+    setFailed("");
+    downloadAlgoReport(session.id).catch((caught: unknown) => setFailed(caught instanceof Error ? caught.message : "The report could not be downloaded.")).finally(() => setBusy(false));
+  };
   return (
-    <Drawer open modal onClose={onClose} label="Algo session details" title={`${session.underlying} · replay ${session.date}`} subtitle={`${when(session.startedAt)} → ${when(session.endedAt)} · ${STATUS[session.status] ?? session.status} · read-only`} width="w-[40rem]">
+    <Drawer
+      open
+      modal
+      onClose={onClose}
+      label="Algo session details"
+      title={`${session.underlying} · replay ${session.date}`}
+      subtitle={`${when(session.startedAt)} → ${when(session.endedAt)} · ${STATUS[session.status] ?? session.status} · read-only`}
+      width="w-[40rem]"
+      footer={(
+        <div className="flex items-center justify-end gap-2">
+          {failed ? <span className="mr-auto text-data text-loss" role="alert">{failed}</span> : null}
+          <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-data font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={busy} onClick={download}><Download className="h-4 w-4" aria-hidden />{busy ? "Preparing…" : "Download trade report"}</button>
+        </div>
+      )}
+    >
       <div className="space-y-4">
         <section className="rounded-xl bg-elevated p-4">
           <p className="text-micro font-medium uppercase tracking-wide text-muted">Session P&amp;L</p>

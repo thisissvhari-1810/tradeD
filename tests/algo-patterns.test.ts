@@ -218,7 +218,8 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     // Switched-off strategies draw nothing (M is off here; with only W on, no trendline either).
     expect(algoAnalysisDrawings(analyse(build(BASE), "w").analysis, { trendline: "#00f", neckline: "#fa0" }).map((drawing) => drawing.id)).toEqual(["algo:neckline:W"]);
     expect(drawings.map((drawing) => drawing.id)).toEqual(["algo:trendline:resistance", "algo:neckline:W"]);
-    expect(drawings[0].points).toEqual([{ time: T(3), price: 108.5 }, { time: T(16), price: done.resistance!.now }]);
+    // A ray through the two fixed swing highs, extended to the right.
+    expect(drawings[0]).toMatchObject({ kind: "ray", points: [{ time: T(3), price: 108.5 }, { time: T(9), price: 106.5 }] });
     expect(drawings[1]).toMatchObject({ dash: "solid", points: [{ time: T(6), price: 106.5 }, { time: T(16), price: 106.5 }] });
     const forming = algoAnalysisDrawings(analyse(build(BASE).slice(0, 12), "w").analysis, { trendline: "#00f", neckline: "#fa0" });
     expect(forming.find((drawing) => drawing.id === "algo:neckline:W")?.dash).toBe("dashed");
@@ -226,6 +227,29 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     expect(algoAnalysisDrawings(invalid, { trendline: "#00f", neckline: "#fa0" }).some((drawing) => drawing.id === "algo:neckline:W")).toBe(false);
     expect(algoPivotMarkers(done, "#888").map((marker) => marker.text)).toEqual(["", "", ""]);
     expect(new Set(algoPivotMarkers(done, "#888").map((marker) => marker.id)).size).toBe(3);
+  });
+
+  it("nothing is drawn while the opening is observed; the trendline appears once the window has passed", async () => {
+    const { algoAnalysisDrawings, algoPivotMarkers } = await import("../src/components/algo/algo-drawings");
+    const enabled = { line: false, trendline: true, w: true, m: false };
+    const colors = { trendline: "#00f", neckline: "#fa0" };
+    // The resistance is known from candle 11, but the window runs to minute 30: nothing on the chart yet.
+    const observing = analyzeMarket({ candles: build(BASE), sessionOpen: OPEN, observationMinutes: 30, settings, enabled }).analysis;
+    expect(observing.resistance).not.toBeNull();
+    expect(algoAnalysisDrawings(observing, colors)).toEqual([]);
+    expect(algoPivotMarkers(observing, "#888")).toEqual([]);
+    // Once the window has passed (here 15 minutes, ending before the last candle) the ray is drawn.
+    const after = analyzeMarket({ candles: build(BASE), sessionOpen: OPEN, observationMinutes: 15, settings, enabled }).analysis;
+    expect(after.observationComplete).toBe(true);
+    expect(algoAnalysisDrawings(after, colors).map((drawing) => [drawing.id, drawing.kind])).toContainEqual(["algo:trendline:resistance", "ray"]);
+  });
+
+  it("the live chart draws the paper Algo's analysis too (outside replay)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    expect(desk).toMatch(/useLiveAlgoAnalysis\(\{ enabled: !replay\.active && !optionView && !live && canPaperTrade, symbol \}\)/);
+    const hook = readFileSync("src/components/algo/use-live-analysis.ts", "utf8");
+    expect(hook).toMatch(/data\.config\.mode === "PAPER" && data\.config\.underlying === symbol && fresh/);
   });
 
   it("the dashboard, drawer and Strategy tab read the run's stored analysis and confirmations (no separate calculation)", async () => {
@@ -242,7 +266,7 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/algoRun\.state\.analysis/);
     // Nothing later than the replay time is drawn on the chart.
     expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/analysisNow\.asOf <= replay\.cursor \+ 60/);
-    expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/\.filter\(\(marker\) => replay\.cursor == null \|\| marker\.time < replay\.cursor\)/);
+    expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/\.filter\(\(marker\) => !replay\.active \|\| replay\.cursor == null \|\| marker\.time < replay\.cursor\)/);
     for (const file of ["src/components/algo/algo-analysis.tsx", "src/components/algo/algo-replay-panel.tsx"]) expect(readFileSync(file, "utf8")).not.toMatch(/Math\.random/);
   });
 });

@@ -8,8 +8,9 @@ import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, 
 import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
 import { tradeSummary } from "../src/components/algo/algo-trade-drawer";
-import { algoConfigProblems, switchToChartReplay } from "../src/lib/algo/config";
+import { algoConfigProblems, readAlgoConfig, switchToChartReplay } from "../src/lib/algo/config";
 import { algoRequest } from "../src/lib/algo/request";
+import { algoReportCsv, algoReportName, csvCell } from "../src/lib/algo/report";
 import { callPutBreakdown } from "../src/lib/algo/breakdown";
 
 /**
@@ -1225,5 +1226,89 @@ describe("price-action strategies through the shared coordinator and the real le
     expect(db.state.orders).toHaveLength(0);
     const lineOnly = await run(underlying("DOWN"), { cursor: m(40), config: { ...config, strategies: { line: true, trendline: false, w: false, m: false } } });
     expect(lineOnly.state.position?.setup).toMatchObject({ strategy: "line", level: LINE });
+  });
+});
+
+describe("trade report download and retrade", () => {
+  function threeDone(): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < 30 ? LINE + 10 : index < 60 ? LINE - 10 : index < 90 ? LINE + 10 : index < 120 ? LINE - 10 : LINE + 10;
+      const open = index === 30 || index === 90 ? LINE + 8 : index === 60 || index === 120 ? LINE - 8 : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 0 });
+    }
+    return candles;
+  }
+  const outcomes = (index: number) => (index === 36 || index === 96 ? { low: 100, high: 150, close: 145 } : index === 66 ? { low: 60, high: 100, close: 70 } : null);
+
+  it("the CSV has the summary, every trade and the complete flow of the session, with quoted cells", async () => {
+    feed.premiums = premiums(outcomes);
+    const result = await run(threeDone(), { cursor: m(200) });
+    expect(result.completed).toBe(true);
+    const csv = algoReportCsv({
+      sessionId: SESSION, underlying: "NIFTY", date: DATE, status: "ENDED", endReason: "COMPLETED", startedAt: NOW.toISOString(), endedAt: NOW.toISOString(),
+      startCapital: 100_000, endCash: 101_000, summary: { account: { equity: "₹1,01,000.00" } }, settings: config, stats: runStats(result.events), events: result.events,
+    });
+    expect(csv.startsWith("﻿TradeD Algo trade report,")).toBe(true);
+    const lines = csv.trim().split("\r\n");
+    const tradesAt = lines.indexOf("TRADES");
+    const flowAt = lines.indexOf("FULL FLOW");
+    expect(tradesAt).toBeGreaterThan(0);
+    expect(flowAt).toBeGreaterThan(tradesAt);
+    // Three trades, numbered, with their exit reasons and P&L.
+    const tradeRows = lines.slice(tradesAt + 2, flowAt - 1);
+    expect(tradeRows).toHaveLength(3);
+    expect(tradeRows.map((line) => line.split(",")[0])).toEqual(["1", "2", "3"]);
+    expect(tradeRows.map((line) => line.split(",")[1])).toEqual(["BUY PUT", "BUY CALL", "BUY PUT"]);
+    expect(tradeRows[0]).toMatch(/,Target,/);
+    expect(tradeRows[1]).toMatch(/,Stop-loss,/);
+    // Every logged event is one flow row (candles checked, signals, orders, confirmations, exits).
+    expect(lines.length - (flowAt + 2)).toBe(result.events.length);
+    const flow = lines.slice(flowAt + 2).join("\n");
+    for (const kind of ["Candle checked", "PUT signal", "Entry (BUY)", "Exit (SELL)", "Confirmation"]) expect(flow).toContain(kind);
+    expect(lines.find((line) => line.startsWith("Trades,"))).toBe("Trades,3/3");
+    expect(csvCell('a, "b"\nc')).toBe('"a, ""b""\nc"');
+    expect(algoReportName({ underlying: "NIFTY", date: DATE, sessionId: SESSION })).toBe("TradeD-Algo-NIFTY-2026-10-16-algo1234.csv");
+  });
+
+  it("only the signed-in user's own session can be downloaded; the report reads the stored record", () => {
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    const report = server.slice(server.indexOf("export async function algoReport"));
+    expect(report).toMatch(/prisma\.algoRun\.findFirst\(\{ where: \{ id: runId, sessionId: session\.id \} \}\)/);
+    expect(report).toMatch(/throw new AppError\("This Algo session was not found\.", 404/);
+    expect(report).not.toMatch(/\.(update|create|upsert|delete)\w*\(/);
+    expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/if \(!\/\^\[a-z0-9\]\{8,40\}\$\/\.test\(report\)\)/);
+  });
+
+  it("finished sessions offer the download and a retrade in the panel, the popup and Home", () => {
+    const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    expect(panel).toMatch(/\{run && run\.status === "ENDED" \? <SessionFinished runId=\{run\.id\}/);
+    expect(panel).toMatch(/Download trade report/);
+    expect(panel).toMatch(/Retrade this day/);
+    expect(panel).toMatch(/const report = useReportDownload\(run\.id\);/);
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    expect(desk).toMatch(/onRetrade=\{retrade\}/);
+    expect(desk).toMatch(/onNewReplay=\{retrade\}/);
+    expect(desk).toMatch(/function retrade\(\) \{[\s\S]{0,300}algo\.startNew\(\);\s*returnToStart\(\);\s*setAlgoDialog\(true\);/);
+    expect(readFileSync("src/components/algo/algo-sessions.tsx", "utf8")).toMatch(/downloadAlgoReport\(session\.id\)/);
+  });
+});
+
+describe("the first 30 minutes are for reading the market", () => {
+  it("defaults to 30 minutes; old saved 15-minute settings move to 30 once, later choices are kept", () => {
+    expect(ALGO_DEFAULTS.observationMinutes).toBe(30);
+    expect(readAlgoConfig({ observationMinutes: 15 }).observationMinutes).toBe(30);
+    expect(readAlgoConfig({}).observationMinutes).toBe(30);
+    expect(readAlgoConfig({ observationMinutes: 15, settingsVersion: 2 }).observationMinutes).toBe(15);
+    expect(readAlgoConfig({ observationMinutes: 20 }).observationMinutes).toBe(20);
+  });
+
+  it("a crossing at 09:40 is not traded (analysis only); the same crossing at 09:46 is", async () => {
+    const early = await run(underlying("DOWN", 25), { cursor: m(40), config: { ...config, observationMinutes: 30 } });
+    expect(db.state.orders).toHaveLength(0);
+    const rejected = early.events.find((event) => event.key === `eval:${m(25)}`);
+    expect(rejected?.reasons?.join(" ")).toMatch(/Observation period: the first 30 minutes \(to 09:45 IST\) are analysis only/);
+    const later = await run(underlying("DOWN", 30), { cursor: m(40), config: { ...config, observationMinutes: 30 } });
+    expect(later.state.position).not.toBeNull();
   });
 });

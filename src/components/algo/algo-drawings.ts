@@ -3,13 +3,15 @@ import type { ChartMarker } from "@/components/chart-panel";
 import type { MarketAnalysis, PatternState } from "@/lib/algo/patterns";
 
 /**
- * The Algo's market analysis drawn on the chart from the same stored analysis the dashboard reads:
- * auto trendlines (from their fixed first pivot to the latest candle), W / M necklines (dashed while the
- * pattern is still forming, solid once confirmed; not drawn once invalidated or expired) and tiny squares
- * on the pattern's pivots. Read-only, with stable ids, so a redraw never duplicates anything.
+ * The Algo's market analysis drawn on the chart from the same stored analysis the dashboard reads.
+ * Nothing is drawn while the opening is still being observed (09:15–09:45 by default): the algo first
+ * reads the market. From then on: the auto trendlines as rays through their two fixed swing points
+ * (extended to the right, so the level a breakout must clear is visible ahead), W / M necklines (dashed
+ * while the pattern is still forming, solid once confirmed; not drawn once invalidated or expired) and
+ * tiny squares on the pattern's pivots. Read-only, with stable ids, so a redraw never duplicates anything.
  */
 export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined, colors: { trendline: string; neckline: string }): Drawing[] {
-  if (!analysis) return [];
+  if (!analysis || !analysis.observationComplete) return [];
   const lastCandle = analysis.asOf - 60;
   const list: Drawing[] = [];
   // Only what the switched-on strategies use is drawn.
@@ -18,8 +20,8 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
     if (!line) continue;
     list.push({
       id: `algo:trendline:${line.kind.toLowerCase()}`,
-      kind: "trend",
-      points: [{ time: line.a.time, price: line.a.price }, { time: lastCandle, price: line.now }],
+      kind: "ray",
+      points: [{ time: line.a.time, price: line.a.price }, { time: line.b.time, price: line.b.price }],
       color: colors.trendline,
       width: 1,
       dash: "solid",
@@ -43,7 +45,7 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
 
 /** Tiny squares on the W / M pattern pivots (no text). */
 export function algoPivotMarkers(analysis: MarketAnalysis | null | undefined, color: string): ChartMarker[] {
-  if (!analysis) return [];
+  if (!analysis || !analysis.observationComplete) return [];
   const list: ChartMarker[] = [];
   const add = (pattern: PatternState | null) => {
     if (!pattern || pattern.status === "INVALIDATED" || pattern.status === "EXPIRED") return;

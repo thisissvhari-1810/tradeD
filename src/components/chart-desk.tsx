@@ -24,6 +24,7 @@ import { AlgoHistory } from "@/components/algo/algo-history";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { algoChartMarkers } from "@/components/algo/algo-markers";
 import { algoAnalysisDrawings, algoPivotMarkers } from "@/components/algo/algo-drawings";
+import { useLiveAlgoAnalysis } from "@/components/algo/use-live-analysis";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
@@ -826,13 +827,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   );
   // The Algo's market analysis on the chart (trendlines, necklines, pattern pivots), from the run's stored analysis.
   // Nothing later than the replay time is drawn (a marker past the last visible candle would land on it).
-  const analysisNow = algoRun && algoRun.underlying === symbol ? algoRun.state.analysis ?? null : null;
-  const algoAnalysis = analysisNow && (replay.cursor == null || analysisNow.asOf <= replay.cursor + 60) ? analysisNow : null;
+  // In replay: the run's analysis. Outside replay: the live-price paper Algo's analysis for this symbol.
+  const liveAnalysis = useLiveAlgoAnalysis({ enabled: !replay.active && !optionView && !live && canPaperTrade, symbol });
+  const analysisNow = replay.active ? (algoRun && algoRun.underlying === symbol ? algoRun.state.analysis ?? null : null) : liveAnalysis;
+  const algoAnalysis = analysisNow && (!replay.active || replay.cursor == null || analysisNow.asOf <= replay.cursor + 60) ? analysisNow : null;
   const algoDrawings = useMemo(() => algoAnalysisDrawings(algoAnalysis, { trendline: desk.appearance.tokens.info, neckline: desk.appearance.tokens.warning }), [algoAnalysis, desk.appearance.tokens]);
   const algoMarkers = useMemo<ChartMarker[]>(() => [
-    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted).filter((marker) => replay.cursor == null || marker.time < replay.cursor),
+    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
     ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
-  ], [algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.cursor]);
+  ], [algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor]);
   // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).
   const [markerTip, setMarkerTip] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   // The trade shown in the detail view, and a strategy line highlighted from it.
@@ -991,6 +994,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     setSummaryRequested(false);
     if (completionKey) setSummaryShownFor(completionKey);
   }, [completionKey]);
+
+  /**
+   * Retrade: the finished session stays archived; the same replay date starts again from the open as a
+   * brand-new session (new id, fresh ₹1,00,000, 0 entries), after the usual confirmation.
+   */
+  function retrade() {
+    setAlgoDone(null);
+    setOpenTrade(null);
+    setSelectedTrade(null);
+    setLineFocus(null);
+    algo.startNew();
+    returnToStart();
+    setAlgoDialog(true);
+  }
 
   /** Moves the replay to another date (the paper book asks first when it has trades). */
   function changeReplayDate(date: string) {
@@ -1502,7 +1519,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               />
             ) : null}
           </div>
-        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onOpenTrade={showTrade} /> : null}
+        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onOpenTrade={showTrade} onRetrade={retrade} /> : null}
         </div>
       {replay.active ? (
         <ReplayBar
@@ -1719,15 +1736,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           run={algoDone}
           onClose={() => setAlgoDone(null)}
           onHistory={() => { setAlgoDone(null); setHistoryTab("sessions"); setAlgoHistory(true); }}
-          onNewReplay={() => {
-            setAlgoDone(null);
-            setOpenTrade(null);
-            setSelectedTrade(null);
-            setLineFocus(null);
-            algo.startNew();
-            returnToStart();
-            setAlgoDialog(true);
-          }}
+          onNewReplay={retrade}
         />
       ) : null}
       {algoHistory && algo.data ? <AlgoHistory data={algo.data} initial={historyTab} onClose={() => { setAlgoHistory(false); setHistoryTab("chart"); }} /> : null}
