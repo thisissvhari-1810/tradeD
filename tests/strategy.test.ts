@@ -72,13 +72,13 @@ describe("strategy drawings and styles", () => {
     expect(view.drawings.every((drawing) => drawing.locked)).toBe(true);
   });
 
-  it("uses the dark default colours and 2px lines", () => {
+  it("uses the dark default colours and 1px lines", () => {
     const [closeBox, openBox, high, low] = view.drawings;
-    expect([closeBox.color, closeBox.fill, closeBox.fillOpacity, closeBox.width]).toEqual(["#7E22CE", "#A855F7", 0, 2]);
+    expect([closeBox.color, closeBox.fill, closeBox.fillOpacity, closeBox.width]).toEqual(["#7E22CE", "#A855F7", 0, 1]);
     expect([openBox.color, openBox.fill, openBox.fillOpacity]).toEqual(["#C2410C", "#F97316", 0]);
-    expect(closeBox.center).toEqual({ color: "#7E22CE", width: 2, dash: "dashed", visible: true });
-    expect([high.color, high.width, high.dash, high.kind]).toEqual(["#15803D", 2, "solid", "hray"]);
-    expect([low.color, low.width, low.dash]).toEqual(["#15803D", 2, "solid"]);
+    expect(closeBox.center).toEqual({ color: "#7E22CE", width: 1, dash: "dashed", visible: true });
+    expect([high.color, high.width, high.dash, high.kind]).toEqual(["#15803D", 1, "solid", "hray"]);
+    expect([low.color, low.width, low.dash]).toEqual(["#15803D", 1, "solid"]);
     expect(high.text).toBe("9:15 High 23,640.00");
     expect(high.points[0].time).toBe(OPEN_0915);
   });
@@ -109,12 +109,12 @@ describe("strategy drawings and styles", () => {
 
 describe("strategy settings persistence", () => {
   it("fills missing or invalid values from the defaults and clamps opacity to 50%", () => {
-    const parsed = parseStrategySettings(JSON.stringify({ version: 3, enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
+    const parsed = parseStrategySettings(JSON.stringify({ version: 4, enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
     expect(parsed.enabled).toBe(true);
     expect(parsed.closeBox.border).toBe("#7E22CE");
     expect(parsed.closeBox.opacity).toBe(0.5);
-    expect(parsed.closeBox.width).toBe(2);
-    expect(parsed.high).toMatchObject({ color: "#000000", extend: "session", width: 2 });
+    expect(parsed.closeBox.width).toBe(1);
+    expect(parsed.high).toMatchObject({ color: "#000000", extend: "session", width: 1 });
   });
 
   it("draws both boxes with a fully transparent fill by default, keeping borders, midlines and labels", () => {
@@ -141,6 +141,12 @@ describe("strategy settings persistence", () => {
     expect(parseStrategySettings(JSON.stringify({ version: 2, low: { color: "#DC2626" } })).low.color).toBe("#15803D");
     expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C" } })).low.color).toBe("#15803D");
     expect(parseStrategySettings(JSON.stringify({ version: 3, low: { color: "#2563EB" } })).low.color).toBe("#2563EB");
+  });
+
+  it("draws every border and line at 1px, resetting older saved widths once", () => {
+    const old = parseStrategySettings(JSON.stringify({ version: 3, closeBox: { width: 2, mid: { width: 2 } }, openBox: { width: 3 }, high: { width: 2 }, low: { width: 4 } }));
+    expect([old.closeBox.width, old.closeBox.mid.width, old.openBox.width, old.openBox.mid.width, old.high.width, old.low.width]).toEqual([1, 1, 1, 1, 1, 1]);
+    expect(parseStrategySettings(JSON.stringify({ version: 4, high: { width: 3 } })).high.width).toBe(3);
   });
 
   it("carries over the old S1 on / off", () => {
@@ -336,7 +342,7 @@ describe("latest session before the open; matching 9:15 colours", () => {
   it("the low line defaults to the high line's solid green, and the old saved red is upgraded", () => {
     expect(STRATEGY_DEFAULTS.low.color).toBe(STRATEGY_DEFAULTS.high.color);
     expect(STRATEGY_DEFAULTS.low.dash).toBe("solid");
-    expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C", width: 3 } })).low).toMatchObject({ color: "#15803D", width: 3 });
+    expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C", width: 3 } })).low).toMatchObject({ color: "#15803D", width: 1 });
     expect(parseStrategySettings(JSON.stringify({ version: 3, low: { color: "#123456" } })).low.color).toBe("#123456");
   });
 });
