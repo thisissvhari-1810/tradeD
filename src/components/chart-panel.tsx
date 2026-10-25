@@ -12,7 +12,9 @@ import {
   LineSeries,
   LineStyle,
   TickMarkType,
+  createSeriesMarkers,
   type IChartApi,
+  type ISeriesMarkersPluginApi,
   type IPriceLine,
   type ISeriesApi,
   type MouseEventParams,
@@ -31,6 +33,8 @@ import type { CursorStyle, Drawing, DrawTool, MagnetMode } from "@/components/dr
 export type { Drawing, DrawTool } from "@/components/drawing-model";
 export type Candle = { time: number; open: number; high: number; low: number; close: number; volume: number };
 export type ChartReference = { price: number; title: string; color: string; style?: "dashed" | "dotted" };
+/** A trade event on the chart (e.g. an algo entry or exit). Drawn on the displayed bar containing `time`. */
+export type ChartMarker = { id: string; time: number; position: "aboveBar" | "belowBar"; shape: "arrowUp" | "arrowDown" | "circle" | "square"; color: string; text: string };
 export type ChartType = "candle" | "bar" | "line" | "area";
 
 export type ChartHandle = { fit: () => void; reset: () => void; png: (name: string) => void; range: (bars: number | null) => void; zoom: (direction: -1 | 1) => void };
@@ -94,6 +98,7 @@ export function ChartPanel({
   follow = false,
   focusToken = 0,
   references = [],
+  markers = [],
   paint,
   stay = false,
   overlays,
@@ -136,6 +141,7 @@ export function ChartPanel({
   follow?: boolean;
   focusToken?: number;
   references?: ChartReference[];
+  markers?: ChartMarker[];
   paint?: ChartPaint;
   /** The chart sits in a scrolling page (Positions on phones): vertical swipes scroll the page, not the chart. */
   pageScroll?: boolean;
@@ -151,6 +157,7 @@ export function ChartPanel({
   const volumeRef = useRef<ISeriesApi<SeriesType> | null>(null);
   const overlaySeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
   const referenceLines = useRef<IPriceLine[]>([]);
+  const markerApi = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const oscSeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
   const viewRef = useLatest({ showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators });
   const candlesRef = useLatest(candles);
@@ -265,6 +272,7 @@ export function ChartPanel({
       chartRef.current = null;
       oscChartRef.current = null;
       seriesRef.current = null;
+      markerApi.current = null;
       volumeRef.current = null;
     };
   }, [streamKey, loaded, chartType, compareKey, handleRef, oscillator, showBands, showEma, showSma, showVwap, showSupertrend, indicators, candlesRef, compareRef, paintRef, schemeRef]);
@@ -412,6 +420,33 @@ export function ChartPanel({
     }
     return drop;
   }, [referenceKey, chartEpoch, references]);
+
+  // Trade markers follow the bars: each sits on the displayed bar that contains its time (any timeframe),
+  // and one id is drawn once however often the same event arrives.
+  const markerKey = markers.map((item) => `${item.id}:${item.time}:${item.text}:${item.color}`).join("|");
+  const barCount = candles.length;
+  const firstBar = candles[0]?.time ?? 0;
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    const bars = candlesRef.current;
+    const seen = new Set<string>();
+    const placed = [];
+    for (const item of markers) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      let bar: number | null = null;
+      for (let low = 0, high = bars.length - 1; low <= high;) {
+        const mid = (low + high) >> 1;
+        if (bars[mid].time <= item.time) { bar = bars[mid].time; low = mid + 1; } else high = mid - 1;
+      }
+      if (bar == null) continue;
+      placed.push({ time: bar as UTCTimestamp, position: item.position, shape: item.shape, color: item.color, text: item.text, size: 1 });
+    }
+    placed.sort((a, b) => a.time - b.time);
+    if (!markerApi.current) markerApi.current = createSeriesMarkers(series, placed);
+    else markerApi.current.setMarkers(placed);
+  }, [markerKey, chartEpoch, barCount, firstBar, markers, candlesRef]);
 
   useEffect(() => {
     const visible = cursorStyle === "cross";

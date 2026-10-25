@@ -5,7 +5,7 @@ import { mayPractice } from "@/lib/auth/permissions";
 import { kolkataParts } from "@/lib/market/clock";
 import { optionCharges } from "@/lib/options/engine";
 import { algoConfigProblems, readAlgoConfig } from "@/lib/algo/config";
-import { strategyLines, type Candle } from "@/lib/algo/lines";
+import { strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { atmStrike, type ChainInput, type Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { advance, initialState, startExit, ALGO_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
@@ -13,7 +13,12 @@ import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getS1Data, sessionMinuteTape } from "@/server/market";
 import { loadOptionChain } from "@/server/option-chain";
-import { sessionTape, type ReplayContract } from "@/server/option-replay";
+import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/option-replay";
+import { ensurePracticeAccount, walletKey } from "@/server/practice-account";
+import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
+import { findIndex } from "@/lib/market/indices";
+import { runStats } from "@/lib/algo/chart-replay";
+import { exitChartRun, stepChartRun } from "@/server/algo-replay";
 import { paperCapitalPaise } from "@/server/options-paper";
 
 /**
@@ -275,7 +280,7 @@ function stateOf(row: { state: Prisma.JsonValue }): AlgoState {
 }
 
 /** Everything the Algo panel shows, for the signed-in user. */
-export async function algoView(user: SessionUser) {
+export async function algoView(user: SessionUser, chartSession: string | null = null) {
   assertAllowed(user);
   const session = await loadSession(user.id);
   const config = readAlgoConfig(session.config);
@@ -310,6 +315,7 @@ export async function algoView(user: SessionUser) {
     events: events.map((event) => event.payload as unknown as AlgoEvent),
     replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
     paper: { cash: account ? rupees(account.cashPaise) : rupees(paperCapitalPaise()) },
+    ...(await chartView(user, session.id, chartSession)),
     monitoring: "The algo checks completed candles and its open position each time TradeD runs a check: while this page is open (every 15 seconds), or from the server scheduler when one is configured. Stop-loss and target are watched by TradeD, not held at a broker, so they are not guaranteed protection; exits fill at the quote available when checked.",
   };
 }
@@ -325,12 +331,25 @@ export type AlgoCommand =
   | { action: "emergency" }
   | { action: "acknowledge" }
   | { action: "tick" }
-  | { action: "replay"; date: string };
+  | { action: "replay"; date: string }
+  | ChartCommand;
+
+/** The Algo inside the chart's replay (see chartCommand). */
+export type ChartCommand =
+  | { action: "chartArm"; session: string; cursor: number }
+  | { action: "chartStep"; session: string; cursor: number }
+  | { action: "chartExit"; session: string; cursor: number; emergency?: boolean }
+  | { action: "chartDisarm"; session: string }
+  | { action: "chartReset"; session: string };
 
 export async function algoCommand(user: SessionUser, command: AlgoCommand) {
   assertAllowed(user);
   const session = await loadSession(user.id);
   if (command.action === "replay") return withLease(session.id, () => runReplay(user, session.id, command.date)).then(() => algoView(user));
+  if ("session" in command) {
+    await withLease(session.id, () => chartCommand(user, session.id, readAlgoConfig(session.config), command));
+    return algoView(user, command.session);
+  }
   await withLease(session.id, async () => {
     const config = readAlgoConfig(session.config);
     const state = stateOf(session);
@@ -471,4 +490,220 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
   }
   await prisma.algoEvent.deleteMany({ where: { sessionId, mode: "REPLAY", NOT: { runId: { in: (await prisma.algoEvent.findMany({ where: { sessionId, mode: "REPLAY" }, distinct: ["runId"], orderBy: { createdAt: "desc" }, take: 2, select: { runId: true } })).map((row) => row.runId) } } } });
   await prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode: "REPLAY", runId, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true });
+}
+
+/* ---------------- the algo inside the chart's replay ---------------- */
+
+const dayTapes = new Map<string, { at: number; candles: Candle[] }>();
+const runChains = new Map<string, { at: number; chain: Awaited<ReturnType<typeof loadOptionChain>> }>();
+
+/** The underlying's 1-minute session (a past day never changes, so it is kept for a while). */
+async function dayTape(underlying: string, date: string) {
+  const key = `${underlying}|${date}`;
+  const hit = dayTapes.get(key);
+  if (hit && Date.now() - hit.at < 30 * 60_000) return hit.candles;
+  const candles = await sessionMinuteTape(underlying, date);
+  if (dayTapes.size > 50) dayTapes.delete(dayTapes.keys().next().value as string);
+  dayTapes.set(key, { at: Date.now(), candles });
+  return candles;
+}
+
+/** The contract list used to find the ATM strike (strikes, identifiers and lot size only; never its prices). */
+async function runChain(config: AlgoConfig, date: string) {
+  const key = `${config.underlying}|${config.expiry}`;
+  const hit = runChains.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60_000) return hit.chain;
+  const chain = await loadOptionChain(config.underlying, config.expiry === "nearest" ? null : config.expiry);
+  if (!chain.available || !chain.expiry) throw new AppError(`No option contract list for ${config.underlying}: ${chain.message}`, 409, "NO_OPTION_CHAIN");
+  if (chain.expiry < date) throw new AppError(`The expiry ${chain.expiry} is before ${date}; expired contracts cannot be replayed with this data connection.`, 409, "EXPIRY_BEFORE_REPLAY");
+  runChains.set(key, { at: Date.now(), chain });
+  return chain;
+}
+
+function chartBounds(session: string, cursor: number | null) {
+  const date = replaySessionDate(session);
+  const bounds = date ? sessionBounds(date) : null;
+  if (!date || !bounds) throw new AppError("This replay session is not recognised. Restart the replay.", 400, "INVALID_SESSION");
+  if (cursor != null) checkReplayClock(session, cursor);
+  return { date, ...bounds };
+}
+
+async function demoCash(userId: string) {
+  const account = await ensurePracticeAccount(userId, "DEMO");
+  return account.cashAvailable;
+}
+
+async function saveChartRun(run: { id: string; sessionId: string }, data: Prisma.AlgoRunUpdateInput, events: AlgoEvent[]) {
+  await prisma.$transaction([
+    prisma.algoRun.update({ where: { id: run.id }, data }),
+    ...(events.length ? [prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId: run.sessionId, mode: "CHART", runId: run.id, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true })] : []),
+  ]);
+}
+
+function runStateOf(run: { state: Prisma.JsonValue; date: string }): AlgoState {
+  return { ...initialState(run.date), ...((run.state && typeof run.state === "object" ? run.state : {}) as Partial<AlgoState>) };
+}
+
+const istTime = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16);
+
+/**
+ * Chart replay commands. Arm needs the user's explicit confirmation in the chart ("Start Algo & Replay");
+ * each step processes the minutes the replay has completed since the last step; exits fill at the last
+ * completed premium. A run never moves backwards: a replay moved before its processed minute must start a
+ * new replay session (the chart's reset), which starts a new run.
+ */
+async function chartCommand(user: SessionUser, sessionId: string, config: AlgoConfig, command: ChartCommand) {
+  const existing = await prisma.algoRun.findUnique({ where: { sessionId_replaySession: { sessionId, replaySession: command.session } } });
+  const now = Math.floor(Date.now() / 1000);
+  const note = (key: string, time: number, message: string, kind: AlgoEvent["kind"] = "INFO"): AlgoEvent => ({ key: `${key}:${now}`, time, kind, message });
+
+  if (command.action === "chartArm") {
+    const { date, open, close } = chartBounds(command.session, command.cursor);
+    if (config.mode !== "REPLAY") throw new AppError("Switch the Algo's execution mode to Chart replay first.", 409, "WRONG_MODE");
+    const problems = algoConfigProblems(config);
+    if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+    if (existing?.status === "ENDED") throw new AppError(existing.endReason === "SESSION_END" ? "This replay session has finished. Reset the replay to start a new algo session." : "This algo session has ended. Reset the replay to start a new one.", 409, "RUN_ENDED");
+    const minute = Math.floor(command.cursor / 60) * 60;
+    if (existing && minute < existing.processedThrough) throw new AppError(`The replay is before ${istTime(existing.processedThrough)}, the last minute the algo processed. Move it forward to resume, or reset the replay to start a new isolated session.`, 409, "REPLAY_BEHIND");
+    if (minute >= close) throw new AppError("The replay is at the session close. Choose an earlier time or another date.", 409, "SESSION_CLOSED");
+    if (existing) {
+      const state = runStateOf(existing);
+      Object.assign(state, { running: true, entries: true });
+      state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : "MONITORING";
+      await saveChartRun(existing, { armed: true, state: state as unknown as Prisma.InputJsonValue }, [note("resume", Math.max(minute, existing.processedThrough), `Algo confirmed: resuming with the replay at ${istTime(Math.max(minute, existing.processedThrough))} IST.`)]);
+      return;
+    }
+    const data = await getS1Data(config.underlying, date);
+    if (!data.previous) throw new AppError(data.message || `No strategy levels for ${config.underlying} on ${date}.`, 409, "NO_LEVELS");
+    const candles = await dayTape(config.underlying, date);
+    if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date}.`, 409, "NO_CANDLES");
+    const chain = await runChain(config, date);
+    const cash = await demoCash(user.id);
+    const lines = strategyLines(data, config.custom);
+    // Starting mid-session never trades history: evaluation starts with the first minute after the cursor.
+    const processedThrough = Math.max(open, minute);
+    const state: AlgoState = { ...initialState(date), running: true, entries: true, lastCandle: processedThrough > open ? processedThrough - 60 : null, status: "MONITORING" };
+    const run = await prisma.algoRun.create({
+      data: {
+        sessionId, replaySession: command.session, date, underlying: config.underlying, config: config as unknown as Prisma.InputJsonValue, lines: lines as unknown as Prisma.InputJsonValue,
+        state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, startCashPaise: cash,
+      },
+    });
+    await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `Algo replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Demo wallet; no broker orders.` }]);
+    return;
+  }
+
+  if (!existing) {
+    if (command.action === "chartStep" || command.action === "chartDisarm" || command.action === "chartReset") return;
+    throw new AppError("There is no algo session for this replay.", 409, "NO_RUN");
+  }
+  const runConfig = readAlgoConfig(existing.config);
+  const { date, open, close } = chartBounds(command.session, "cursor" in command ? command.cursor : null);
+  const state = runStateOf(existing);
+  const context = async () => ({
+    user, runId: existing.id, session: command.session, date, config: runConfig, lines: (existing.lines as unknown as AlgoLine[]) ?? [],
+    candles: await dayTape(existing.underlying, date), chain: await runChain(runConfig, date), sessionOpen: open, sessionClose: close,
+  });
+
+  if (command.action === "chartDisarm") {
+    if (!existing.armed) return;
+    Object.assign(state, { running: false, entries: false });
+    state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : "DISABLED";
+    await saveChartRun(existing, { armed: false, state: state as unknown as Prisma.InputJsonValue }, [note("disarm", existing.processedThrough, state.position ? "Algo disabled: no new entries. The open position stays on the demo ledger; its stop-loss and target are still checked while the replay runs." : "Algo disabled: no new entries.")]);
+    return;
+  }
+
+  if (command.action === "chartReset") {
+    if (state.position || state.pending) throw new AppError("Exit the open algo position before resetting the replay session.", 409, "POSITION_OPEN");
+    if (existing.status === "ENDED") return;
+    await saveChartRun(existing, { status: "ENDED", armed: false, endedAt: new Date(), endReason: "RESET", endCashPaise: await demoCash(user.id), state: { ...state, running: false, entries: false, status: "COMPLETED" } as unknown as Prisma.InputJsonValue }, [note("reset", existing.processedThrough, "Replay session reset. A new session starts a new algo run; this run's trades stay in history.")]);
+    return;
+  }
+
+  const minute = Math.floor(command.cursor / 60) * 60;
+  if (command.action === "chartStep") {
+    if (existing.status === "ENDED") return;
+    // Protection continues while entries are off; a run that is off with nothing open does nothing.
+    if (!existing.armed && !state.position && !state.pending) return;
+    if (minute <= existing.processedThrough) return;
+    const ran = await stepChartRun({ ...(await context()), state, processedThrough: existing.processedThrough, cursor: command.cursor });
+    if (ran.ended) ran.state.status = ran.state.recovery ? "RECOVERY_REQUIRED" : ran.state.position ? "EXIT_PENDING" : "COMPLETED";
+    await saveChartRun(existing, {
+      state: ran.state as unknown as Prisma.InputJsonValue, processedThrough: ran.processedThrough,
+      ...(ran.ended ? { status: ran.state.position ? "ACTIVE" : "ENDED", armed: false, endedAt: ran.state.position ? null : new Date(), endReason: "SESSION_END", endCashPaise: await demoCash(user.id) } : {}),
+    }, [...ran.events, ...(ran.ended ? [{ key: "session-end", time: close, kind: "INFO" as const, message: ran.state.position ? "Replay reached the session close but the square-off is not confirmed: the position is still open on the demo ledger." : "Replay reached the session close: the algo session ended." }] : [])]);
+    return;
+  }
+
+  // chartExit: first process the minutes up to the replay time (a stop already reached is honoured).
+  if (minute < existing.processedThrough) throw new AppError(`The replay is before ${istTime(existing.processedThrough)}, the last minute the algo processed. Move it forward to exit at a current price.`, 409, "REPLAY_BEHIND");
+  let current = state;
+  let through = existing.processedThrough;
+  const events: AlgoEvent[] = [];
+  const ctx = await context();
+  if (minute > through) {
+    const ran = await stepChartRun({ ...ctx, state: current, processedThrough: through, cursor: command.cursor });
+    current = ran.state;
+    through = ran.processedThrough;
+    events.push(...ran.events);
+  }
+  if (current.position && !current.position.exit) {
+    const exited = await exitChartRun({ ...ctx, state: current, at: Math.min(through, close), reason: command.emergency ? "EMERGENCY" : "MANUAL" });
+    current = exited.state;
+    events.push(...exited.events);
+  } else if (!command.emergency) {
+    events.push(note("exit-none", through, "No open position to exit (it may have just closed at its stop-loss or target)."));
+  }
+  if (command.emergency) {
+    Object.assign(current, { running: false, entries: false });
+    events.push(note("emergency", through, "Emergency stop: new entries blocked and the open position exited.", "ERROR"));
+  }
+  current.status = current.recovery ? "RECOVERY_REQUIRED" : current.position?.exit ? "EXIT_PENDING" : current.position ? "POSITION_OPEN" : current.running ? (current.entries ? "MONITORING" : "READY") : "DISABLED";
+  await saveChartRun(existing, { state: current as unknown as Prisma.InputJsonValue, processedThrough: through, ...(command.emergency ? { armed: false } : {}) }, events);
+}
+
+/** The run for the chart's replay session, the run history, and the demo wallet. */
+async function chartView(user: SessionUser, sessionId: string, chartSession: string | null) {
+  const runs = await prisma.algoRun.findMany({ where: { sessionId }, orderBy: { startedAt: "desc" }, take: 20 });
+  const current = chartSession ? runs.find((run) => run.replaySession === chartSession) ?? await prisma.algoRun.findUnique({ where: { sessionId_replaySession: { sessionId, replaySession: chartSession } } }) : null;
+  const ids = [...new Set([...runs.map((run) => run.id), ...(current ? [current.id] : [])])];
+  const rows = ids.length ? await prisma.algoEvent.findMany({ where: { sessionId, mode: "CHART", runId: { in: ids } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 4000 }) : [];
+  const eventsOf = (runId: string) => rows.filter((row) => row.runId === runId).map((row) => row.payload as unknown as AlgoEvent);
+  const wallet = await prisma.virtualAccount.findUnique({ where: walletKey(user.id, "DEMO"), include: { currentPeriod: true } });
+  let run = null;
+  if (current) {
+    const state = runStateOf(current);
+    let position = null;
+    if (state.position) {
+      const contract = state.position.contract;
+      const at = current.processedThrough;
+      const tape = await sessionTape({ underlying: contract.underlying, name: contract.underlying, expiry: contract.expiry, strike: contract.strike, right: contract.right, securityId: contract.securityId, kind: findIndex(contract.underlying) ? "index" : "equity", lotSize: contract.lotSize }, current.date, new Date()).catch(() => []);
+      const candle = tape.filter((item) => item.time + 60 <= at).at(-1) ?? null;
+      const premium = candle?.close ?? null;
+      const invested = state.position.avg * state.position.quantity;
+      const value = premium == null ? null : premium * state.position.quantity;
+      const unrealized = value == null ? null : Math.round((value - invested - state.position.entryCharges) * 100) / 100;
+      position = {
+        ...state.position, premium, premiumAt: candle ? candle.time + 60 : null, invested: Math.round(invested * 100) / 100, value: value == null ? null : Math.round(value * 100) / 100,
+        unrealized, unrealizedPercent: unrealized == null || !invested ? null : Math.round((unrealized / invested) * 10_000) / 100,
+      };
+    }
+    const events = eventsOf(current.id);
+    run = {
+      id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, armed: current.armed, status: current.status, endReason: current.endReason,
+      processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: events.slice(-400), stats: runStats(events), config: readAlgoConfig(current.config),
+    };
+  }
+  return {
+    chart: run,
+    runs: runs.map((item) => {
+      const events = eventsOf(item.id);
+      return {
+        id: item.id, replaySession: item.replaySession, date: item.date, underlying: item.underlying, status: item.status, endReason: item.endReason, startedAt: item.startedAt.toISOString(), endedAt: item.endedAt?.toISOString() ?? null,
+        startCash: rupees(item.startCashPaise), endCash: item.endCashPaise == null ? null : rupees(item.endCashPaise), config: readAlgoConfig(item.config), stats: runStats(events),
+        trades: events.filter((event) => event.kind === "ENTRY" || event.kind === "EXIT"),
+      };
+    }),
+    wallet: wallet ? { cash: rupees(wallet.cashAvailable), reserved: rupees(wallet.cashReserved), startingCapital: wallet.currentPeriod ? rupees(wallet.currentPeriod.startingCapital) : null } : null,
+  };
 }

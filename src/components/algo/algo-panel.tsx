@@ -93,7 +93,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <span className={cx("shrink-0 whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", status.tone)} role="status">{status.label}</span>
-        <span className="min-w-0 truncate text-micro text-muted">{data.config.underlying} · 1m · {data.config.mode === "PAPER" ? "Paper" : data.config.mode === "REPLAY" ? "Replay" : "Live"}</span>
+        <span className="min-w-0 truncate text-micro text-muted">{data.config.underlying} · 1m · {data.config.mode === "PAPER" ? "Paper" : data.config.mode === "REPLAY" ? "Chart replay" : "Live"}</span>
         <button type="button" className="ml-auto inline-flex h-7 items-center gap-1 rounded-md px-2 text-muted hover:bg-hover hover:text-text" onClick={() => setHistoryOpen(true)}><History className="h-3.5 w-3.5" aria-hidden />Log</button>
       </div>
       {error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{error}</p> : null}
@@ -111,7 +111,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <span className="text-muted">Execution mode</span>
           <select className="compact-field w-[9.5rem]" aria-label="Execution mode" value={draft.mode} disabled={state.running} onChange={(event) => set({ mode: event.target.value as AlgoConfig["mode"] })}>
             <option value="PAPER">Paper trading</option>
-            <option value="REPLAY">Historical replay</option>
+            <option value="REPLAY">Chart replay (demo wallet)</option>
             <option value="LIVE" disabled>Live trading (unavailable)</option>
           </select>
         </div>
@@ -247,10 +247,12 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       {/* Historical replay */}
       {draft.mode === "REPLAY" ? (
         <div className="space-y-1.5 rounded-md border border-border-soft bg-sunken/50 p-2">
-          <p className="text-micro leading-snug text-muted">Replays a past session with the saved settings: the underlying&apos;s real 1-minute candles and each option&apos;s real 1-minute premiums. A virtual account is used; nothing is written to your paper account and no order is sent anywhere.</p>
+          <p className="text-micro leading-snug text-text-2">To trade a replay: open Replay on the chart, turn on <strong>Enable Algo</strong> in the Algo panel beside the chart and press Play. Each Play asks you to confirm. Orders use the ₹1,00,000 demo wallet, so they appear in Portfolio and Home.</p>
+          <p className="eyebrow pt-1">Quick backtest</p>
+          <p className="text-micro leading-snug text-muted">Runs a whole past session at once with the saved settings: the underlying&apos;s real 1-minute candles and each option&apos;s real 1-minute premiums. A separate virtual account is used; nothing is written to the demo wallet and no order is sent anywhere.</p>
           <div className="flex items-center gap-1.5">
             <input type="date" className="compact-field flex-1" aria-label="Replay date" value={replayDate} max={yesterday} onChange={(event) => setReplayDate(event.target.value)} />
-            <button type="button" className="h-8 rounded-md bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={!replayDate || Boolean(busy) || dirty} onClick={() => void run("replay", { action: "replay", date: replayDate })}>{busy === "replay" ? "Replaying…" : "Run replay"}</button>
+            <button type="button" className="h-8 rounded-md bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={!replayDate || Boolean(busy) || dirty} onClick={() => void run("replay", { action: "replay", date: replayDate })}>{busy === "replay" ? "Running…" : "Run backtest"}</button>
           </div>
           {data.replay ? <ReplaySummary events={data.replay.events} onOpen={() => setHistoryOpen(true)} /> : null}
         </div>
@@ -274,7 +276,7 @@ function ReplaySummary({ events, onOpen }: { events: AlgoData["events"]; onOpen:
         <Info label="Trades" text={String(entries.length)} />
         <Info label="Net P&L" text={inr(Math.round(pnl * 100) / 100)} tone={pnl >= 0 ? "text-profit" : "text-loss"} />
       </dl>
-      <button type="button" className="mt-1 text-micro font-semibold" style={{ color: "var(--primary)" }} onClick={onOpen}>Open the replay log</button>
+      <button type="button" className="mt-1 text-micro font-semibold" style={{ color: "var(--primary)" }} onClick={onOpen}>Open the backtest log</button>
     </div>
   );
 }

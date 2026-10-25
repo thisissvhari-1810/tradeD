@@ -13,7 +13,8 @@ import { findIndex } from "@/lib/market/indices";
 import { optionLedgerSymbol, premiumValuePaise } from "@/lib/options/contract";
 import { loadOptionChain } from "@/server/option-chain";
 import { REPLAY_POLICY, replayLedgerSymbol } from "@/lib/options/replay-premium";
-import { checkReplayClock, HISTORICAL_UNAVAILABLE, replayQuote } from "@/server/option-replay";
+import { checkReplayClock, HISTORICAL_UNAVAILABLE, replayQuote, sessionTape } from "@/server/option-replay";
+import { clampFill } from "@/lib/algo/chart-replay";
 import { getTradingSettings } from "@/server/settings";
 import { recordClosedPosition } from "@/server/closed-trades";
 import type { SessionUser } from "@/server/auth";
@@ -813,7 +814,11 @@ export async function placeOptionDemo(
  */
 export async function placeOptionReplay(
   user: SessionUser,
-  input: { symbol: string; expiry: string; strike: number; right: "CE" | "PE"; action: "BUY" | "SELL"; lots: number; session: string; cursor: number; idempotencyKey: string; referencePremium?: number },
+  input: {
+    symbol: string; expiry: string; strike: number; right: "CE" | "PE"; action: "BUY" | "SELL"; lots: number; session: string; cursor: number; idempotencyKey: string; referencePremium?: number;
+    /** Algo fills only: a stop / target level or the close plus slippage, kept inside the same candle's low–high range. */
+    fillPremium?: number;
+  },
   now = new Date(),
 ) {
   if (!mayPractice(user)) throw new AppError("This account cannot buy or sell practice options.", 403, "ROLE_NOT_ALLOWED");
@@ -847,7 +852,12 @@ export async function placeOptionReplay(
   if (input.referencePremium != null && input.referencePremium > 0 && premiumMoved(input.referencePremium, quote.premium)) {
     throw new AppError(`The replay premium is now ₹${quote.premium.toFixed(2)}, not ₹${input.referencePremium.toFixed(2)}. Review the new price and confirm again.`, 409, "PRICE_MOVED", { details: { latestPremium: quote.premium, candleTime: quote.candleTime } });
   }
-  const premium = rupeesToPaise(quote.premium.toFixed(2));
+  let filled = quote.premium;
+  if (input.fillPremium != null && Number.isFinite(input.fillPremium) && input.fillPremium > 0) {
+    const candle = (await sessionTape(contract, date, now)).find((item) => item.time === quote.candleTime);
+    if (candle) filled = clampFill(input.fillPremium, candle);
+  }
+  const premium = rupeesToPaise(filled.toFixed(2));
   const notional = premiumValuePaise(premium, input.lots, lotSize);
   if (notional == null) throw new AppError("The lot size for this contract is not usable.", 409, "NO_LOT_SIZE");
   const quantity = input.lots * lotSize;

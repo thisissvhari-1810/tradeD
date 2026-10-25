@@ -4,7 +4,7 @@ import { useHydrated } from "@/components/use-hydrated";
 import { mayPractice } from "@/lib/auth/permissions";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams } from "next/navigation";
-import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
+import { ChartPanel, DEFAULT_INDICATORS, type Candle, type ChartHandle, type ChartMarker, type ChartReference, type ChartType, type Drawing, type DrawTool, type IndicatorSettings } from "@/components/chart-panel";
 import { ChartHeaderTools } from "@/components/chart-header-tools";
 import { SymbolSearch } from "@/components/symbol-search";
 import { PremiumUpgradeDialog } from "@/components/premium/premium-upgrade-dialog";
@@ -17,6 +17,10 @@ import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
 import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
+import { useChartAlgo } from "@/components/algo/use-chart-algo";
+import { AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
+import { AlgoHistory } from "@/components/algo/algo-history";
+import { EXIT_LABEL } from "@/lib/algo/chart-replay";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
@@ -778,6 +782,78 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const sessionOpenCount = optionSession ? (practice ?? []).filter((row) => row.replaySession === optionSession).length : 0;
   const markMinute = replay.active && replay.cursor != null ? Math.floor(replay.cursor / 60) : null;
 
+  // The Strategy Algo inside replay: "Enable Algo" plus an explicit confirmation on every Play; while the
+  // replay plays, each completed minute is processed on the server and orders go to the demo ledger.
+  const [algoDialog, setAlgoDialog] = useState(false);
+  const [algoHistory, setAlgoHistory] = useState(false);
+  const algoAllowed = replay.active && !live && !optionView && canPaperTrade;
+  const algo = useChartAlgo({
+    user: bookUser,
+    active: algoAllowed,
+    session: optionSession,
+    cursor: replay.cursor,
+    advancing: replay.status === "playing" || replay.status === "completed",
+    onLedger: () => { refreshPractice.current(); setLedgerTick((value) => value + 1); },
+    onPause: () => setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current)),
+    notify,
+  });
+  const algoRun = algoAllowed ? algo.run : null;
+  const algoPosition = algoRun?.position ?? null;
+  const algoHolds = algoAllowed && algo.enabled;
+  const algoMarkers = useMemo<ChartMarker[]>(() => {
+    if (!algoRun || algoRun.underlying !== symbol) return [];
+    const { profit, loss } = desk.appearance.tokens;
+    const entries = new Map(algoRun.events.filter((event) => event.kind === "ENTRY" && event.order).map((event) => [event.order!.key, event]));
+    const list: ChartMarker[] = [];
+    for (const event of algoRun.events) {
+      if (event.kind === "ENTRY" && event.order?.price != null) {
+        // The entry fills when its signal candle closes (a reconciled entry carries its own time).
+        const time = event.key.startsWith("entry:") ? event.time + 60 : event.time;
+        const call = event.side === "CALL";
+        list.push({ id: event.key, time, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown", color: call ? profit : loss, text: `${call ? "CALL" : "PUT"} BUY ${event.contract?.strike ?? ""}${event.contract?.right ?? ""} @₹${event.order.price.toFixed(2)}` });
+      }
+      if (event.kind === "EXIT" && event.order && event.pnl != null) {
+        const entry = entries.get(event.order.key.replace(/:exit:\d+$/, ""));
+        const cost = entry?.order?.price != null && event.order.quantity ? entry.order.price * event.order.quantity : null;
+        const percent = cost ? ` (${event.pnl >= 0 ? "+" : ""}${((event.pnl / cost) * 100).toFixed(1)}%)` : "";
+        const reason = EXIT_LABEL[/^Exit \(([A-Z_]+)\)/.exec(event.message)?.[1] ?? ""] ?? "Exit";
+        list.push({ id: event.key, time: event.time, position: entry?.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: event.pnl >= 0 ? profit : loss, text: `EXIT ${reason} ${event.pnl >= 0 ? "+" : "−"}₹${Math.abs(event.pnl).toFixed(2)}${percent}` });
+      }
+    }
+    const cursor = replay.cursor;
+    return cursor == null ? list : list.filter((marker) => marker.time <= cursor);
+  }, [algoRun, symbol, desk.appearance.tokens, replay.cursor]);
+  const algoEntryLevel = useMemo<ChartReference | null>(() => {
+    if (!algoPosition || !algoRun || algoRun.underlying !== symbol) return null;
+    const signal = algoRun.events.find((event) => event.evaluation && event.evaluation.time === algoPosition.signalTime);
+    const price = signal?.evaluation?.candle.close;
+    if (price == null) return null;
+    return { price, title: `Algo ${algoPosition.side} entry`, color: algoPosition.side === "CALL" ? desk.appearance.tokens.profit : desk.appearance.tokens.loss, style: "dotted" };
+  }, [algoPosition, algoRun, symbol, desk.appearance.tokens]);
+
+  /** Play / resume: with the algo enabled, playback waits for "Start Algo & Replay". */
+  function toggleReplay() {
+    if (replay.status === "playing") {
+      setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current));
+      return;
+    }
+    if (replay.status !== "ready" && replay.status !== "paused") return;
+    if (algoAllowed && algo.gate && algo.gate.kind !== "free") {
+      setAlgoDialog(true);
+      return;
+    }
+    setReplay((current) => (current.status === "ready" || current.status === "paused" ? { ...current, status: "playing" } : current));
+  }
+
+  async function startAlgoReplay() {
+    const cursor = replay.cursor;
+    if (cursor == null || !replay.date) return;
+    const session = ensureOptionSession(replay.date);
+    if (!(await algo.arm(cursor, session))) return;
+    setAlgoDialog(false);
+    setReplay((current) => (current.status === "ready" || current.status === "paused" ? { ...current, status: "playing" } : current));
+  }
+
   useEffect(() => {
     const cursor = replayRef.current.cursor;
     if (!optionSession || markMinute == null || cursor == null || !practiseRef.current) return;
@@ -889,6 +965,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, [completionKey]);
 
   function leaveReplay() {
+    // Leaving replay turns the algo's entries off; an open algo position stays on the demo ledger for this
+    // replay session and is protected again when the session is reopened and played.
+    if (algo.run?.armed) void algo.disarm();
     setReplay((current) => ({ ...current, active: false, status: "idle" }));
   }
 
@@ -898,6 +977,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }
 
   function returnToStart() {
+    if (algo.run && algo.run.status === "ACTIVE" && !algo.run.state.position && !algo.run.state.pending) void algo.reset();
     settledThrough.current = replay.sessionOpen ?? 0;
     if (!sessionOpenCount && replay.date) ensureOptionSession(replay.date, true);
     setReplay((current) => ({ ...current, cursor: current.sessionOpen, status: "ready" }));
@@ -1256,8 +1336,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
         <div className={cx("flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden", variant === "positions" && "max-lg:flex-none")}>
       {replay.active && (replay.status === "ready" || replay.status === "playing" || replay.status === "paused" || replay.status === "completed") ? <PreviousSessionStrip session={prior?.date === replay.date ? prior.session : null} /> : null}
       {replay.active && held ? <p className="border-b border-border bg-panel px-3 py-1 text-[0.6875rem] text-muted">{held.quantity > 0 ? "Long" : "Short"} {Math.abs(held.quantity)} {symbol} · Avg ₹{formatDemoRupees(held.avgPaise)} · Unrealized <span className={paperPnl == null ? "text-muted" : paperPnl > 0 ? "text-profit" : paperPnl < 0 ? "text-loss" : "text-muted"}>{paperPnl == null ? "—" : `₹${formatDemoRupees(paperPnl)}`}</span> · Buying power ₹{formatDemoRupees(buyingPower(book, replayMark == null ? {} : { [symbol]: replayMark }))}</p> : null}
+      {algoPosition ? (
+        <p className="border-b border-border bg-panel px-3 py-1 text-[0.6875rem] text-muted" role="status">
+          <span className="font-semibold text-demo">ALGO</span> · {algoPosition.side} {algoPosition.contract.strike} {algoPosition.contract.right} × {algoPosition.quantity} · Entry ₹{algoPosition.avg.toFixed(2)} · Premium {algoPosition.premium == null ? "—" : `₹${algoPosition.premium.toFixed(2)}`} · P&amp;L <span className={algoPosition.unrealized == null ? "text-muted" : algoPosition.unrealized > 0 ? "text-profit" : algoPosition.unrealized < 0 ? "text-loss" : "text-muted"}>{algoPosition.unrealized == null ? "—" : `${algoPosition.unrealized >= 0 ? "+" : "−"}₹${Math.abs(algoPosition.unrealized).toFixed(2)}${algoPosition.unrealizedPercent == null ? "" : ` (${algoPosition.unrealizedPercent.toFixed(2)}%)`}`}</span> · SL ₹{algoPosition.stop.toFixed(2)} · Target ₹{algoPosition.target.toFixed(2)} <span className="text-muted">(option premium)</span>
+        </p>
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
-        <div ref={chartAreaRef} className={cx("relative flex min-h-0 flex-1 flex-col", variant === "positions" && "max-lg:h-[42dvh] max-lg:flex-none")}>
+        <div className="flex min-h-0 flex-1 max-lg:flex-col">
+        <div ref={chartAreaRef} className={cx("relative flex min-h-0 min-w-0 flex-1 flex-col", variant === "positions" && "max-lg:h-[42dvh] max-lg:flex-none")}>
             {!replay.active && loading ? <p className="p-4 text-sm text-muted">Loading chart…</p> : null}
             {replay.active && replay.status === "loading" ? <p className="p-4 text-sm text-info">Loading the selected session…</p> : null}
             {(!replay.active || optionView) && chartError ? (
@@ -1299,7 +1385,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 scheme={desk.theme}
                 paint={desk.appearance.chart}
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
-                references={sessionLevels}
+                references={algoEntryLevel ? [...sessionLevels, algoEntryLevel] : sessionLevels}
+                markers={algoMarkers}
                 pageScroll={variant === "positions" && phoneLayout}
               />
             ) : null}
@@ -1345,6 +1432,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               />
             ) : null}
           </div>
+        {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} /> : null}
+        </div>
       {replay.active ? (
         <ReplayBar
           date={replay.date}
@@ -1358,6 +1447,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           message={replay.status === "loading" ? "Loading the session…" : replay.message}
           onDate={(date) => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date === replay.date) return;
+            // A new date is a new replay session: the current algo run stops taking entries.
+            if (algo.run?.armed) void algo.disarm();
             const dirty = sessionOpenCount > 0 || book.positions.length > 0 || book.fills.length > 0 || book.trades.length > 0 || book.orders.some((order) => order.status === "OPEN");
             if (dirty) {
               setPendingDate(date);
@@ -1365,23 +1456,20 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             }
             setReplay((current) => ({ ...current, date, status: "loading", cursor: null }));
           }}
-          onToggle={() => setReplay((current) => {
-            if (current.status === "playing") return { ...current, status: "paused" };
-            if (current.status === "ready" || current.status === "paused") return { ...current, status: "playing" };
-            return current;
-          })}
+          onToggle={toggleReplay}
           onStep={(direction) => setReplay((current) => {
             if (current.cursor == null || current.sessionOpen == null || current.sessionClose == null) return current;
             const cursor = stepCursor(current.cursor, current.sessionOpen, current.sessionClose, direction);
             setBook((bookNow) => settleReplayBook(bookNow, cursor, current.date));
-            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" ? "playing" : "paused" };
+            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" && !algoHolds ? "playing" : "paused" };
           })}
           onSeek={(next) => setReplay((current) => {
             if (current.sessionOpen == null || current.sessionClose == null || !Number.isFinite(next)) return current;
             const cursor = Math.min(current.sessionClose, Math.max(current.sessionOpen, next));
             if (cursor < settledThrough.current) settledThrough.current = cursor;
             setBook((bookNow) => settleReplayBook(bookNow, cursor, current.date));
-            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" ? "playing" : "paused" };
+            // With the algo on, moving the replay pauses it: resuming needs a fresh confirmation.
+            return { ...current, cursor, status: cursor >= current.sessionClose ? "completed" : current.status === "playing" && !algoHolds ? "playing" : "paused" };
           })}
           onReset={() => setRestart(true)}
           onSpeed={(speed) => setReplay((current) => ({ ...current, speed }))}
@@ -1531,6 +1619,19 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           onBackToLive={() => { closeSummary(); leaveReplay(); }}
         />
       ) : null}
+      {algoDialog && algoAllowed && replay.cursor != null ? (
+        <AlgoStartDialog
+          algo={algo}
+          date={replay.date}
+          cursor={replay.cursor}
+          speed={replay.speed}
+          onCancel={() => setAlgoDialog(false)}
+          onStart={() => void startAlgoReplay()}
+          onJump={(to) => setReplay((current) => (current.cursor != null && current.cursor < to ? { ...current, cursor: to, status: "paused" } : current))}
+          onReset={() => void algo.reset().then((ok) => { if (!ok) return; setAlgoDialog(false); returnToStart(); })}
+        />
+      ) : null}
+      {algoHistory && algo.data ? <AlgoHistory data={algo.data} initial="chart" onClose={() => setAlgoHistory(false)} /> : null}
       {pendingDate ? (
         <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-panel p-4 text-sm">

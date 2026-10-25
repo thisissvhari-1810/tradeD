@@ -1124,6 +1124,38 @@ model AlgoSession {
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   events      AlgoEvent[]
+  runs        AlgoRun[]
+}
+
+/// One Algo run inside the chart's historical replay (one per option replay session). Its orders are on
+/// the demo wallet's ledger; its log is AlgoEvent rows with mode CHART and runId = this id.
+model AlgoRun {
+  id               String      @id @default(cuid())
+  sessionId        String
+  session          AlgoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  /// The chart's option replay session (e.g. 2026-10-22.ab12cd34).
+  replaySession    String
+  date             String
+  underlying       String
+  /// Settings snapshot taken when the run was confirmed (changes apply to the next run).
+  config           Json
+  /// The strategy lines for the replayed date, fixed for the run.
+  lines            Json
+  state            Json
+  /// ACTIVE or ENDED.
+  status           String      @default("ACTIVE")
+  /// Confirmed by the user ("Start Algo & Replay"); false = entries off, the open position still protected.
+  armed            Boolean     @default(false)
+  /// The replay minute (unix seconds) through which candles have been processed.
+  processedThrough Int
+  startCashPaise   BigInt
+  endCashPaise     BigInt?
+  startedAt        DateTime    @default(now())
+  endedAt          DateTime?
+  endReason        String      @default("")
+
+  @@unique([sessionId, replaySession])
+  @@index([sessionId, startedAt])
 }
 
 /// The Algo's signal and order log: one row per event key (per replay run for replays).
