@@ -15,6 +15,7 @@ import { loadOptionChain } from "@/server/option-chain";
 import { REPLAY_POLICY, replayLedgerSymbol } from "@/lib/options/replay-premium";
 import { checkReplayClock, HISTORICAL_UNAVAILABLE, replayQuote, sessionTape } from "@/server/option-replay";
 import { clampFill } from "@/lib/algo/chart-replay";
+import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { getTradingSettings } from "@/server/settings";
 import { recordClosedPosition } from "@/server/closed-trades";
 import type { SessionUser } from "@/server/auth";
@@ -1052,3 +1053,38 @@ export async function resetPracticePeriod(actor: SessionUser, userId: string, re
 }
 
 export { awardBadge };
+
+/**
+ * Starts a fresh practice period on the Algo wallet for a new replay session: the previous period is
+ * ended (its orders, positions, closed trades and ledger stay with it, so its history is preserved) and
+ * the new one opens with the Algo starting capital, nothing reserved and no positions. A period with no
+ * orders yet is reused as it is, so starting twice never opens two empty periods.
+ */
+export async function startAlgoPeriod(userId: string, reason: string): Promise<{ periodId: string; cashPaise: bigint; reused: boolean }> {
+  const wallet = await ensurePracticeAccount(userId, "ALGO");
+  return ledgerTx(async (tx) => {
+    const locked = await lockAccount(tx, wallet.id);
+    const periodId = locked.currentPeriodId as string;
+    const used = await tx.order.count({ where: { accountId: locked.id, practicePeriodId: periodId } });
+    if (!used && locked.cashReserved === 0n) return { periodId, cashPaise: locked.cashAvailable, reused: true };
+    const open = await tx.order.findMany({ where: { accountId: locked.id, status: "OPEN" } });
+    for (const order of open) {
+      if (order.reservedPaise > 0n) {
+        await postLedger(tx, locked, {
+          type: "RELEASE", cashDelta: order.reservedPaise, reservedDelta: -order.reservedPaise, practicePeriodId: periodId, referenceType: "ORDER", referenceId: order.id,
+          idempotencyKey: `${order.id}:algo-period-release`, reason: "Reserve released: the Algo replay session ended.", actorId: userId,
+        });
+      }
+      await tx.order.update({ where: { id: order.id }, data: { status: "CANCELLED", cancelledAt: new Date(), reservedPaise: 0n, rejectionReason: "Cancelled: the Algo replay session ended." } });
+    }
+    await tx.practicePeriod.update({ where: { id: periodId }, data: { endedAt: new Date(), endReason: reason } });
+    const current = await tx.practicePeriod.findUniqueOrThrow({ where: { id: periodId } });
+    const sequence = current.sequence + 1;
+    const next = await tx.practicePeriod.create({ data: { accountId: locked.id, sequence, label: `Algo session ${sequence}`, startingCapital: ALGO_STARTING_CAPITAL_PAISE, createdById: userId } });
+    await tx.virtualAccount.update({ where: { id: locked.id }, data: { currentPeriodId: next.id, cashAvailable: ALGO_STARTING_CAPITAL_PAISE, cashReserved: 0n } });
+    await tx.ledgerEntry.create({
+      data: { accountId: locked.id, practicePeriodId: next.id, type: "RESET_OPENING", cashDelta: ALGO_STARTING_CAPITAL_PAISE, reservedDelta: 0n, cashAvailableAfter: ALGO_STARTING_CAPITAL_PAISE, cashReservedAfter: 0n, reason, actorId: userId },
+    });
+    return { periodId: next.id, cashPaise: ALGO_STARTING_CAPITAL_PAISE, reused: false };
+  });
+}

@@ -65,13 +65,23 @@ const db = vi.hoisted(() => {
       update: async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(state.accounts.find((row) => row.id === where.id)!, data),
       create: async ({ data }: { data: Row }) => { const row = { ...data, id: id("acc") }; state.accounts.push(row as Row); return row; },
     },
-    practicePeriod: { create: async ({ data }: { data: Row }) => { const row = { ...data, id: id("per") }; state.periods.push(row as Row); return row; } },
+    practicePeriod: {
+      create: async ({ data }: { data: Row }) => { const row = { ...data, id: id("per") }; state.periods.push(row as Row); return row; },
+      update: async ({ where, data }: { where: { id: string }; data: Row }) => {
+        let row = state.periods.find((item) => item.id === where.id);
+        if (!row) { row = { id: where.id, sequence: 1 } as Row; state.periods.push(row); }
+        return Object.assign(row, data);
+      },
+      findUniqueOrThrow: async ({ where }: { where: { id: string } }) => state.periods.find((item) => item.id === where.id) ?? { id: where.id, sequence: 1 },
+    },
     watchlist: { create: async () => null },
     order: {
       findUnique: async ({ where, include }: { where: Parameters<typeof findOrder>[0]; include?: unknown }) => { const row = findOrder(where); return row ? (include ? withIncludes(row) : row) : null; },
       findUniqueOrThrow: async ({ where, include }: { where: Parameters<typeof findOrder>[0]; include?: unknown }) => { const row = findOrder(where); if (!row) throw new Error("not found"); return include ? withIncludes(row) : row; },
       create: async ({ data }: { data: Omit<Row, "id"> }) => { const row: Row = { filledQuantity: 0, reservedPaise: 0n, chargesPaise: 0n, avgFillPaise: null, filledAt: null, submittedAt: new Date(), ...data, id: id("ord") }; state.orders.push(row); return row; },
       update: async ({ where, data }: { where: { id: string }; data: Row }) => Object.assign(state.orders.find((row) => row.id === where.id)!, data),
+      count: async ({ where }: { where: { accountId: string; practicePeriodId?: string } }) => state.orders.filter((row) => row.accountId === where.accountId && (!where.practicePeriodId || row.practicePeriodId === where.practicePeriodId)).length,
+      findMany: async ({ where }: { where: { accountId: string; status?: string } }) => state.orders.filter((row) => row.accountId === where.accountId && (!where.status || row.status === where.status)),
     },
     instrument: {
       upsert: async ({ where, create, update }: { where: { symbol: string }; create: Row; update: Row }) => {
@@ -164,7 +174,7 @@ const { stepChartRun, exitChartRun } = await import("../src/server/algo-replay")
 const { clearReplayTapes } = await import("../src/server/option-replay");
 const { loadOptionChain } = await import("../src/server/option-chain");
 const { ensurePracticeAccount, practiceModeOf, viewModeOf } = await import("../src/server/practice-account");
-const { placeOptionReplay } = await import("../src/server/trading");
+const { placeOptionReplay, startAlgoPeriod } = await import("../src/server/trading");
 
 const student = { id: "u1", email: "student.demo@tradelab.local", name: "Student", role: "STUDENT" as const, status: "ACTIVE" as const, tradingEnabled: true, mfaEnabled: false, premium: { status: "free" as const, plan: null, endsAt: null, via: null }, features: { standardTrading: true, demoTrading: true, replay: true, multiAccount: true, brokerConnection: true, portfolio: true, orderHistory: true, analytics: true } };
 
@@ -448,9 +458,9 @@ describe("chart wiring for the algo replay", () => {
     expect(panel).toMatch(/disabled=\{Boolean\(algo\.busy\) \|\| cursor == null \|\| Boolean\(position\.exit\)\}/);
   });
 
-  it("leaving replay only stops new entries; it never claims the position closed", () => {
-    expect(desk).toMatch(/function leaveReplay\(\) \{[\s\S]{0,400}algo\.disarm\(\)/);
-    expect(desk).not.toMatch(/function leaveReplay\(\) \{[\s\S]{0,400}algo\.exit\(/);
+  it("leaving replay never closes a position by itself: Exit Replay archives the session first, explicitly", () => {
+    expect(desk).toMatch(/function leaveReplay\(\) \{\s*setReplay\(\(current\) => \(\{ \.\.\.current, active: false, status: "idle" \}\)\);\s*\}/);
+    expect(desk).not.toMatch(/function leaveReplay\(\) \{[\s\S]{0,200}algo\.(exit|finalize)\(/);
   });
 
   it("trade markers are drawn on the chart from the run's entries and exits", () => {
@@ -548,7 +558,9 @@ describe("the Algo's own ₹1,00,000 account", () => {
     expect(db.state.positions[0].quantity).toBe(0);
   });
 
-  it("a new replay date (new session) continues from the same balance", async () => {
+  // In the app every new session first opens a fresh period (startAlgoPeriod, tested below); without that
+  // step two runs share one period's ledger, and neither ever creates a second Algo account.
+  it("two runs on the same period share its ledger and the one Algo account", async () => {
     await run(underlying("DOWN"), { cursor: m(40) });
     const after = cash();
     const other = await stepChartRun({
@@ -707,7 +719,7 @@ describe("replay clock, validation and the trade pipeline end to end", () => {
   it("the client sends whole-second replay times", () => {
     const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
     expect(hook).toMatch(/action: "chartStep", session, cursor: Math\.floor\(cursor\)/);
-    expect(hook).toMatch(/action: "chartArm", session: forSession, cursor: Math\.floor\(at\)/);
+    expect(hook).toMatch(/action: "chartArm", session: id, cursor: Math\.floor\(at\)/);
     expect(hook).toMatch(/\(field: \$\{error\.field\}\)/);
   });
 
@@ -928,5 +940,125 @@ describe("trade dashboard and trade detail view", () => {
     expect(desk).toMatch(/onMarkerClick=\{\(ids\) => \{[\s\S]{0,200}showTrade\(entryKey\)/);
     expect(panel.match(/onOpenTrade\(/g)?.length).toBeGreaterThanOrEqual(4);
     expect(readFileSync("src/components/chart-panel.tsx", "utf8")).toMatch(/focus: \(from, to\) => \{[\s\S]{0,900}setVisibleLogicalRange/);
+  });
+});
+
+describe("replay session lifecycle: archive on exit, fresh session on the next replay", () => {
+  const algoAccount = () => db.state.accounts.find((row) => row.mode === "ALGO")!;
+  function threeTrades(): Candle[] {
+    // Down at 30, up at 60, down at 90: three crossings → three entries (each closes at its target).
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = index < 30 ? LINE + 10 : index < 60 ? LINE - 10 : index < 90 ? LINE + 10 : LINE - 10;
+      const open = index === 30 || index === 90 ? LINE + 8 : index === 60 ? LINE - 8 : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+  const targets = (index: number) => (index === 36 || index === 66 || index === 96 ? { low: 100, high: 150, close: 145 } : null);
+
+  it("three trades, then a fresh period: ₹1,00,000, nothing reserved, the old period ended with its trades kept", async () => {
+    feed.premiums = premiums(targets);
+    const session = await run(threeTrades(), { cursor: m(110) });
+    expect(algoTrades(session.events, null)).toHaveLength(3);
+    expect(db.state.closed).toHaveLength(3);
+    expect(cash()).not.toBe(START);
+    const fresh = await startAlgoPeriod("u1", "Algo replay session ended (EXIT_REPLAY).");
+    expect(fresh.reused).toBe(false);
+    expect(cash()).toBe(START);
+    expect(algoAccount().cashReserved).toBe(0n);
+    expect(algoAccount().currentPeriodId).toBe(fresh.periodId);
+    expect(db.state.periods.find((row) => row.id === "p1")?.endedAt).toBeInstanceOf(Date);
+    // The archived session's records are untouched and still belong to the old period.
+    expect(db.state.closed.every((row) => row.practicePeriodId === "p1")).toBe(true);
+    expect(db.state.ledger.at(-1)).toMatchObject({ type: "RESET_OPENING", cashDelta: START, practicePeriodId: fresh.periodId });
+  });
+
+  it("starting twice opens only one fresh period (an unused period is reused)", async () => {
+    feed.premiums = premiums(targets);
+    await run(threeTrades(), { cursor: m(40) });
+    const first = await startAlgoPeriod("u1", "end");
+    const second = await startAlgoPeriod("u1", "end again");
+    expect(second).toMatchObject({ reused: true, periodId: first.periodId });
+    expect(db.state.periods.filter((row) => String(row.label ?? "").startsWith("Algo session"))).toHaveLength(1);
+  });
+
+  it("the next session starts at zero: new id, 0 entries, no trades or markers, and orders on the new period", async () => {
+    feed.premiums = premiums(targets);
+    const old = await run(threeTrades(), { cursor: m(110) });
+    const period = await startAlgoPeriod("u1", "end");
+    const next = await stepChartRun({
+      user: student, wallet: "ALGO", runId: "run-new", session: "2026-10-16.fresh001", date: DATE, config, lines, candles: threeTrades(), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: { ...initialState(DATE), running: true, entries: true }, processedThrough: OPEN, cursor: m(20),
+    });
+    expect(next.state.tradesToday).toBe(0);
+    expect(algoTrades(next.events, null)).toEqual([]);
+    expect(tradeMarkers(next.events, m(20))).toEqual([]);
+    expect(cash()).toBe(START);
+    // Its first trade is a new order on the new period, with a key of the new run (never the old one's).
+    const later = await stepChartRun({
+      user: student, wallet: "ALGO", runId: "run-new", session: "2026-10-16.fresh001", date: DATE, config, lines, candles: threeTrades(), chain: await loadOptionChain("NIFTY", null),
+      sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state: next.state, processedThrough: next.processedThrough, cursor: m(34),
+    });
+    expect(later.state.position?.entryKey).toMatch(/^algo:run-new:/);
+    expect(db.state.orders.at(-1)?.practicePeriodId).toBe(period.periodId);
+    expect(algoTrades(old.events, null)).toHaveLength(3);
+  });
+
+  it("an open position is closed at the last processed premium with the reason 'Replay session closed'", async () => {
+    feed.premiums = premiums((index) => (index >= 33 ? { low: 109.5, high: 110.5, close: 110 } : null));
+    const opened = await run(threeTrades(), { cursor: m(34) });
+    const base = { user: student, wallet: "ALGO" as const, runId: "run1", session: SESSION, date: DATE, config, lines, candles: threeTrades(), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
+    const closed = await exitChartRun({ ...base, state: opened.state, at: opened.processedThrough, reason: "SESSION_CLOSED" });
+    expect(closed.state.position).toBeNull();
+    const exit = closed.events.find((event) => event.kind === "EXIT")!;
+    expect(exit.message).toMatch(/^Exit \(SESSION_CLOSED\)/);
+    expect(algoTrades([...opened.events, ...closed.events], null)[0].exitReason).toBe("Replay session closed");
+    expect(db.state.positions[0].quantity).toBe(0);
+  });
+
+  it("without a premium the position is not filled: it stays open (archived as unresolved)", async () => {
+    const opened = await run(threeTrades(), { cursor: m(34) });
+    feed.missing = true;
+    clearReplayTapes();
+    const base = { user: student, wallet: "ALGO" as const, runId: "run1", session: SESSION, date: DATE, config, lines, candles: threeTrades(), chain: await loadOptionChain("NIFTY", null), sessionOpen: OPEN, sessionClose: CLOSE, now: NOW };
+    await expect(exitChartRun({ ...base, state: opened.state, at: opened.processedThrough, reason: "SESSION_CLOSED" })).rejects.toThrow(/premium/i);
+    expect(sells()).toHaveLength(0);
+    expect(db.state.positions[0].quantity).toBe(75);
+  });
+
+  it("the server archives once (repeated Exit Replay is a no-op) and the archive is written before anything is cleared", () => {
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    expect(server).toMatch(/if \(existing\.status === "ENDED" && existing\.summary\) return;/);
+    const archive = server.slice(server.indexOf("async function archiveRun"), server.indexOf("export async function algoHistory"));
+    expect(archive.indexOf("await saveChartRun(run")).toBeGreaterThan(-1);
+    expect(archive.indexOf("await saveChartRun(run")).toBeLessThan(archive.indexOf("await startAlgoPeriod("));
+    expect(archive).toMatch(/summary: summary as unknown as Prisma\.InputJsonValue/);
+    // Strategy settings are never touched by ending a session.
+    expect(archive).not.toMatch(/algoSession\.update/);
+    // A new run always opens (or reuses an unused) fresh period.
+    expect(server).toMatch(/const period = await startAlgoPeriod\(user\.id, `Algo replay session \$\{command\.session\}`\);/);
+  });
+
+  it("the chart clears its session only after the archive succeeded, and ignores late responses from an old session", () => {
+    const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
+    const end = hook.slice(hook.indexOf("const endSession = useCallback"), hook.indexOf("const gate: PlayGate"));
+    expect(end.indexOf("if (!ok) return false;")).toBeLessThan(end.indexOf("rememberSession(date, null)"));
+    expect(hook).toMatch(/if \(sessionRef\.current !== asked\) return;/);
+    expect(hook).toMatch(/next\.chart && next\.chart\.replaySession !== sessionRef\.current \? \{ \.\.\.next, chart: null \}/);
+    expect(hook).toMatch(/id = newReplaySession\(date\);/);
+    const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
+    const exit = desk.slice(desk.indexOf("async function endAlgoSession"), desk.indexOf("async function endAlgoSession") + 600);
+    expect(exit.indexOf("if (!(await algo.finalize())) return;")).toBeLessThan(exit.indexOf("continueExitReplay()"));
+    expect(exit).toMatch(/setOpenTrade\(null\);/);
+    expect(desk).toMatch(/function requestExitReplay\(\) \{\s*if \(algoAllowed && algo\.hasSession\)/);
+  });
+
+  it("Home shows Algo History read-only", () => {
+    expect(readFileSync("src/components/home.tsx", "utf8")).toMatch(/<AlgoSessionsCard \/>/);
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    const history = server.slice(server.indexOf("export async function algoHistory"));
+    expect(history).not.toMatch(/\.(update|create|upsert|delete)\w*\(/);
+    expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/params\.get\("history"\) === "1"/);
   });
 });

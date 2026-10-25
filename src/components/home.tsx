@@ -1,6 +1,7 @@
 "use client";
 
 import { AlgoAccountCard } from "@/components/algo/algo-account";
+import { AlgoSessionsCard } from "@/components/algo/algo-sessions";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CandlestickChart, GitBranch, History, Layers, ReceiptText, RefreshCw, ShieldAlert, WifiOff } from "lucide-react";
@@ -114,6 +115,8 @@ export function Home() {
 
           {/* The Strategy Algo's own practice account (Demo view only; it never mixes with the demo funds above). */}
           {!live ? <div className="min-w-0 max-lg:order-2"><AlgoAccountCard /></div> : null}
+          {/* Every Algo replay session, saved when the replay was exited (read-only). */}
+          {!live ? <div className="min-w-0 max-lg:order-2"><AlgoSessionsCard /></div> : null}
 
           <div className={cx("min-w-0 max-lg:order-7", !mobile.homeMarketCards && "max-lg:hidden")}><QuickActions live={live} replayAllowed={replayAllowed} /></div>
 

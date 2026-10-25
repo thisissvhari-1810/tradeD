@@ -18,7 +18,7 @@ import { loadDrawings, saveDrawings } from "@/components/drawing-model";
 import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
-import { AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
+import { AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
@@ -787,11 +787,14 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   // replay plays, each completed minute is processed on the server and orders go to the demo ledger.
   const [algoDialog, setAlgoDialog] = useState(false);
   const [algoHistory, setAlgoHistory] = useState(false);
+  // Exit Replay or a date change waiting for the Algo session to be archived.
+  const [algoEnd, setAlgoEnd] = useState<{ then: "exit" | { date: string } } | null>(null);
   const algoAllowed = replay.active && !live && !optionView && canPaperTrade;
   const algo = useChartAlgo({
     user: bookUser,
     active: algoAllowed,
-    session: optionSession,
+    // The Algo keeps its own session per replay date; Exit Replay ends it and the next Play starts a new one.
+    date: replay.active ? replay.date : null,
     cursor: replay.cursor,
     advancing: replay.status === "playing" || replay.status === "completed",
     // Every ledger view (this chart, the Algo account card) reloads from the server.
@@ -860,8 +863,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   async function startAlgoReplay() {
     const cursor = replay.cursor;
     if (cursor == null || !replay.date) return;
-    const session = ensureOptionSession(replay.date);
-    if (!(await algo.arm(cursor, session))) return;
+    if (!(await algo.arm(cursor))) return;
     setAlgoDialog(false);
     setReplay((current) => (current.status === "ready" || current.status === "paused" ? { ...current, status: "playing" } : current));
   }
@@ -976,16 +978,47 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     if (completionKey) setSummaryShownFor(completionKey);
   }, [completionKey]);
 
+  /** Moves the replay to another date (the paper book asks first when it has trades). */
+  function changeReplayDate(date: string) {
+    const dirty = sessionOpenCount > 0 || book.positions.length > 0 || book.fills.length > 0 || book.trades.length > 0 || book.orders.some((order) => order.status === "OPEN");
+    if (dirty) {
+      setPendingDate(date);
+      return;
+    }
+    setReplay((current) => ({ ...current, date, status: "loading", cursor: null }));
+  }
+
   function leaveReplay() {
-    // Leaving replay turns the algo's entries off; an open algo position stays on the demo ledger for this
-    // replay session and is protected again when the session is reopened and played.
-    if (algo.run?.armed) void algo.disarm();
     setReplay((current) => ({ ...current, active: false, status: "idle" }));
   }
 
-  function requestExitReplay() {
+  function continueExitReplay() {
     if (summaryHasActivity) setSummaryRequested(true);
     else leaveReplay();
+  }
+
+  /** Exit Replay: an Algo session is first archived (Home → Algo History), then the replay closes. */
+  function requestExitReplay() {
+    if (algoAllowed && algo.hasSession) {
+      setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current));
+      setAlgoEnd({ then: "exit" });
+      return;
+    }
+    continueExitReplay();
+  }
+
+  /** Archives the Algo session; only once the archive has succeeded is the active state cleared. */
+  async function endAlgoSession() {
+    const pending = algoEnd;
+    if (!pending) return;
+    if (!(await algo.finalize())) return;
+    setAlgoEnd(null);
+    setOpenTrade(null);
+    setSelectedTrade(null);
+    setLineFocus(null);
+    notify("Replay session saved to Home → Algo History.", { tone: "success" });
+    if (pending.then === "exit") continueExitReplay();
+    else changeReplayDate(pending.then.date);
   }
 
   function returnToStart() {
@@ -1463,14 +1496,13 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           message={replay.status === "loading" ? "Loading the session…" : replay.message}
           onDate={(date) => {
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date === replay.date) return;
-            // A new date is a new replay session: the current algo run stops taking entries.
-            if (algo.run?.armed) void algo.disarm();
-            const dirty = sessionOpenCount > 0 || book.positions.length > 0 || book.fills.length > 0 || book.trades.length > 0 || book.orders.some((order) => order.status === "OPEN");
-            if (dirty) {
-              setPendingDate(date);
+            // A new date is a new replay session: the current Algo session is archived first.
+            if (algoAllowed && algo.hasSession) {
+              setReplay((current) => (current.status === "playing" ? { ...current, status: "paused" } : current));
+              setAlgoEnd({ then: { date } });
               return;
             }
-            setReplay((current) => ({ ...current, date, status: "loading", cursor: null }));
+            changeReplayDate(date);
           }}
           onToggle={toggleReplay}
           onStep={(direction) => setReplay((current) => {
@@ -1646,6 +1678,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
           onJump={(to) => setReplay((current) => (current.cursor != null && current.cursor < to ? { ...current, cursor: to, status: "paused" } : current))}
           onReset={() => void algo.reset().then((ok) => { if (!ok) return; setAlgoDialog(false); returnToStart(); })}
         />
+      ) : null}
+      {algoEnd && algoAllowed ? (
+        <AlgoEndDialog algo={algo} cursor={replay.cursor} action={algoEnd.then === "exit" ? "exit" : "date"} onCancel={() => { algo.clearError(); setAlgoEnd(null); }} onConfirm={() => void endAlgoSession()} />
       ) : null}
       {openTrade && algoAllowed ? (
         <AlgoTradeDrawer

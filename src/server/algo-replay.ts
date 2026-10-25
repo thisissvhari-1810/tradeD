@@ -177,7 +177,7 @@ async function walletFill(userId: string, idempotencyKey: string): Promise<Fill 
 }
 
 /** A manual (or emergency) exit at the replay time: the last completed premium, as any replay order. */
-export async function exitChartRun(input: ChartRunInput & { state: AlgoState; at: number; reason: "MANUAL" | "EMERGENCY" }) {
+export async function exitChartRun(input: ChartRunInput & { state: AlgoState; at: number; reason: "MANUAL" | "EMERGENCY" | "SESSION_CLOSED" }) {
   const adapter = chartReplayAdapter(input);
   const state: AlgoState = JSON.parse(JSON.stringify(input.state)) as AlgoState;
   const events: AlgoEvent[] = [];
@@ -186,7 +186,7 @@ export async function exitChartRun(input: ChartRunInput & { state: AlgoState; at
   adapter.setClock(input.at);
   const mark = await adapter.mark(state.position.contract, input.at).catch(() => null);
   if (!mark?.bid) throw new AppError("No completed premium for this contract at the replay time, so it cannot be exited here. Move the replay forward a minute and try again.", 409, "NO_HISTORICAL_PREMIUM");
-  await startExit(state, runInput(input, adapter, input.at), input.reason, { price: mark.bid, note: input.reason === "MANUAL" ? "Manual exit at the last completed premium." : "Emergency stop at the last completed premium." }, (event) => events.push({ time: input.at, ...event }));
+  await startExit(state, runInput(input, adapter, input.at), input.reason, { price: mark.bid, note: input.reason === "MANUAL" ? "Manual exit at the last completed premium." : input.reason === "SESSION_CLOSED" ? "Replay session closed: exited at the last completed premium." : "Emergency stop at the last completed premium." }, (event) => events.push({ time: input.at, ...event }));
   if (input.reason === "EMERGENCY") state.entries = false;
   return { state, events };
 }

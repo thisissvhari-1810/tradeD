@@ -25,4 +25,5 @@ export const algoRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("chartExit"), session, cursor, emergency: z.boolean().optional() }).strict(),
   z.object({ action: z.literal("chartDisarm"), session }).strict(),
   z.object({ action: z.literal("chartReset"), session }).strict(),
+  z.object({ action: z.literal("chartFinalize"), session }).strict(),
 ]);

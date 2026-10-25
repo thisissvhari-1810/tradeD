@@ -485,3 +485,35 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     </Dialog>
   );
 }
+
+/**
+ * Exit Replay (or a new date) with an Algo session: says what will be archived and what happens to an open
+ * position, then archives it. The session stays on screen until the archive has succeeded; a failure
+ * keeps everything and can be retried.
+ */
+export function AlgoEndDialog({ algo, cursor, onCancel, onConfirm, action }: { algo: ChartAlgo; cursor: number | null; onCancel: () => void; onConfirm: () => void; action: "exit" | "date" }) {
+  const run = algo.run;
+  const position = run?.position ?? null;
+  const trades = run ? algoTrades(run.events, position ? { entryKey: position.entryKey, exitPending: Boolean(position.exit) } : null) : [];
+  const saving = algo.busy === "finalize";
+  return (
+    <Dialog title="End this replay session?" onClose={saving ? () => undefined : onCancel}>
+      <p className="text-sm text-text-2">{action === "exit" ? "Exiting replay" : "Changing the replay date"} ends this Algo session and saves it to <strong>Home → Algo History</strong>. The next replay starts a fresh session: ₹1,00,000, no trades, 0/{run?.config.maxTrades ?? 3} entries.</p>
+      <dl className="mt-3 grid grid-cols-3 gap-2">
+        <Item label="Trades" value={`${trades.length}/${run?.config.maxTrades ?? 3}`} />
+        <Item label="Realized" value={inr(run?.stats.realized ?? 0, true)} tone={tone(run?.stats.realized)} />
+        <Item label="Processed to" value={`${ist(run?.processedThrough)} IST`} />
+      </dl>
+      {position ? (
+        <p className="mt-3 rounded-md bg-warning-soft px-2 py-1.5 text-xs text-warning">
+          The open {position.side} {position.contract.strike} {position.contract.right} × {position.quantity} (unrealized {inr(position.unrealized, true)}) will be closed at the last processed replay premium ({ist(run?.processedThrough)} IST) with the exit reason &quot;Replay session closed&quot;. If no premium is available it is not filled: it stays on the Algo ledger and is archived as unresolved.
+        </p>
+      ) : null}
+      {algo.error ? <p className="mt-3 rounded-md bg-loss-soft px-2 py-1.5 text-xs text-loss" role="alert">Saving failed: {algo.error}. Nothing was cleared; try again.</p> : null}
+      <div className="mt-4 flex justify-end gap-2">
+        <button type="button" className="h-8 rounded-md border border-border px-3 hover:bg-hover disabled:opacity-50" disabled={saving} onClick={onCancel}>Cancel</button>
+        <button type="button" className="h-8 rounded-md bg-primary px-3 font-semibold text-on-primary disabled:opacity-60" disabled={saving || cursor == null} onClick={onConfirm}>{saving ? "Saving session history…" : algo.error ? "Retry" : action === "exit" ? "Save & exit replay" : "Save & change date"}</button>
+      </div>
+    </Dialog>
+  );
+}

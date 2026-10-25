@@ -1157,6 +1157,10 @@ model AlgoRun {
   startedAt        DateTime    @default(now())
   endedAt          DateTime?
   endReason        String      @default("")
+  /// The Algo wallet practice period this session traded in (each replay session has its own).
+  periodId         String?
+  /// The archived session (account figures, trades, counts, settings), written once when it is finalized.
+  summary          Json?
 
   @@unique([sessionId, replaySession])
   @@index([sessionId, startedAt])

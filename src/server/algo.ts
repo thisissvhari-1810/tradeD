@@ -17,8 +17,9 @@ import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/opt
 import { ensurePracticeAccount } from "@/server/practice-account";
 import { FILL_STALE_SECONDS, replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
-import { positionValuation, runStats } from "@/lib/algo/chart-replay";
-import { exitChartRun, stepChartRun, walletPaperAdapter } from "@/server/algo-replay";
+import { algoTrades, positionValuation, runStats, skippedSignals } from "@/lib/algo/chart-replay";
+import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
+import { startAlgoPeriod } from "@/server/trading";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { featuresOf } from "@/lib/auth/features";
 import { premiumFrom } from "@/lib/premium/entitlements";
@@ -400,7 +401,8 @@ export type ChartCommand =
   | { action: "chartStep"; session: string; cursor: number }
   | { action: "chartExit"; session: string; cursor: number; emergency?: boolean }
   | { action: "chartDisarm"; session: string }
-  | { action: "chartReset"; session: string };
+  | { action: "chartReset"; session: string }
+  | { action: "chartFinalize"; session: string };
 
 export async function algoCommand(user: SessionUser, command: AlgoCommand) {
   assertAllowed(user);
@@ -659,7 +661,9 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const candles = await dayTape(config.underlying, date);
     if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date}.`, 409, "NO_CANDLES");
     const chain = await runChain(config, date);
-    const cash = await walletCash(user.id, "ALGO");
+    // Every replay session trades its own fresh practice period: ₹1,00,000, nothing open, no P&L.
+    const period = await startAlgoPeriod(user.id, `Algo replay session ${command.session}`);
+    const cash = period.cashPaise;
     const lines = strategyLines(data, config.custom);
     // Starting mid-session never trades history: evaluation starts with the first minute after the cursor.
     const processedThrough = Math.max(open, minute);
@@ -667,7 +671,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     const run = await prisma.algoRun.create({
       data: {
         sessionId, replaySession: command.session, date, underlying: config.underlying, config: config as unknown as Prisma.InputJsonValue, lines: lines as unknown as Prisma.InputJsonValue,
-        state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, wallet: "ALGO", startCashPaise: cash,
+        state: state as unknown as Prisma.InputJsonValue, armed: true, processedThrough, wallet: "ALGO", startCashPaise: cash, periodId: period.periodId,
       },
     });
     await saveChartRun(run, {}, [{ key: "start", time: processedThrough, kind: "INFO", message: `Algo replay started on ${date} at ${istTime(processedThrough)} IST: ${config.underlying}, completed 1-minute candles, expiry ${chain.expiry} (nearest listed; premiums from its real 1-minute history). Algo wallet (₹1,00,000 practice capital); no broker orders.` }]);
@@ -695,10 +699,11 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
     return;
   }
 
-  if (command.action === "chartReset") {
-    if (state.position || state.pending) throw new AppError("Exit the open algo position before resetting the replay session.", 409, "POSITION_OPEN");
-    if (existing.status === "ENDED") return;
-    await saveChartRun(existing, { status: "ENDED", armed: false, endedAt: new Date(), endReason: "RESET", endCashPaise: await walletCash(user.id, wallet), state: { ...state, running: false, entries: false, status: "COMPLETED" } as unknown as Prisma.InputJsonValue }, [note("reset", existing.processedThrough, "Replay session reset. A new session starts a new algo run; this run's trades stay in history.")]);
+  if (command.action === "chartReset" || command.action === "chartFinalize") {
+    if (command.action === "chartReset" && (state.position || state.pending)) throw new AppError("Exit the open algo position before resetting the replay session.", 409, "POSITION_OPEN");
+    // Archived once: a repeated Exit Replay (a double click, a retry) changes nothing.
+    if (existing.status === "ENDED" && existing.summary) return;
+    await archiveRun(user, existing, state, wallet, command.action === "chartReset" ? "RESET" : "EXIT_REPLAY", existing.status === "ENDED" ? null : await context());
     return;
   }
 
@@ -803,4 +808,84 @@ async function cacheReplayMark(session: string, contract: ContractRef, premium: 
     volume: 0n, asOf: new Date(candleEnd * 1000), mode: "HISTORICAL" as const, source: `last-completed-1m-close at replay ${new Date(cursor * 1000).toISOString()}`, marketOpen: false, message: "Replay mark. Not a live price.",
   };
   await prisma.quoteCache.upsert({ where: { instrumentId: instrument.id }, create: { instrumentId: instrument.id, ...cache }, update: cache }).catch(() => undefined);
+}
+
+/**
+ * Finalizes a replay session (Exit Replay, or the chart's reset): stops it, closes an open position at the
+ * last processed replay premium ("Replay session closed"), or, when no premium exists, leaves it open and
+ * records it as unresolved (never a made-up fill). Then writes the archive (account figures, trades,
+ * counts and settings) and the run's end in one transaction, and only after that opens a fresh period on
+ * the Algo wallet for the next session. The archived period, its orders and closed trades stay as they are.
+ */
+async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<object>, state: AlgoState, wallet: "ALGO" | "DEMO", reason: "EXIT_REPLAY" | "RESET", ctx: ChartRunInput | null) {
+  const now = Math.floor(Date.now() / 1000);
+  let current: AlgoState = { ...state, running: false, entries: false };
+  const events: AlgoEvent[] = [];
+  if (ctx && current.position && !current.position.exit) {
+    try {
+      const exited = await exitChartRun({ ...ctx, state: current, at: Math.min(run.processedThrough, ctx.sessionClose), reason: "SESSION_CLOSED" });
+      current = { ...exited.state, running: false, entries: false };
+      events.push(...exited.events);
+    } catch (error) {
+      events.push({ key: `close-failed:${now}`, time: run.processedThrough, kind: "ERROR", message: `The open position could not be closed (${error instanceof Error ? error.message : "no premium"}). It is archived as unresolved and stays on the Algo ledger.` });
+    }
+  }
+  const allEvents = [...(await prisma.algoEvent.findMany({ where: { sessionId: run.sessionId, mode: "CHART", runId: run.id }, orderBy: [{ time: "asc" }, { createdAt: "asc" }] })).map((row) => row.payload as unknown as AlgoEvent), ...events];
+  const unresolved = Boolean(current.position || current.pending);
+  const account = wallet === "ALGO" ? await algoWallet(user.id).catch(() => null) : null;
+  const trades = algoTrades(allEvents, current.position ? { entryKey: current.position.entryKey, exitPending: Boolean(current.position.exit) } : null);
+  const summary = {
+    sessionId: run.replaySession,
+    runId: run.id,
+    underlying: run.underlying,
+    date: run.date,
+    timeframe: "1m",
+    startedAt: run.startedAt.toISOString(),
+    endedAt: new Date().toISOString(),
+    startCapital: rupees(run.startCashPaise),
+    account,
+    entries: trades.length,
+    maxTrades: readAlgoConfig(run.config).maxTrades,
+    stats: runStats(allEvents),
+    completed: trades.filter((trade) => trade.status === "COMPLETED").length,
+    rejected: skippedSignals(allEvents).length,
+    unresolved: unresolved ? 1 : 0,
+    trades,
+    settings: readAlgoConfig(run.config),
+    status: unresolved ? "ARCHIVED_UNRESOLVED" : "ARCHIVED",
+    reason,
+    finalizedAt: new Date().toISOString(),
+  };
+  const message = reason === "RESET"
+    ? "Replay session reset and saved to Algo History. The next session starts fresh."
+    : `Replay session ended and saved to Algo History${unresolved ? " (an open position could not be closed and is kept as unresolved)" : ""}.`;
+  await saveChartRun(run, {
+    status: "ENDED", armed: false, endedAt: new Date(), endReason: reason, endCashPaise: await walletCash(user.id, wallet),
+    state: { ...current, status: unresolved ? "RECOVERY_REQUIRED" : "COMPLETED" } as unknown as Prisma.InputJsonValue,
+    summary: summary as unknown as Prisma.InputJsonValue,
+  }, [...events, { key: `archived:${now}`, time: run.processedThrough, kind: "INFO", message }]);
+  // The next session starts on a fresh ₹1,00,000 period (an unresolved position stays with this one).
+  if (wallet === "ALGO") await startAlgoPeriod(user.id, `Algo replay session ${run.replaySession} ended (${reason}).`).catch(() => undefined);
+}
+
+/** Home → Algo History: every archived (and the running) replay session, newest first. Read-only. */
+export async function algoHistory(user: SessionUser) {
+  assertAllowed(user);
+  const session = await prisma.algoSession.findUnique({ where: { userId: user.id } });
+  if (!session) return { sessions: [] };
+  const runs = await prisma.algoRun.findMany({ where: { sessionId: session.id }, orderBy: { startedAt: "desc" }, take: 50 });
+  const rows = runs.length ? await prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "CHART", runId: { in: runs.map((run) => run.id) } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }] }) : [];
+  return {
+    sessions: runs.map((run) => {
+      const events = rows.filter((row) => row.runId === run.id).map((row) => row.payload as unknown as AlgoEvent);
+      const summary = (run.summary ?? null) as Record<string, unknown> | null;
+      const trades = (summary?.trades as ReturnType<typeof algoTrades> | undefined) ?? algoTrades(events, null);
+      const stats = runStats(events);
+      return {
+        id: run.id, sessionId: run.replaySession, underlying: run.underlying, date: run.date, status: run.status === "ENDED" ? (summary?.status as string | undefined) ?? "ARCHIVED" : "RUNNING",
+        endReason: run.endReason, startedAt: run.startedAt.toISOString(), endedAt: run.endedAt?.toISOString() ?? null, startCapital: rupees(run.startCashPaise), endCash: run.endCashPaise == null ? null : rupees(run.endCashPaise),
+        account: (summary?.account ?? null) as Awaited<ReturnType<typeof algoWallet>> | null, stats, trades, rejected: skippedSignals(events), settings: readAlgoConfig(run.config),
+      };
+    }),
+  };
 }

@@ -94,6 +94,7 @@ export const EXIT_LABEL: Record<string, string> = {
   MANUAL: "Manual exit",
   EMERGENCY: "Emergency stop",
   SESSION_END: "Session end",
+  SESSION_CLOSED: "Replay session closed",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
 };
