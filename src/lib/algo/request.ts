@@ -26,4 +26,5 @@ export const algoRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("chartDisarm"), session }).strict(),
   z.object({ action: z.literal("chartReset"), session }).strict(),
   z.object({ action: z.literal("chartFinalize"), session }).strict(),
+  z.object({ action: z.literal("backtestDay"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), variant: z.enum(["saved", "baseline"]) }).strict(),
 ]);

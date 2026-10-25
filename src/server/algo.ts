@@ -540,22 +540,19 @@ export async function tickAllSessions() {
 
 /* ---------------- historical replay ---------------- */
 
-async function runReplay(user: SessionUser, sessionId: string, date: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date for the replay.", 400);
-  const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
-  const config = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
-  const problems = algoConfigProblems(config);
-  if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+/**
+ * Simulates one past session with the given settings: the underlying's real 1-minute candles, each option's
+ * real 1-minute premiums and a virtual account. Nothing is stored and no order goes anywhere. Used by the
+ * quick backtest (stored for its log) and the multi-day backtest (returned only).
+ */
+async function simulateDay(sessionId: string, date: string, config: AlgoConfig) {
   const data = await getS1Data(config.underlying, date);
-  if (!data.previous) throw new AppError(data.message || "No strategy levels for that date.", 409);
-  const candles = await sessionMinuteTape(config.underlying, date);
-  if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date}.`, 409);
-  const chain = await loadOptionChain(config.underlying, config.expiry === "nearest" ? null : config.expiry);
-  if (!chain.available || !chain.expiry) throw new AppError(`No option chain for ${config.underlying}: ${chain.message}`, 409);
-  if (chain.expiry < date) throw new AppError(`The expiry ${chain.expiry} is before ${date}.`, 409);
+  if (!data.previous) throw new AppError(data.message || "No strategy levels for that date.", 409, "NO_LEVELS");
+  const candles = await dayTape(config.underlying, date);
+  if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date} (a holiday or no data).`, 409, "NO_CANDLES");
+  const chain = await runChain(config, date);
   const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain, config, capital: rupees(ALGO_STARTING_CAPITAL_PAISE) });
   if (adapter.kind !== "replay") throw new AppError("Replay must use the replay adapter.", 500);
-  const runId = `replay:${date}:${Date.now()}`;
   const lines = strategyLines(data, config.custom);
   let state: AlgoState = { ...initialState(date), running: true, entries: true };
   const events: AlgoEvent[] = [{ key: "start", time: candles[0].time, kind: "INFO", message: `Replay of ${date} with expiry ${chain.expiry} (the nearest still-listed expiry; expired contracts cannot be replayed). Premiums: real 1-minute option candles. Virtual account; no orders are sent anywhere.` }];
@@ -565,14 +562,50 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
     const result = await advance(state, { sessionId, sessionDate: date, config, candles, lines, now: clock, adapter });
     state = result.state;
     events.push(...result.events);
+    // Like chart replay: the session stops once its trades are all done.
+    if (sessionComplete(state, config.maxTrades)) break;
   }
   if (state.position) {
     const last = candles.at(-1)!.time + 60;
     const mark = await adapter.mark(state.position.contract, last);
     await startExit(state, { sessionId, sessionDate: date, config, candles, lines, now: last, adapter }, "SESSION_END", mark ? { price: mark.bid ?? state.position.avg, note: "Closed at the end of the replayed session." } : null, (event) => events.push({ time: last, ...event }));
   }
+  return { events, state, expiry: chain.expiry };
+}
+
+async function runReplay(user: SessionUser, sessionId: string, date: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date for the replay.", 400);
+  const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
+  const config = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
+  const problems = algoConfigProblems(config);
+  if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+  const { events } = await simulateDay(sessionId, date, config);
+  const runId = `replay:${date}:${Date.now()}`;
   await prisma.algoEvent.deleteMany({ where: { sessionId, mode: "REPLAY", NOT: { runId: { in: (await prisma.algoEvent.findMany({ where: { sessionId, mode: "REPLAY" }, distinct: ["runId"], orderBy: { createdAt: "desc" }, take: 2, select: { runId: true } })).map((row) => row.runId) } } } });
   await prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode: "REPLAY", runId, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true });
+}
+
+/**
+ * Multi-day backtest, one day per request (the browser walks the dates): the saved settings, or the same
+ * settings with every entry filter and the structure stop off ("baseline") to compare. Read-only: nothing
+ * is written and no order is placed anywhere.
+ */
+export async function backtestDay(user: SessionUser, date: string, variant: "saved" | "baseline") {
+  assertAllowed(user);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date.", 400);
+  const session = await loadSession(user.id);
+  const saved = { ...readAlgoConfig(session.config), mode: "REPLAY" as const };
+  const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false } : saved;
+  const problems = algoConfigProblems(config);
+  if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+  try {
+    const { events, expiry } = await simulateDay(session.id, date, config);
+    const trades = algoTrades(events, null);
+    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized })), rejected: skippedSignals(events).length };
+  } catch (error) {
+    // A day without data (a holiday, missing history) is reported, not fatal.
+    return { date, variant, ok: false as const, reason: error instanceof Error ? error.message : "This day could not be simulated." };
+  }
 }
 
 /* ---------------- the algo inside the chart's replay ---------------- */

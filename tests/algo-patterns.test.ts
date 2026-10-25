@@ -270,3 +270,51 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     for (const file of ["src/components/algo/algo-analysis.tsx", "src/components/algo/algo-replay-panel.tsx"]) expect(readFileSync(file, "utf8")).not.toMatch(/Math\.random/);
   });
 });
+
+describe("body crossing only: a gap beyond the level is not a breakout", () => {
+  it("a W neckline breakout must come from a candle whose body crosses the neckline", () => {
+    // Same W, but the last candle opens above the neckline (a gap from 103 to 107) and closes at 110.
+    const candles = build(BASE).map((candle, index) => (index === 16 ? { ...candle, open: 107, low: 106.8 } : candle));
+    expect(analyse(candles, "w").signals).toEqual([]);
+    expect(analyse(build(BASE), "w").signals).toHaveLength(1);
+  });
+});
+
+describe("multi-day backtest arithmetic", () => {
+  it("lists weekdays in a range, and the last N weekdays before a date", async () => {
+    const { tradingDays, lastTradingDays } = await import("../src/lib/algo/backtest");
+    expect(tradingDays("2026-10-16", "2026-10-21")).toEqual(["2026-10-16", "2026-10-19", "2026-10-20", "2026-10-21"]);
+    expect(lastTradingDays("2026-10-26", 3)).toEqual(["2026-10-21", "2026-10-22", "2026-10-23"]);
+  });
+
+  it("totals: P&L, win rate, profit factor and the drawdown of the running P&L; skipped days are not zero days", async () => {
+    const { backtestTotals, backtestCsv } = await import("../src/lib/algo/backtest");
+    const stats = (realized: number, wins: number, losses: number) => ({ signals: 0, accepted: wins + losses, rejected: 0, trades: wins + losses, wins, losses, realized, maxDrawdown: 0, exits: {} });
+    const trade = (realized: number) => ({ number: 1, side: "CALL" as const, strategy: "line", entryTime: 0, entryPremium: 100, exitTime: 1, exitPremium: 100, exitReason: "Target", realized });
+    const days = [
+      { date: "2026-10-19", variant: "saved" as const, ok: true as const, expiry: null, stats: stats(1000, 1, 0), trades: [trade(1000)], rejected: 0 },
+      { date: "2026-10-20", variant: "saved" as const, ok: true as const, expiry: null, stats: stats(-1500, 0, 2), trades: [trade(-700), trade(-800)], rejected: 1 },
+      { date: "2026-10-21", variant: "saved" as const, ok: false as const, reason: "No 1-minute candles (a holiday or no data)." },
+      { date: "2026-10-22", variant: "saved" as const, ok: true as const, expiry: null, stats: stats(2000, 1, 0), trades: [trade(2000)], rejected: 0 },
+    ];
+    const totals = backtestTotals(days);
+    expect(totals).toMatchObject({ days: 4, daysSkipped: 1, daysTraded: 3, trades: 4, wins: 2, losses: 2, winRate: 50, pnl: 1500, averagePerDay: 500, maxDrawdown: 1500, profitFactor: 2 });
+    expect(totals.bestDay).toEqual({ date: "2026-10-22", pnl: 2000 });
+    expect(totals.worstDay).toEqual({ date: "2026-10-20", pnl: -1500 });
+    const csv = backtestCsv(days);
+    expect(csv).toMatch(/2026-10-21,With fixes,Skipped/);
+    expect(csv).toMatch(/TOTAL with fixes,,4 days \(1 skipped\),4,2,2,1500\.00/);
+  });
+
+  it("the backtest runs one day per request on the server with the saved settings, or with the fixes off to compare", async () => {
+    const { readFileSync } = await import("node:fs");
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    const start = server.indexOf("export async function backtestDay");
+    const day = server.slice(start, start + server.slice(start).search(/\r?\n\}\r?\n/));
+    expect(day.length).toBeGreaterThan(200);
+    expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \} : saved/);
+    expect(day).not.toMatch(/prisma\.\w+\.(update|create|upsert|delete)/);
+    expect(server).toMatch(/if \(sessionComplete\(state, config\.maxTrades\)\) break;/);
+    expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/return Response\.json\(await backtestDay\(user, input\.date, input\.variant\)\)/);
+  });
+});

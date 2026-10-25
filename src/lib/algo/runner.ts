@@ -3,6 +3,7 @@ import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm,
 import { evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
 import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type MarketAnalysis, type PatternSettings, type StrategyId, type StrategySignal } from "./patterns";
 import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
+import { ema } from "@/lib/market/indicators";
 
 /**
  * The Algo state machine. One execution interface (paper, replay or live adapters) does the trading;
@@ -47,8 +48,21 @@ export type AlgoConfig = {
   strategies: Record<StrategyId, boolean>;
   /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
   observationMinutes: number;
-  /** Settings format: 2 = the 30-minute observation default (older saved settings had 15). */
+  /** Settings format: 3 = trade filters and the structure stop (2 = the 30-minute observation default). */
   settingsVersion: number;
+  /** Entry filters against false breaks and whipsaws (each can be switched off). */
+  filters: {
+    /** After a stop-loss on a level, that level is not traded again for this many minutes (0 = off). */
+    levelBlockMinutes: number;
+    /** A line break needs the close at least this % beyond the line (0 = any close beyond it). */
+    breakoutBufferPercent: number;
+    /** Enter only when the next candle also closes beyond the level. */
+    secondCandle: boolean;
+    /** CALL only with the 9 EMA above the 21 EMA, PUT only below. */
+    momentum: boolean;
+  };
+  /** Exit when the index closes back through the broken level (the setup is wrong), besides the premium stop. */
+  structureStop: boolean;
   /** Swing, pattern and breakout settings for the trendline, W and M strategies. */
   patterns: PatternSettings;
 };
@@ -77,7 +91,9 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   strategies: { line: true, trendline: true, w: true, m: true },
   // The first 30 minutes read the opening structure and trendlines before any trade.
   observationMinutes: 30,
-  settingsVersion: 2,
+  settingsVersion: 3,
+  filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0.03, secondCandle: true, momentum: true },
+  structureStop: true,
   patterns: PATTERN_DEFAULTS,
 };
 
@@ -138,6 +154,10 @@ export type AlgoState = {
   analysis?: MarketAnalysis | null;
   /** The open trade's latest intratrade confirmations. */
   confirmations?: Confirmation[] | null;
+  /** A signal waiting for the next candle to confirm it (second-candle filter). */
+  awaiting?: { direction: Direction; signals: StrategySignal[]; time: number } | null;
+  /** Levels stopped out recently: not traded again until `until` (level-block filter). */
+  blockedLevels?: Array<{ level: number; until: number }>;
 };
 
 export function initialState(sessionDate: string): AlgoState {
@@ -219,7 +239,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
 
   if (state.sessionDate !== input.sessionDate) {
     // A new trading day: daily counters reset; candles are only ever paired within one session.
-    Object.assign(state, { sessionDate: input.sessionDate, lastCandle: null, tradesToday: 0, realizedToday: 0, riskLocked: false, lastEntryAt: null });
+    Object.assign(state, { sessionDate: input.sessionDate, lastCandle: null, tradesToday: 0, realizedToday: 0, riskLocked: false, lastEntryAt: null, awaiting: null, blockedLevels: [] });
   }
 
   await reconcile(state, input, log);
@@ -296,6 +316,24 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   else if (clock > config.entryCutoff) reasons.push(`Outside the entry window (${istClock(observationEnd)}–${config.entryCutoff} IST).`);
   const problem = protectiveProblem(config.stop, config.target);
   if (problem) reasons.push(problem);
+  const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
+  // Momentum filter: the 9 / 21 EMA of the completed closes up to the signal candle must agree.
+  if (filters.momentum) {
+    const closes = input.candles.filter((candle) => candle.time <= evaluation.time && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).map((candle) => candle.close);
+    const fast = ema(closes, 9).at(-1);
+    const slow = ema(closes, 21).at(-1);
+    if (fast != null && slow != null && (side === "CALL" ? fast <= slow : fast >= slow)) reasons.push(`Momentum against the signal (9 EMA ${fast.toFixed(2)} ${side === "CALL" ? "≤" : "≥"} 21 EMA ${slow.toFixed(2)}).`);
+  }
+  // Level-block filter: a level stopped out recently is not traded again until its block ends.
+  const blocked = (state.blockedLevels ?? []).filter((item) => now < item.until);
+  const isBlocked = (level: number) => blocked.find((item) => Math.abs(item.level - level) <= level * 0.0002) ?? null;
+  const agreeing = (evaluation.strategies ?? []).filter((item) => item.direction === side);
+  const usable = agreeing.filter((item) => !isBlocked(item.level));
+  if (agreeing.length && !usable.length) {
+    const block = isBlocked(agreeing[0].level)!;
+    reasons.push(`Level ${agreeing[0].level.toFixed(2)} was stopped out recently: not traded again until ${istClock(block.until)} IST.`);
+  }
+  const entryEvaluation: CandleEvaluation = usable.length && usable.length !== agreeing.length ? { ...evaluation, strategies: usable } : evaluation;
   if (!Number.isInteger(config.lots) || config.lots < 1) reasons.push("Quantity must be a whole number of lots.");
   if (reasons.length) return reject(state, evaluation.time, key, reasons, log);
 
@@ -334,7 +372,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   }
   const label = `ATM ${side} ${contract.strike} ${contract.expiry}`;
   if (fill.status === "FILLED" || fill.status === "PARTIAL") {
-    openPosition(state, { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false, setup: setupOf(evaluation, side) }, fill, input);
+    openPosition(state, { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false, setup: setupOf(entryEvaluation, side) }, fill, input);
     const position = state.position!;
     const message = `${label} selected. Entry accepted: ${fill.quantity} @ ₹${fill.price}${fill.status === "PARTIAL" ? ` (partial fill of ${quantity})` : ""}. Stop ₹${position.stop}, target ₹${position.target}.`;
     state.lastOrder = { time: now, status: fill.status, message };
@@ -342,7 +380,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     return { ok: true, message: `${label} selected. Entry accepted.` };
   }
   if (fill.status === "PENDING" || fill.status === "UNKNOWN") {
-    state.pending = { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: fill.status === "UNKNOWN", setup: setupOf(evaluation, side) };
+    state.pending = { key, contract: ref, side, lots: config.lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: fill.status === "UNKNOWN", setup: setupOf(entryEvaluation, side) };
     if (fill.status === "UNKNOWN") state.recovery = `The ${label} entry may or may not have been placed (${fill.reason}). It is being reconciled; it will not be re-sent.`;
     const message = fill.status === "UNKNOWN" ? `${label}: order outcome unknown; reconciling before any retry.` : `${label}: order pending.`;
     state.lastOrder = { time: now, status: fill.status, message };
@@ -424,7 +462,17 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
     return;
   }
   const trigger = mark.candle ? candleExit(mark.candle, position.stop, position.target) : mark.bid != null ? quoteExit(mark.bid, position.stop, position.target) : null;
-  if (trigger) await startExit(state, input, trigger.reason, trigger, log);
+  if (trigger) {
+    await startExit(state, input, trigger.reason, trigger, log);
+    return;
+  }
+  // Structure stop: the index closed back through the level the trade was entered on (the setup failed).
+  const setup = position.setup;
+  if (!input.config.structureStop || !setup || mark.bid == null) return;
+  const last = input.candles.filter((candle) => candle.time + 60 <= input.now && candle.time + 60 > setup.entryTime && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).at(-1);
+  if (!last) return;
+  const back = setup.direction === "CALL" ? last.close < setup.level : last.close > setup.level;
+  if (back) await startExit(state, input, "STRUCTURE", { price: mark.bid, note: `Index closed at ${last.close.toFixed(2)}, back ${setup.direction === "CALL" ? "below" : "above"} the broken level ${setup.level.toFixed(2)}` }, log);
 }
 
 /** Exits the remaining open quantity (stop, target, a manual exit, an opposite signal or an emergency). */
@@ -465,13 +513,18 @@ function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, {
   position.quantity -= quantity;
   position.entryCharges -= entryCharges;
   const key = position.exit?.key ?? `${position.entryKey}:exit:${position.exitAttempts}`;
-  const message = `Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note}` : ""}. Realized ₹${pnl}${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
+  const message = `Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note.replace(/\.$/, "")}` : ""}. Realized ₹${pnl}${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
   log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, stop: position.stop, target: position.target });
   state.lastOrder = { time: input.now, status: position.quantity > 0 ? "PARTIAL" : "COMPLETED", message };
   if (position.quantity > 0) {
     // Partially closed: the rest is exited again on the next check (a new key: the first exit is known).
     position.exit = null;
   } else {
+    // Level-block filter: a level that stopped a trade out is not traded again for a while.
+    const minutes = { ...ALGO_DEFAULTS.filters, ...input.config.filters }.levelBlockMinutes;
+    if ((reason === "STOP" || reason === "STRUCTURE") && position.setup && minutes > 0) {
+      state.blockedLevels = [...(state.blockedLevels ?? []).filter((item) => input.now < item.until), { level: position.setup.level, until: input.now + minutes * 60 }].slice(-10);
+    }
     state.position = null;
     state.recovery = null;
   }
@@ -497,7 +550,13 @@ function deriveStatus(state: AlgoState): AlgoStatus {
 function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
   const { config } = input;
   const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
-  const lineDirection: Direction | null = enabled.line && (line.decision === "CALL" || line.decision === "PUT") ? line.decision : null;
+  const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
+  // Breakout buffer: a line counts only when the close is clearly beyond it.
+  const clearOf = (price: number) => (Math.abs(line.candle.close - price) / price) * 100 >= filters.breakoutBufferPercent;
+  const rawLine: Direction | null = enabled.line && (line.decision === "CALL" || line.decision === "PUT") ? line.decision : null;
+  const clearCrossings = rawLine ? line.events.filter((event) => (event.direction === "DOWN") === (rawLine === "PUT") && clearOf(event.price)) : [];
+  const lineDirection: Direction | null = rawLine && clearCrossings.length ? rawLine : null;
+  const thinLine = rawLine && !lineDirection ? `Line ${rawLine === "CALL" ? "crossed up" : "crossed down"} by less than the ${filters.breakoutBufferPercent}% breakout buffer: not counted.` : "";
   const previous = state.analysis?.strategies.line.lastSignal ?? null;
   const { analysis, signals } = analyzeMarket({
     candles,
@@ -520,12 +579,16 @@ function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInp
   state.analysis = analysis;
   const all: StrategySignal[] = [...signals];
   if (lineDirection) {
-    const crossed = line.events.filter((event) => (event.direction === "DOWN") === (lineDirection === "PUT"));
-    const level = crossed[0]?.price ?? line.candle.close;
+    const level = clearCrossings[0]?.price ?? line.candle.close;
     all.unshift({ id: `line:${lineDirection}:${line.time}`, strategy: "line", direction: lineDirection, time: line.time, trigger: line.candle.close, level, invalidation: level, reason: line.explanation, volume: "NOT_REQUIRED" });
   }
-  if (line.decision === "CONFLICTING_SIGNAL" && enabled.line) return { ...line, strategies: all };
+  if (line.decision === "CONFLICTING_SIGNAL" && enabled.line) {
+    state.awaiting = null;
+    return { ...line, strategies: all };
+  }
   const directions = new Set(all.map((item) => item.direction));
+  if (filters.secondCandle) return secondCandle(line, all, directions, thinLine, input, state);
+  if (thinLine && !all.length) return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: thinLine };
   if (directions.size > 1) {
     return { ...line, strategies: all, decision: "CONFLICTING_SIGNAL", explanation: `Conflicting signals: ${all.map((item) => `${STRATEGY_LABEL[item.strategy]} ${item.direction}`).join(", ")}. Conflict policy: no entry.` };
   }
@@ -569,4 +632,39 @@ async function confirm(state: AlgoState, input: AdvanceInput, log: (event: Omit<
     log({ key: `confirm:${position.entryKey}:${item.category}:${item.status}:${input.now}`, kind: "INFO", message: `${item.label}: ${item.status}. ${item.why}` });
   }
   state.confirmations = next;
+}
+
+/**
+ * Second-candle filter: a signal does not enter on its own candle. It waits, and the next candle enters
+ * only if it also closes beyond the signal's level (by the breakout buffer); otherwise it lapses. A signal
+ * from the observation window never waits into the trading window.
+ */
+function secondCandle(line: CandleEvaluation, all: StrategySignal[], directions: Set<Direction>, thinLine: string, input: AdvanceInput, state: AlgoState): CandleEvaluation {
+  const { config } = input;
+  const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
+  const waiting = state.awaiting ?? null;
+  state.awaiting = null;
+  const notes: string[] = [];
+  if (waiting && line.time === waiting.time + 60) {
+    const primary = waiting.signals[0];
+    // The confirming candle's whole body (open and close) stays beyond the level, by the buffer at the close.
+    const beyond = waiting.direction === "CALL"
+      ? line.candle.close > primary.level * (1 + filters.breakoutBufferPercent / 100) && line.candle.open > primary.level
+      : line.candle.close < primary.level * (1 - filters.breakoutBufferPercent / 100) && line.candle.open < primary.level;
+    const opposite = directions.size === 1 && !directions.has(waiting.direction);
+    if (beyond && !opposite) {
+      const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
+      return { ...line, strategies: waiting.signals, decision: waiting.direction, explanation: `Second candle confirmed: closed at ${line.candle.close.toFixed(2)}, still ${waiting.direction === "CALL" ? "above" : "below"} ${primary.level.toFixed(2)}. ${names}: ${waiting.direction === "CALL" ? "bullish" : "bearish"} signal from ${istClock(waiting.time)}.` };
+    }
+    notes.push(`The ${istClock(waiting.time)} ${waiting.direction} signal was not confirmed: this candle closed at ${line.candle.close.toFixed(2)}${opposite ? " with an opposite signal" : `, not beyond ${primary.level.toFixed(2)}`}.`);
+  }
+  if (directions.size > 1) return { ...line, strategies: all, decision: "CONFLICTING_SIGNAL", explanation: `${notes.join(" ")} Conflicting signals: ${all.map((item) => `${STRATEGY_LABEL[item.strategy]} ${item.direction}`).join(", ")}. Conflict policy: no entry.`.trim() };
+  if (directions.size === 1) {
+    const direction = all[0].direction;
+    const names = all.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
+    const observing = line.time + 60 < dayStart(input.sessionDate) + config.observationMinutes * 60;
+    if (!observing) state.awaiting = { direction, signals: all, time: line.time };
+    return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: `${notes.join(" ")} ${names}: ${direction === "CALL" ? "bullish" : "bearish"} signal at ${all[0].level.toFixed(2)}${observing ? " during the observation window: not carried forward." : " — waiting for the next candle to confirm it."}`.trim() };
+  }
+  return { ...line, strategies: all, decision: line.decision === "CALL" || line.decision === "PUT" ? "NO_SIGNAL" : line.decision, explanation: [...notes, thinLine, line.decision === "CALL" || line.decision === "PUT" ? "" : line.explanation].filter(Boolean).join(" ") || line.explanation };
 }

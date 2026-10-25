@@ -7,6 +7,7 @@ import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
+import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
@@ -239,6 +240,13 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           ))}
           <Field label="Observation (minutes)"><NumberInput value={draft.observationMinutes} step={1} min={0} onChange={(observationMinutes) => set({ observationMinutes })} /></Field>
           <p className="text-micro text-muted">No new entries in the first {Number.isFinite(draft.observationMinutes) ? draft.observationMinutes : "—"} minutes after 09:15: the opening is analysed only.</p>
+          <p className="eyebrow pt-2">Trade filters</p>
+          <Field label="Breakout buffer (%)"><NumberInput value={draft.filters.breakoutBufferPercent} step={0.01} min={0} onChange={(breakoutBufferPercent) => set({ filters: { ...draft.filters, breakoutBufferPercent } })} /></Field>
+          <p className="text-micro text-muted">A line break counts only when the candle body crosses the line and closes at least this far beyond it (0.03% ≈ 7 NIFTY points).</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Second-candle confirmation</span><input type="checkbox" className="oc-check" aria-label="Second-candle confirmation" checked={draft.filters.secondCandle} onChange={(event) => set({ filters: { ...draft.filters, secondCandle: event.target.checked } })} /></label>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
+          <Field label="Block a level after a stop (min)"><NumberInput value={draft.filters.levelBlockMinutes} step={5} min={0} onChange={(levelBlockMinutes) => set({ filters: { ...draft.filters, levelBlockMinutes } })} /></Field>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Structure stop (index back through the level)</span><input type="checkbox" className="oc-check" aria-label="Structure stop" checked={draft.structureStop} onChange={(event) => set({ structureStop: event.target.checked })} /></label>
           <p className="eyebrow pt-2">Trendline / W / M settings</p>
           <Field label="Swing sensitivity (candles)"><NumberInput value={draft.patterns.pivotStrength} step={1} min={1} onChange={(pivotStrength) => set({ patterns: { ...draft.patterns, pivotStrength } })} /></Field>
           <Field label="Min. bottoms / tops apart"><NumberInput value={draft.patterns.minSeparation} step={1} min={2} onChange={(minSeparation) => set({ patterns: { ...draft.patterns, minSeparation } })} /></Field>
@@ -285,6 +293,8 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <p className="text-micro text-muted">Changes apply after Save settings.</p>
         </div>
       </details>
+
+      <MultiDayBacktest disabled={dirty ? "Save the settings first: the backtest uses your saved settings." : data.problems.length ? data.problems.join(" ") : null} />
 
       {/* Historical replay */}
       {draft.mode === "REPLAY" ? (

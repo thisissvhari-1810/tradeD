@@ -69,7 +69,8 @@ export function runStats(events: AlgoEvent[]): RunStats {
     const decision = event.evaluation?.decision;
     if (decision === "CALL" || decision === "PUT") stats.signals += 1;
     if (event.kind === "ENTRY") stats.accepted += 1;
-    if (event.kind === "REJECTED") stats.rejected += 1;
+    // One per rejected signal: the candle's evaluation (its "reject:" twin carries the same reasons).
+    if (event.kind === "REJECTED" && !event.key.startsWith("reject:")) stats.rejected += 1;
     if (event.kind === "EXIT" && event.pnl != null) {
       stats.realized = Math.round((stats.realized + event.pnl) * 100) / 100;
       peak = Math.max(peak, stats.realized);
@@ -96,6 +97,7 @@ export const EXIT_LABEL: Record<string, string> = {
   EMERGENCY: "Emergency stop",
   SESSION_END: "Session end",
   SESSION_CLOSED: "Replay session closed",
+  STRUCTURE: "Setup invalidated",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
 };

@@ -89,10 +89,15 @@ export function algoReportCsv(report: AlgoReportInput): string {
 
   lines.push(row(["FULL FLOW"]));
   lines.push(row(["Time (IST)", "Event", "Trade", "Side", "Strategy", "Candle open", "Candle high", "Candle low", "Candle close", "Option", "Order", "Quantity", "Premium", "P&L", "Details"]));
-  const ordered = [...report.events].sort((a, b) => a.time - b.time);
+  // In the order things happened: by the time shown (a candle's check at its close, an entry at its fill),
+  // and within one minute: the candle's check, then the order, the exit and the confirmations.
+  const shownTime = (event: AlgoEvent) => (event.kind === "ENTRY" ? entryFillTime(event) : event.key.startsWith("eval:") ? event.time + 60 : event.time);
+  const step = (event: AlgoEvent) => (event.key.startsWith("eval:") ? 0 : event.kind === "ENTRY" ? 1 : event.kind === "EXIT" ? 2 : event.key.startsWith("confirm:") ? 3 : 4);
+  // A rejected signal is one row (its candle's evaluation carries every reason).
+  const ordered = report.events.filter((event) => !event.key.startsWith("reject:")).map((event, index) => ({ event, index })).sort((a, b) => shownTime(a.event) - shownTime(b.event) || step(a.event) - step(b.event) || a.index - b.index).map((item) => item.event);
   for (const event of ordered) {
     const evaluation = event.evaluation;
-    const time = event.kind === "ENTRY" ? entryFillTime(event) : event.key.startsWith("eval:") ? event.time + 60 : event.time;
+    const time = shownTime(event);
     const strategies = evaluation?.strategies?.map((item) => STRATEGY_LABEL[item.strategy]).join("; ") ?? (event.setup ? STRATEGY_LABEL[event.setup.strategy] : "");
     const side = event.side ?? (evaluation?.decision === "CALL" || evaluation?.decision === "PUT" ? evaluation.decision : "");
     const trade = numberOf(event.order?.key ?? confirmationEntryKey(event.key));

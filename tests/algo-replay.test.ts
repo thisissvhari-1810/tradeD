@@ -207,7 +207,8 @@ function premiums(shape: (index: number) => { low: number; high: number; close: 
   return tape;
 }
 
-const config: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0 };
+// The engine's replay tests run with the entry filters and the structure stop off; the filters have their own tests.
+const config: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
 
 async function run(candles: Candle[], options: { state?: AlgoState; processedThrough?: number; cursor: number; config?: AlgoConfig }) {
   return stepChartRun({
@@ -1310,5 +1311,94 @@ describe("the first 30 minutes are for reading the market", () => {
     expect(rejected?.reasons?.join(" ")).toMatch(/Observation period: the first 30 minutes \(to 09:45 IST\) are analysis only/);
     const later = await run(underlying("DOWN", 30), { cursor: m(40), config: { ...config, observationMinutes: 30 } });
     expect(later.state.position).not.toBeNull();
+  });
+});
+
+describe("trade filters and the structure stop (against false breaks and whipsaws)", () => {
+  /** Candles from closes (open = previous close; a one-point wick each side). Index 0 opens at its close. */
+  function fromCloses(closes: number[]): Candle[] {
+    return closes.map((close, index) => {
+      const open = index === 0 ? close : closes[index - 1];
+      return { time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 0 };
+    });
+  }
+  /** 375 closes: `base` everywhere except the given minute → close overrides. */
+  function day(base: number, overrides: Record<number, number>): Candle[] {
+    let last = base;
+    return fromCloses(Array.from({ length: 375 }, (_, index) => {
+      if (index in overrides) last = overrides[index];
+      return last;
+    }));
+  }
+  const only = (patch: Partial<AlgoConfig["filters"]> = {}, structureStop = false): AlgoConfig => ({ ...config, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false, ...patch }, structureStop });
+
+  it("breakout buffer: a close 2 points past the line is not a break; 10 points past it is", async () => {
+    await run(day(LINE + 10, { 30: LINE - 2 }), { cursor: m(40), config: only({ breakoutBufferPercent: 0.03 }) });
+    expect(db.state.orders).toHaveLength(0);
+    const clear = await run(day(LINE + 10, { 30: LINE - 10 }), { cursor: m(40), config: only({ breakoutBufferPercent: 0.03 }) });
+    expect(clear.state.position?.side).toBe("PUT");
+  });
+
+  it("second candle: enters on the next candle only when its whole body stays beyond the line", async () => {
+    const confirmed = await run(day(LINE + 10, { 30: LINE - 10, 31: LINE - 15 }), { cursor: m(40), config: only({ secondCandle: true }) });
+    const entry = confirmed.events.find((event) => event.kind === "ENTRY");
+    expect(entry?.time).toBe(m(31));
+    expect(confirmed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/^Second candle confirmed/);
+  });
+
+  it("second candle: a signal whose next candle comes back is dropped (no trade)", async () => {
+    // The next candle closes back on the line (not beyond it, and not a new crossing either).
+    const failed = await run(day(LINE + 10, { 30: LINE - 10, 31: LINE }), { cursor: m(40), config: only({ secondCandle: true }) });
+    expect(db.state.orders).toHaveLength(0);
+    expect(failed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/signal was not confirmed/);
+  });
+
+  it("momentum: a PUT against a rising 9 / 21 EMA is rejected with the reason", async () => {
+    // A steady rise for 30 minutes, then one candle closing just below the line.
+    const rising: Record<number, number> = {};
+    for (let index = 0; index < 30; index += 1) rising[index] = LINE - 60 + index * 3;
+    rising[29] = LINE + 5;
+    rising[30] = LINE - 5;
+    const result = await run(day(LINE, rising), { cursor: m(40), config: only({ momentum: true }) });
+    expect(db.state.orders).toHaveLength(0);
+    expect(result.events.find((event) => event.key === `eval:${m(30)}`)?.reasons?.join(" ")).toMatch(/Momentum against the signal/);
+  });
+
+  it("level block: after a stop on a line, the same line is not traded again for 15 minutes", async () => {
+    // PUT at 30 is stopped at 33; the line is crossed up at 40 (blocked) and down again at 60 (allowed).
+    feed.premiums = premiums((index) => (index === 33 ? { low: 60, high: 100, close: 70 } : null));
+    const result = await run(day(LINE + 10, { 30: LINE - 10, 40: LINE + 10, 60: LINE - 10 }), { cursor: m(70), config: only({ levelBlockMinutes: 15 }) });
+    expect(result.events.find((event) => event.key === `eval:${m(40)}`)?.reasons?.join(" ")).toMatch(/was stopped out recently: not traded again until 10:04 IST/);
+    expect(buys()).toHaveLength(2);
+    expect(algoTrades(result.events, null).map((trade) => trade.side)).toEqual(["PUT", "PUT"]);
+  });
+
+  it("structure stop: exits when the index closes back through the broken line, at the option's price", async () => {
+    const result = await run(day(LINE + 10, { 30: LINE - 10, 35: LINE + 10 }), { cursor: m(40), config: only({}, true) });
+    const exit = result.events.find((event) => event.kind === "EXIT");
+    expect(exit?.message).toMatch(/^Exit \(STRUCTURE\).*Index closed at 23160\.00, back above the broken level 23150\.00/);
+    expect(exit?.time).toBe(m(36));
+    expect(algoTrades(result.events, null)[0].exitReason).toBe("Setup invalidated");
+  });
+
+  it("your losing day: a line crossed up, down and up within minutes gives at most one trade with the defaults", async () => {
+    // Like 22 Oct: up at 31, down at 32, up at 34, down at 35 around one line, each by ~12 points.
+    const chop = day(LINE - 12, { 31: LINE + 12, 32: LINE - 12, 34: LINE + 12, 35: LINE - 12, 37: LINE + 12, 38: LINE - 12 });
+    // Each trade's option premium dips through its stop the minute after entry (as on your day).
+    feed.premiums = premiums((index) => ([32, 33, 35, 36, 38, 39].includes(index) ? { low: 60, high: 100, close: 100 } : null));
+    await run(chop, { cursor: m(60), config: { ...config, filters: ALGO_DEFAULTS.filters, structureStop: true } });
+    expect(buys().length).toBeLessThanOrEqual(1);
+    // Without the filters the same minutes trade three times (the losses you saw).
+    Object.assign(db.state, { accounts: [{ id: "acc1", userId: "u1", mode: "ALGO", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n }], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], periods: [], seq: 0 });
+    await run(chop, { cursor: m(60), config: { ...only(), maxTrades: 3 } });
+    expect(buys().length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("old saved settings: a 5% / 10% stop and target become 20% / 40% once; later choices are kept", () => {
+    const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2 });
+    expect([old.stop.value, old.target.value, old.structureStop]).toEqual([20, 40, true]);
+    expect(old.filters).toEqual(ALGO_DEFAULTS.filters);
+    const chosen = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 3 });
+    expect([chosen.stop.value, chosen.target.value]).toEqual([5, 10]);
   });
 });

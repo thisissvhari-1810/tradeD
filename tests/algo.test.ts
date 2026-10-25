@@ -93,7 +93,8 @@ function fakeAdapter(options: { cash?: number; bid?: number | null; candle?: Mar
 }
 
 const running = (patch: Partial<AlgoState> = {}): AlgoState => ({ ...initialState(DATE), running: true, entries: true, lastCandle: at(29), ...patch });
-const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, cooldownMinutes: 0, ...patch });
+// The core engine's tests run with the entry filters and the structure stop off (they have their own tests).
+const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false, ...patch });
 
 async function step(state: AlgoState, candles: Candle[], adapter: ReturnType<typeof fakeAdapter>, now = candles.at(-1)!.time + 60, cfg = config(), useLines = lines) {
   adapter.tick(now);
@@ -415,7 +416,8 @@ describe("execution modes", () => {
   const server = readFileSync(join(process.cwd(), "src/server/algo.ts"), "utf8");
 
   it("historical replay only ever uses the replay adapter", () => {
-    const replay = server.slice(server.indexOf("async function runReplay"));
+    // The day simulation shared by the quick backtest and the multi-day backtest.
+    const replay = server.slice(server.indexOf("async function simulateDay"), server.indexOf("async function runReplay"));
     expect(replay).toMatch(/replayAdapter\(/);
     expect(replay).not.toMatch(/paperAdapter\(|liveAdapter\(|callWorker|placeLiveOrder/);
     expect(replay).toMatch(/if \(adapter\.kind !== "replay"\) throw/);

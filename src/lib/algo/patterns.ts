@@ -217,7 +217,9 @@ function breakoutOn(candles: Candle[], from: number, direction: Direction, level
     const level = levelAt(index);
     if (broken == null) {
       if (failed(candle.close)) return { signal: false, state: "INVALIDATED", breakoutIndex: null };
-      const wasInside = direction === "CALL" ? previous.close <= levelAt(index - 1) : previous.close >= levelAt(index - 1);
+      // A body crossing: the previous close and this candle's open on the inside, its close beyond the level
+      // (a wick through it, or a gap that opens beyond it, is not a breakout).
+      const wasInside = direction === "CALL" ? previous.close <= levelAt(index - 1) && candle.open <= level : previous.close >= levelAt(index - 1) && candle.open >= level;
       if (wasInside && beyond(candle.close, level)) {
         broken = index;
         if (!settings.retest) return { signal: index === last, state: index === last ? "TRIGGERED" : "BROKEN", breakoutIndex: index };

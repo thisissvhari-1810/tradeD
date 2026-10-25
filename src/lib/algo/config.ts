@@ -29,8 +29,10 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     mode: row.mode === "REPLAY" || row.mode === "LIVE" || row.mode === "PAPER" ? row.mode : ALGO_DEFAULTS.mode,
     expiry: typeof row.expiry === "string" && (row.expiry === "nearest" || /^\d{4}-\d{2}-\d{2}$/.test(row.expiry)) ? row.expiry : "nearest",
     lots: Number.isFinite(num(row.lots)) ? num(row.lots) : ALGO_DEFAULTS.lots,
-    stop: protective(row.stop, ALGO_DEFAULTS.stop),
-    target: protective(row.target, ALGO_DEFAULTS.target),
+    // Settings from before version 3 with a premium stop under 20% / target under 40% (too tight for 1-minute
+    // ATM options) move to 20% / 40% once, with the structure stop; later choices are kept.
+    stop: upgrade(protective(row.stop, ALGO_DEFAULTS.stop), row, 20),
+    target: upgrade(protective(row.target, ALGO_DEFAULTS.target), row, 40),
     maxDailyLoss: Number.isFinite(num(row.maxDailyLoss)) ? num(row.maxDailyLoss) : ALGO_DEFAULTS.maxDailyLoss,
     maxTrades: Number.isFinite(num(row.maxTrades)) ? num(row.maxTrades) : ALGO_DEFAULTS.maxTrades,
     cooldownMinutes: Number.isFinite(num(row.cooldownMinutes)) ? num(row.cooldownMinutes) : ALGO_DEFAULTS.cooldownMinutes,
@@ -50,7 +52,25 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !Number.isFinite(num(row.observationMinutes)) || (num(row.settingsVersion) !== 2 && num(row.observationMinutes) === 15) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
+    filters: filtersOf(row.filters),
+    structureStop: typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
     patterns: patternsOf(row.patterns),
+  };
+}
+
+function upgrade(value: Protective, row: Raw, floor: number): Protective {
+  if (num(row.settingsVersion) >= 3 || value.mode !== "percent" || value.value >= floor) return value;
+  return { mode: "percent", value: floor };
+}
+
+function filtersOf(value: unknown): AlgoConfig["filters"] {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const fallback = ALGO_DEFAULTS.filters;
+  return {
+    levelBlockMinutes: Number.isFinite(num(row.levelBlockMinutes)) ? num(row.levelBlockMinutes) : fallback.levelBlockMinutes,
+    breakoutBufferPercent: Number.isFinite(num(row.breakoutBufferPercent)) ? num(row.breakoutBufferPercent) : fallback.breakoutBufferPercent,
+    secondCandle: typeof row.secondCandle === "boolean" ? row.secondCandle : fallback.secondCandle,
+    momentum: typeof row.momentum === "boolean" ? row.momentum : fallback.momentum,
   };
 }
 
@@ -95,6 +115,8 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(pattern.tolerancePercent > 0 && pattern.tolerancePercent <= 2)) problems.push("The double-bottom / top tolerance must be above 0% and at most 2%.");
   if (!(pattern.minBreakPercent >= 0 && pattern.minBreakPercent <= 1)) problems.push("The minimum breakout distance must be 0% to 1%.");
   if (!Number.isInteger(pattern.retestBars) || pattern.retestBars < 1 || pattern.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
+  if (!Number.isInteger(config.filters.levelBlockMinutes) || config.filters.levelBlockMinutes < 0 || config.filters.levelBlockMinutes > 240) problems.push("The level block after a stop must be 0 to 240 minutes.");
+  if (!(config.filters.breakoutBufferPercent >= 0 && config.filters.breakoutBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
   return problems;
 }
 
