@@ -26,8 +26,11 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   const custom = Array.isArray(row.custom) ? row.custom : [];
   // Settings saved before version 4 move once to the early-session strategy: entries 09:15–10:30 with no
   // observation wait, risk-based sizing (₹500 a trade, ₹1,500 a day on ₹1,00,000) and up to 10 lots.
-  const early = num(row.settingsVersion) >= 4;
   const time = (value: unknown, fallback: string) => (typeof value === "string" && /^(09|1[0-5]):[0-5]\d$/.test(value) ? value : fallback);
+  const early = num(row.settingsVersion) >= 4;
+  // Version 5 widens the entry window to 12:00: a saved 10:30 (the version 4 default) moves once.
+  const savedCutoff = time(row.entryCutoff, ALGO_DEFAULTS.entryCutoff);
+  const cutoff = num(row.settingsVersion) >= 5 || savedCutoff !== "10:30" ? savedCutoff : ALGO_DEFAULTS.entryCutoff;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -53,7 +56,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     maxSpreadPercent: Number.isFinite(num(row.maxSpreadPercent)) ? num(row.maxSpreadPercent) : ALGO_DEFAULTS.maxSpreadPercent,
     slippageTicks: Number.isFinite(num(row.slippageTicks)) ? num(row.slippageTicks) : ALGO_DEFAULTS.slippageTicks,
     entryStart: time(row.entryStart, ALGO_DEFAULTS.entryStart),
-    entryCutoff: early ? time(row.entryCutoff, ALGO_DEFAULTS.entryCutoff) : ALGO_DEFAULTS.entryCutoff,
+    entryCutoff: early ? cutoff : ALGO_DEFAULTS.entryCutoff,
     windowExit: row.windowExit === "close" ? "close" : "hold",
     sizing: !early ? "risk" : row.sizing === "fixed" ? "fixed" : "risk",
     risk: riskOf(row.risk),
@@ -75,7 +78,7 @@ function upgrade(value: Protective, row: Raw, floor: number): Protective {
 
 function riskOf(value: unknown): RiskSettings {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
-  const pick = (key: Exclude<keyof RiskSettings, "stopAtTarget">) => (Number.isFinite(num(row[key])) ? num(row[key]) : RISK_DEFAULTS[key]);
+  const pick = (key: Exclude<keyof RiskSettings, "stopAtTarget" | "targetMode">) => (Number.isFinite(num(row[key])) ? num(row[key]) : RISK_DEFAULTS[key]);
   return {
     capital: pick("capital"),
     perTradePercent: pick("perTradePercent"),
@@ -83,6 +86,7 @@ function riskOf(value: unknown): RiskSettings {
     stopAtTarget: typeof row.stopAtTarget === "boolean" ? row.stopAtTarget : RISK_DEFAULTS.stopAtTarget,
     minRewardRisk: pick("minRewardRisk"),
     minStopPercent: pick("minStopPercent"),
+    targetMode: row.targetMode === "level" || row.targetMode === "trail" ? row.targetMode : "multiple",
   };
 }
 
@@ -115,6 +119,10 @@ function patternsOf(value: unknown): PatternSettings {
     volume: typeof row.volume === "boolean" ? row.volume : PATTERN_DEFAULTS.volume,
     orbMinutes: pick("orbMinutes"),
     zoneTolerancePercent: pick("zoneTolerancePercent"),
+    breakMode: row.breakMode === "intrabar" ? "intrabar" : "close",
+    bufferMode: row.bufferMode === "points" || row.bufferMode === "atr" ? row.bufferMode : "percent",
+    bufferValue: pick("bufferValue"),
+    trendStop: row.trendStop === "line" ? "line" : "swing",
   };
 }
 
@@ -154,6 +162,9 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!Number.isInteger(pattern.retestBars) || pattern.retestBars < 1 || pattern.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
   if (!Number.isInteger(pattern.orbMinutes) || pattern.orbMinutes < 1 || pattern.orbMinutes > 60) problems.push("The opening range must be 1 to 60 minutes.");
   if (!(pattern.zoneTolerancePercent >= 0 && pattern.zoneTolerancePercent <= 1)) problems.push("The support / resistance zone tolerance must be 0% to 1%.");
+  const bufferLimit = pattern.bufferMode === "points" ? 200 : pattern.bufferMode === "atr" ? 5 : 1;
+  if (!(pattern.bufferValue >= 0 && pattern.bufferValue <= bufferLimit)) problems.push(`The trendline breakout buffer must be 0 to ${bufferLimit}${pattern.bufferMode === "points" ? " points" : pattern.bufferMode === "atr" ? "× the average range" : "%"}.`);
+  if (pattern.breakMode === "intrabar" && config.mode === "LIVE") problems.push("Intrabar breakout detection is for paper trading and replay only; live trading needs candle-close confirmation.");
   if (!Number.isInteger(config.filters.levelBlockMinutes) || config.filters.levelBlockMinutes < 0 || config.filters.levelBlockMinutes > 240) problems.push("The level block after a stop must be 0 to 240 minutes.");
   if (!(config.filters.breakoutBufferPercent >= 0 && config.filters.breakoutBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
   return problems;

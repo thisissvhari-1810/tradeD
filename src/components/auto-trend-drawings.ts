@@ -32,8 +32,18 @@ export function autoTrendDrawings(trend: AutoTrend | null, settings: AutoTrendSe
 
 /** Small dots on the swing points the drawn lines and levels use; a provisional swing in the muted color. */
 export function autoTrendMarkers(trend: AutoTrend | null, settings: AutoTrendSettings, muted: string): ChartMarker[] {
-  if (!trend || trend.phase !== "ACTIVE" || !settings.markers) return [];
+  if (!trend || trend.phase !== "ACTIVE") return [];
   const markers = new Map<string, ChartMarker>();
+  // Breakout / breakdown arrows at the candle whose close broke a line.
+  if (settings.breaks && settings.trendlines) {
+    for (const line of trend.brokenLines) {
+      if (!line.broken) continue;
+      const up = line.kind === "RESISTANCE";
+      const id = `auto:break:${line.id}`;
+      markers.set(id, { id, time: line.broken.time, position: up ? "belowBar" : "aboveBar", shape: up ? "arrowUp" : "arrowDown", color: up ? settings.colors.support : settings.colors.resistance, text: "", size: 0.7 });
+    }
+  }
+  if (!settings.markers) return [...markers.values()];
   const add = (swing: Swing, color: string, size = 0.5) => {
     const id = `auto:swing:${swing.kind}:${swing.time}`;
     if (!markers.has(id)) markers.set(id, { id, time: swing.time, position: swing.kind === "HIGH" ? "aboveBar" : "belowBar", shape: "circle", color, text: "", size });

@@ -154,11 +154,13 @@ function Totals({ title, totals }: { title: string; totals: BacktestTotals }) {
         <Cell label="Trades (W/L)" value={`${totals.trades} (${totals.wins}/${totals.losses})`} />
         <Cell label="Win rate" value={totals.winRate == null ? "—" : `${totals.winRate}%`} />
         <Cell label="Profit factor" value={totals.profitFactor == null ? "—" : String(totals.profitFactor)} />
+        <Cell label="Avg trade" value={inr(totals.averageTrade)} />
         <Cell label="Avg win" value={inr(totals.averageWin)} />
         <Cell label="Avg loss" value={inr(totals.averageLoss)} />
         <Cell label="Avg R" value={totals.averageR == null ? "—" : `${totals.averageR}R`} />
         <Cell label="Max drawdown" value={`₹${totals.maxDrawdown.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`} />
         <Cell label="Losing streak" value={String(totals.maxConsecutiveLosses)} />
+        <Cell label="False breakouts" value={totals.falseBreakouts == null ? "—" : `${totals.falseBreakouts}%`} />
         <Cell label="Trades / day" value={totals.tradesPerDay == null ? "—" : String(totals.tradesPerDay)} />
         <Cell label="No-trade days" value={totals.noTradeDays == null ? "—" : `${totals.noTradeDays}%`} />
         <Cell label="Target days" value={totals.targetDays == null ? "—" : `${totals.targetDays}%`} />

@@ -842,11 +842,11 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const liveAnalysis = useLiveAlgoAnalysis({ enabled: !replay.active && !optionView && !live && canPaperTrade, symbol });
   const analysisNow = replay.active ? (algoRun && algoRun.underlying === symbol ? algoRun.state.analysis ?? null : null) : liveAnalysis;
   const algoAnalysis = analysisNow && (!replay.active || replay.cursor == null || analysisNow.asOf <= replay.cursor + 60) ? analysisNow : null;
-  const algoDrawings = useMemo(() => algoAnalysisDrawings(algoAnalysis, { trendline: desk.appearance.tokens.info, neckline: desk.appearance.tokens.warning }), [algoAnalysis, desk.appearance.tokens]);
+  const algoDrawings = useMemo(() => algoAnalysisDrawings(algoAnalysis, { trendline: desk.appearance.tokens.info, neckline: desk.appearance.tokens.warning, resistance: desk.appearance.tokens.loss, support: desk.appearance.tokens.profit }), [algoAnalysis, desk.appearance.tokens]);
   // The automatic trendline engine on this chart's own candles and timeframe. The forming candle is never
   // analysed: in replay the last candle until the replay clock passes its close, live while the market is
   // open. Drawings and markers are rebuilt only when their content changes (not on every tick).
-  const autoTrendOn = autoTrend.trendlines || autoTrend.levels || autoTrend.markers;
+  const autoTrendOn = autoTrend.trendlines || autoTrend.levels || autoTrend.markers || autoTrend.breaks;
   const spanSeconds = INTRADAY_SECONDS[timeframe] ?? null;
   const lastShown = shown.at(-1) ?? null;
   const formingCandle = !lastShown ? false : replay.active && !optionView ? (spanSeconds == null || replay.cursor == null ? true : lastShown.time + spanSeconds > replay.cursor) : Boolean(quote?.marketOpen);

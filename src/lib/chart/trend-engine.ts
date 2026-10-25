@@ -19,6 +19,8 @@ export type AutoTrendSettings = {
   levels: boolean;
   /** Small markers on the swing points the lines and levels use. */
   markers: boolean;
+  /** An arrow where a trendline broke (up for a breakout, down for a breakdown). */
+  breaks: boolean;
   /** Candles on each side that a swing must stand above (high) or below (low). */
   left: number;
   right: number;
@@ -39,6 +41,7 @@ export const AUTO_TREND_DEFAULTS: AutoTrendSettings = {
   trendlines: true,
   levels: true,
   markers: true,
+  breaks: true,
   left: 3,
   right: 3,
   minSwingAtr: 1,
@@ -140,7 +143,7 @@ const clampNum = (value: number, [min, max]: readonly [number, number], fallback
 export function readAutoTrendSettings(raw: unknown): AutoTrendSettings {
   const row = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const num = (key: string) => (typeof row[key] === "number" ? (row[key] as number) : NaN);
-  const flag = (key: "trendlines" | "levels" | "markers") => (typeof row[key] === "boolean" ? (row[key] as boolean) : AUTO_TREND_DEFAULTS[key]);
+  const flag = (key: "trendlines" | "levels" | "markers" | "breaks") => (typeof row[key] === "boolean" ? (row[key] as boolean) : AUTO_TREND_DEFAULTS[key]);
   const colors = (row.colors && typeof row.colors === "object" ? row.colors : {}) as Record<string, unknown>;
   const color = (key: keyof AutoTrendSettings["colors"]) => (typeof colors[key] === "string" && /^#[0-9a-f]{6}$/i.test(colors[key] as string) ? (colors[key] as string) : AUTO_TREND_DEFAULTS.colors[key]);
   const d = AUTO_TREND_DEFAULTS;
@@ -149,6 +152,7 @@ export function readAutoTrendSettings(raw: unknown): AutoTrendSettings {
     trendlines: flag("trendlines"),
     levels: flag("levels"),
     markers: flag("markers"),
+    breaks: flag("breaks"),
     left: clampInt(num("left"), l.left, d.left),
     right: clampInt(num("right"), l.right, d.right),
     minSwingAtr: clampNum(num("minSwingAtr"), l.minSwingAtr, d.minSwingAtr),

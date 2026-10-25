@@ -1405,7 +1405,7 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
   });
 });
 
-describe("early-session strategy: 09:15–10:30, risk-based sizing", () => {
+describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   // Line break only (the other setups have their own tests), no filters, any score: the window and sizing alone.
   const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
   /** Flat 10 above the line, a body crossing down to `by` below it at `at`, then flat there; `after` overrides closes. */
@@ -1438,10 +1438,10 @@ describe("early-session strategy: 09:15–10:30, risk-based sizing", () => {
     expect(result.state.engine).toMatchObject({ status: "NO_TRADE" });
   });
 
-  it("no new entries after 10:30: the trading window is closed", async () => {
-    const result = await run(crossing(80, 3), { cursor: m(82), config: early });
+  it("no new entries after 12:00: the trading window is closed", async () => {
+    const result = await run(crossing(170, 3), { cursor: m(172), config: early });
     expect(buys()).toHaveLength(0);
-    expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Trading window closed at 10:30 IST"))).toBe(true);
+    expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Trading window closed at 12:00 IST"))).toBe(true);
     expect(result.state.engine).toMatchObject({ status: "TRADING_WINDOW_CLOSED" });
   });
 
@@ -1461,5 +1461,25 @@ describe("early-session strategy: 09:15–10:30, risk-based sizing", () => {
     const lost = await run(crossing(1, 3), { cursor: m(3), config: early, state: { ...initialState(DATE), running: true, entries: true, realizedToday: -1_500 } });
     expect(buys()).toHaveLength(0);
     expect(lost.state.engine).toMatchObject({ status: "DAILY_RISK_LIMIT_REACHED" });
+  });
+});
+
+describe("trailing stop", () => {
+  it("moves the index stop to each swing high confirmed after a PUT entry, never back", async () => {
+    const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", risk: { ...ALGO_DEFAULTS.risk, targetMode: "trail" }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+    // Cross down at 1 (to LINE − 3), fall, bounce to a swing high at 6 (high LINE − 11), then fall further.
+    const path: Record<number, number> = { 0: LINE + 10, 1: LINE - 3, 2: LINE - 10, 3: LINE - 14, 4: LINE - 18, 5: LINE - 22, 6: LINE - 12, 7: LINE - 24, 8: LINE - 28 };
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = path[index] ?? LINE - 30;
+      const open = index === 1 ? LINE + 8 : index > 0 ? candles[index - 1].close : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    const result = await run(candles, { cursor: m(12), config: early });
+    expect(buys()).toHaveLength(1);
+    expect(sells()).toHaveLength(0);
+    const moved = result.events.find((event) => event.message.startsWith("Trailing stop moved"));
+    expect(moved?.message).toMatch(/from 23156\.94 to 23145\.94 \(beyond the swing high 23139\.00/);
+    expect(result.state.position?.setup?.stopIndex).toBeLessThan(23_150);
   });
 });

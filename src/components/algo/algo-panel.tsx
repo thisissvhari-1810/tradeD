@@ -247,6 +247,14 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
               <Field label="Min reward : risk"><NumberInput value={draft.risk.minRewardRisk} step={0.5} min={0.5} onChange={(minRewardRisk) => set({ risk: { ...draft.risk, minRewardRisk } })} /></Field>
               <Field label="Min stop distance (%)"><NumberInput value={draft.risk.minStopPercent} step={0.01} min={0.01} onChange={(minStopPercent) => set({ risk: { ...draft.risk, minStopPercent } })} /></Field>
               <Field label="Min setup score (0–100)"><NumberInput value={draft.minScore} step={5} min={0} onChange={(minScore) => set({ minScore })} /></Field>
+              <Field label="Target">
+                <select className="compact-field w-[9.5rem]" aria-label="Target method" value={draft.risk.targetMode} onChange={(event) => set({ risk: { ...draft.risk, targetMode: event.target.value === "level" ? "level" : event.target.value === "trail" ? "trail" : "multiple" } })}>
+                  <option value="multiple">Reward : risk ×</option>
+                  <option value="level">Next level</option>
+                  <option value="trail">Trailing stop</option>
+                </select>
+              </Field>
+              <p className="text-micro text-muted">{draft.risk.targetMode === "level" ? "The next opposing support / resistance, if it is at least the minimum reward : risk away (else the fixed multiple)." : draft.risk.targetMode === "trail" ? "No fixed target: the index stop trails each swing confirmed after the entry, and never moves back." : "The target is the minimum reward : risk times the stop distance."}</p>
               <Field label="Daily profit target (₹)"><NumberInput value={draft.risk.dailyTarget} step={500} min={1} onChange={(dailyTarget) => set({ risk: { ...draft.risk, dailyTarget } })} /></Field>
               <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Stop new entries at the target</span><input type="checkbox" className="oc-check" aria-label="Stop new entries at the target" checked={draft.risk.stopAtTarget} onChange={(event) => set({ risk: { ...draft.risk, stopAtTarget: event.target.checked } })} /></label>
               <p className="text-micro text-muted">The stop goes on the index just beyond the setup&apos;s invalidation; lots are sized so a stop-out (charges and slippage included) loses at most the risk per trade. If even one lot risks more, the setup is skipped. The target is a goal, never a reason to add risk.</p>
@@ -298,6 +306,34 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
           <Field label="Block a level after a stop (min)"><NumberInput value={draft.filters.levelBlockMinutes} step={5} min={0} onChange={(levelBlockMinutes) => set({ filters: { ...draft.filters, levelBlockMinutes } })} /></Field>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Structure stop (index back through the level)</span><input type="checkbox" className="oc-check" aria-label="Structure stop" checked={draft.structureStop} onChange={(event) => set({ structureStop: event.target.checked })} /></label>
+          <p className="eyebrow pt-2">Trendline breakouts</p>
+          <Field label="Detection">
+            <select className="compact-field w-[9.5rem]" aria-label="Breakout detection" value={draft.patterns.breakMode} onChange={(event) => set({ patterns: { ...draft.patterns, breakMode: event.target.value === "intrabar" ? "intrabar" : "close" } })}>
+              <option value="close">Candle close</option>
+              <option value="intrabar">Intrabar cross</option>
+            </select>
+          </Field>
+          {draft.patterns.breakMode === "intrabar" ? <p className="text-micro text-warning">Intrabar: the candle&apos;s high (low) crossing the line is enough, so more false breakouts. Paper and replay only; live trading needs candle-close confirmation.</p> : null}
+          <Field label="Breakout buffer">
+            <span className="flex w-[9.5rem] gap-1">
+              <input type="number" className="compact-field min-w-0 flex-1 text-right" aria-label="Breakout buffer value" step={draft.patterns.bufferMode === "points" ? 1 : draft.patterns.bufferMode === "atr" ? 0.1 : 0.01} min={0} value={Number.isFinite(draft.patterns.bufferValue) ? draft.patterns.bufferValue : ""} onChange={(event) => set({ patterns: { ...draft.patterns, bufferValue: event.target.value === "" ? NaN : Number(event.target.value) } })} />
+              <select className="compact-field w-[4.25rem]" aria-label="Breakout buffer unit" value={draft.patterns.bufferMode} onChange={(event) => {
+                const bufferMode = event.target.value === "points" ? "points" : event.target.value === "atr" ? "atr" : "percent";
+                set({ patterns: { ...draft.patterns, bufferMode, bufferValue: bufferMode === "points" ? 5 : bufferMode === "atr" ? 0.3 : 0.02 } });
+              }}>
+                <option value="percent">%</option>
+                <option value="points">pts</option>
+                <option value="atr">× range</option>
+              </select>
+            </span>
+          </Field>
+          <p className="text-micro text-muted">Measured from the line&apos;s own price at that candle (a diagonal line moves), not its starting price.</p>
+          <Field label="Stop beyond">
+            <select className="compact-field w-[9.5rem]" aria-label="Trendline stop" value={draft.patterns.trendStop} onChange={(event) => set({ patterns: { ...draft.patterns, trendStop: event.target.value === "line" ? "line" : "swing" } })}>
+              <option value="swing">Latest swing</option>
+              <option value="line">The broken line</option>
+            </select>
+          </Field>
           <p className="eyebrow pt-2">Trendline / W / M settings</p>
           <Field label="Swing sensitivity (candles)"><NumberInput value={draft.patterns.pivotStrength} step={1} min={1} onChange={(pivotStrength) => set({ patterns: { ...draft.patterns, pivotStrength } })} /></Field>
           <Field label="Min. bottoms / tops apart"><NumberInput value={draft.patterns.minSeparation} step={1} min={2} onChange={(minSeparation) => set({ patterns: { ...draft.patterns, minSeparation } })} /></Field>

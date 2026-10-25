@@ -101,16 +101,16 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   maxQuoteAgeSeconds: 90,
   maxSpreadPercent: 5,
   slippageTicks: 1,
-  // The early session: entries from 09:15 to 10:30 IST, as soon as a setup is confirmed (no waiting period).
+  // The session's first half: entries from 09:15 to 12:00 IST, as soon as a setup is confirmed (no waiting period).
   entryStart: "09:15",
-  entryCutoff: "10:30",
+  entryCutoff: "12:00",
   windowExit: "hold",
   sizing: "risk",
   risk: RISK_DEFAULTS,
   minScore: 60,
   strategies: { line: true, trendline: true, w: true, m: true, orb: true, bounce: true, rejection: true },
   observationMinutes: 0,
-  settingsVersion: 4,
+  settingsVersion: 5,
   filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0.03, secondCandle: true, momentum: true },
   structureStop: true,
   patterns: PATTERN_DEFAULTS,
@@ -488,7 +488,8 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
   const plan = pending.plan ?? null;
   const offset = plan ? fill.price - plan.entryPrice : 0;
   const stop = plan ? money(Math.max(TICK, plan.premiumStop + offset)) : levels.ok ? levels.stop : money(fill.price * 0.5);
-  const target = plan ? money(plan.premiumTarget + offset) : levels.ok ? levels.target : money(fill.price * 1.5);
+  // A trailing exit has no premium target (the trailing index stop closes it).
+  const target = plan ? (plan.targetMode === "trail" ? money(fill.price * 100) : money(plan.premiumTarget + offset)) : levels.ok ? levels.target : money(fill.price * 1.5);
   state.position = {
     entryKey: pending.key, contract: pending.contract, side: pending.side, lots: pending.lots, quantity: fill.quantity, avg: fill.price,
     stop, target, entryCharges: fill.charges, openedAt: input.now, signalTime: pending.signalTime, lineIds: pending.lineIds, exit: null, exitAttempts: 0,
@@ -564,12 +565,22 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   const last = input.candles.filter((candle) => candle.time + 60 <= input.now && candle.time + 60 > setup.entryTime && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).at(-1);
   if (!last) return;
   const bull = setup.direction === "CALL";
+  // Trailing: the stop moves to each swing low (high) confirmed after the entry, beyond it by the minimum stop distance; never back.
+  if (setup.trail && setup.stopIndex != null) {
+    const buffer = (last.close * ({ ...RISK_DEFAULTS, ...input.config.risk }.minStopPercent)) / 100;
+    const swing = (state.analysis?.pivots ?? []).filter((pivot) => pivot.kind === (bull ? "LOW" : "HIGH") && pivot.time >= setup.entryTime && pivot.confirmedAt <= input.now).at(-1);
+    const next = swing ? money(bull ? swing.price - buffer : swing.price + buffer) : null;
+    if (next != null && (bull ? next > setup.stopIndex : next < setup.stopIndex)) {
+      log({ key: `trail:${position.entryKey}:${swing!.time}`, kind: "INFO", message: `Trailing stop moved from ${setup.stopIndex.toFixed(2)} to ${next.toFixed(2)} (beyond the swing ${bull ? "low" : "high"} ${swing!.price.toFixed(2)} confirmed after the entry).` });
+      setup.stopIndex = next;
+    }
+  }
   // Risk sizing: the index stop (on a close through it) and the index target (on a touch).
   if (setup.stopIndex != null && (bull ? last.close <= setup.stopIndex : last.close >= setup.stopIndex)) {
     await startExit(state, input, "STOP", { price: mark.bid, note: `Index closed at ${last.close.toFixed(2)}, through the stop ${setup.stopIndex.toFixed(2)}` }, log);
     return;
   }
-  if (setup.targetIndex != null && (bull ? last.high >= setup.targetIndex : last.low <= setup.targetIndex)) {
+  if (!setup.trail && setup.targetIndex != null && (bull ? last.high >= setup.targetIndex : last.low <= setup.targetIndex)) {
     await startExit(state, input, "TARGET", { price: mark.bid, note: `Index reached the target ${setup.targetIndex.toFixed(2)}` }, log);
     return;
   }
@@ -738,7 +749,7 @@ function setupOf(evaluation: CandleEvaluation, side: Side, plan: TradePlan | nul
   if (!primary) return undefined;
   return {
     strategy: primary.strategy, strategies: agreeing.map((item) => item.strategy), direction: side, level: primary.level, invalidation: primary.invalidation, underlyingEntry: evaluation.candle.close, entryTime: evaluation.time + 60,
-    ...(plan ? { stopIndex: plan.stopIndex, targetIndex: plan.targetIndex, risk: plan.risk, score: plan.score.score } : {}),
+    ...(plan ? { stopIndex: plan.stopIndex, targetIndex: plan.targetIndex, risk: plan.risk, score: plan.score.score, ...(plan.targetMode === "trail" ? { trail: true } : {}) } : {}),
   };
 }
 

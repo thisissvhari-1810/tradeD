@@ -28,9 +28,12 @@ export type RiskSettings = {
   minRewardRisk: number;
   /** The index stop is at least this % away from the entry, and this far beyond the invalidation. */
   minStopPercent: number;
+  /** "multiple": target = reward : risk × the stop distance; "level": the next opposing support / resistance
+   * (at least the minimum multiple away); "trail": no fixed target, the stop trails confirmed swings. */
+  targetMode: "multiple" | "level" | "trail";
 };
 
-export const RISK_DEFAULTS: RiskSettings = { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2, minStopPercent: 0.03 };
+export const RISK_DEFAULTS: RiskSettings = { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2, minStopPercent: 0.03, targetMode: "multiple" };
 
 export type TradePlan = {
   direction: Direction;
@@ -49,8 +52,9 @@ export type TradePlan = {
   risk: number;
   /** Rupees gained at the target, after charges. */
   reward: number;
-  /** Planned reward : risk (the target multiple). */
+  /** Planned reward : risk (the target multiple, or to the next level). */
   rewardRisk: number;
+  targetMode: RiskSettings["targetMode"];
   /** The next opposing zone, its distance in index points and room : risk. */
   room: { label: string; price: number; points: number; ratio: number } | null;
   budget: number;
@@ -87,14 +91,16 @@ export function planTrade(input: PlanInput): { ok: true; plan: TradePlan } | { o
     stopDistance = minimum;
     stopIndex = bull ? input.entryIndex - minimum : input.entryIndex + minimum;
   }
-  const targetIndex = bull ? input.entryIndex + risk.minRewardRisk * stopDistance : input.entryIndex - risk.minRewardRisk * stopDistance;
   const opposing = input.zones
     .filter((zone) => (bull ? zone.price > input.entryIndex + minimum / 3 : zone.price < input.entryIndex - minimum / 3))
     .sort((a, b) => Math.abs(a.price - input.entryIndex) - Math.abs(b.price - input.entryIndex))[0];
   const room = opposing ? { label: opposing.label, price: opposing.price, points: money(Math.abs(opposing.price - input.entryIndex)), ratio: Math.abs(opposing.price - input.entryIndex) / stopDistance } : null;
+  // The target: the fixed multiple, or the next opposing level when that is at least the multiple away.
+  const multiple = risk.targetMode === "level" && room && room.ratio >= risk.minRewardRisk ? room.ratio : risk.minRewardRisk;
+  const targetIndex = bull ? input.entryIndex + multiple * stopDistance : input.entryIndex - multiple * stopDistance;
 
   const premiumStop = money(Math.max(TICK, tick(input.price - ATM_DELTA * stopDistance)));
-  const premiumTarget = money(tick(input.price + ATM_DELTA * risk.minRewardRisk * stopDistance));
+  const premiumTarget = money(tick(input.price + ATM_DELTA * multiple * stopDistance));
   const lot = input.lotSize;
   const roundTrip = input.charges("BUY", input.price, lot) + input.charges("SELL", premiumStop, lot);
   const lotRisk = (input.price - premiumStop + input.slippageTicks * TICK) * lot + roundTrip;
@@ -118,13 +124,14 @@ export function planTrade(input: PlanInput): { ok: true; plan: TradePlan } | { o
     quantity: lots * lot,
     risk: money(lotRisk * Math.max(lots, 1)),
     reward: money(lotReward * Math.max(lots, 1)),
-    rewardRisk: risk.minRewardRisk,
+    rewardRisk: Math.round(multiple * 10) / 10,
+    targetMode: risk.targetMode,
     room: room ? { ...room, ratio: Math.round(room.ratio * 10) / 10 } : null,
     budget,
     score,
   };
   const reasons: string[] = [];
-  if (room && room.ratio < risk.minRewardRisk) reasons.push(`Not enough room: the ${room.label} at ${room.price.toFixed(2)} is ${room.points.toFixed(2)} points away, ${room.ratio.toFixed(1)}× the ${stopDistance.toFixed(2)}-point stop (minimum reward : risk ${risk.minRewardRisk}).`);
+  if (room && room.ratio < risk.minRewardRisk && risk.targetMode !== "trail") reasons.push(`Not enough room: the ${room.label} at ${room.price.toFixed(2)} is ${room.points.toFixed(2)} points away, ${room.ratio.toFixed(1)}× the ${stopDistance.toFixed(2)}-point stop (minimum reward : risk ${risk.minRewardRisk}).`);
   if (byRisk < 1) reasons.push(`1 lot would risk ₹${money(lotRisk).toFixed(2)} (index stop ${plan.stopIndex.toFixed(2)}, ${plan.stopDistance.toFixed(2)} points away), above the ₹${budget.toFixed(2)} risk per trade: no trade.`);
   else if (byCash < 1) reasons.push(`Insufficient buying power for 1 lot (₹${money(input.price * lot).toFixed(2)} needed, ₹${money(input.cash).toFixed(2)} available).`);
   if (lotReward <= 0) reasons.push("The planned reward does not cover the charges.");

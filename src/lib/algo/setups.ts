@@ -1,4 +1,4 @@
-import { analyzeTrend, AUTO_TREND_DEFAULTS, type AutoLine, type AutoTrend } from "@/lib/chart/trend-engine";
+import { analyzeTrend, AUTO_TREND_DEFAULTS, averageRange, type AutoLine, type AutoTrend } from "@/lib/chart/trend-engine";
 import type { Candle } from "./lines";
 import { strongCandle, type Direction, type PatternSettings } from "./patterns";
 
@@ -25,44 +25,95 @@ export function sessionTrend(candles: Candle[], settings: PatternSettings): Auto
 
 export const linePriceAt = (line: AutoLine, index: number) => line.a.price + (index - line.a.index) * line.slope;
 
+/** The breakout buffer in index points: a % of price, fixed points, or a multiple of the average candle range. */
+export function breakBuffer(price: number, candles: Candle[], settings: PatternSettings): number {
+  if (settings.bufferMode === "points") return settings.bufferValue;
+  if (settings.bufferMode === "atr") return settings.bufferValue * averageRange(candles.slice(-20));
+  return (price * settings.bufferValue) / 100;
+}
+
 /**
- * A close through a descending resistance (CALL) or an ascending support (PUT) trendline: the candle's body
- * crosses it (it opened on the inside). With retest mode, the entry is instead the first strong candle that
- * closes beyond the line again after touching it, within `retestBars` candles of the break.
+ * The trade's structural stop for a trendline break: the latest confirmed swing low below the close (CALL)
+ * or swing high above it (PUT) — or, with "line", the broken line itself.
+ */
+function trendStop(trend: AutoTrend, close: number, direction: Direction, level: number, settings: PatternSettings): { price: number; label: string } {
+  if (settings.trendStop === "swing") {
+    const swing = [...trend.swings].reverse().find((item) => (direction === "CALL" ? item.kind === "LOW" && item.price < close : item.kind === "HIGH" && item.price > close));
+    if (swing) return { price: swing.price, label: `${direction === "CALL" ? "swing low" : "swing high"} ${swing.price.toFixed(2)} at ${clock(swing.time)}` };
+  }
+  return { price: level, label: `the line at ${level.toFixed(2)}` };
+}
+
+/**
+ * A break of the trendline that was active before this candle — a descending resistance (CALL) or an
+ * ascending support (PUT) — measured against the line's own price at this candle (a diagonal line moves),
+ * beyond the breakout buffer. "close": the candle's body crosses it and closes beyond; "intrabar": the
+ * candle's high (low) crosses it (paper and replay only). One signal per line: a line already crossed
+ * since it became known does not signal again. With retest mode, the entry is instead the first strong
+ * candle that closes beyond the broken line again after touching it, within `retestBars` candles.
  */
 export function trendlineBreak(trend: AutoTrend, candles: Candle[], settings: PatternSettings): { hit: SetupHit | null; status: string } {
   const last = candles.length - 1;
   const candle = candles[last];
-  if (!candle) return { hit: null, status: "WAITING FOR VALID TRENDLINE" };
-  for (const line of trend.brokenLines) {
-    if (!line.broken) continue;
-    const direction: Direction = line.kind === "RESISTANCE" ? "CALL" : "PUT";
-    if (direction === "CALL" ? !(line.slope < 0) : !(line.slope > 0)) continue;
-    const what = direction === "CALL" ? "descending resistance" : "ascending support";
-    const anchors = `${clock(line.a.time)}–${clock(line.b.time)}`;
-    if (!settings.retest) {
-      if (line.broken.index !== last) continue;
-      const price = line.broken.price;
-      const inside = direction === "CALL" ? candle.open <= price : candle.open >= price;
-      if (!inside) continue;
-      return { hit: { direction, level: price, invalidation: price, reason: `Close ${candle.close.toFixed(2)} ${direction === "CALL" ? "above" : "below"} the ${what} trendline (${anchors}) at ${price.toFixed(2)}.` }, status: direction === "CALL" ? "BREAKOUT CONFIRMED" : "BREAKDOWN CONFIRMED" };
+  if (!candle || last < 2) return { hit: null, status: "WAITING FOR VALID TRENDLINE" };
+  if (!settings.retest) {
+    const before = sessionTrend(candles.slice(0, -1), settings);
+    for (const line of [before.resistance, before.support]) {
+      if (!line) continue;
+      const direction: Direction = line.kind === "RESISTANCE" ? "CALL" : "PUT";
+      if (direction === "CALL" ? !(line.slope < 0) : !(line.slope > 0)) continue;
+      const price = linePriceAt(line, last);
+      const buffer = breakBuffer(price, candles, settings);
+      const bull = direction === "CALL";
+      // Already crossed since the line became known: that break was the signal (or it failed); not again.
+      const known = line.b.index + Math.max(1, Math.floor(settings.pivotStrength));
+      let crossed = false;
+      for (let index = known; index < last && !crossed; index += 1) {
+        const level = linePriceAt(line, index);
+        const probe = settings.breakMode === "intrabar" ? (bull ? candles[index].high : candles[index].low) : candles[index].close;
+        if (bull ? probe > level + buffer : probe < level - buffer) crossed = true;
+      }
+      if (crossed) continue;
+      const inside = bull ? candle.open <= price : candle.open >= price;
+      const beyond = settings.breakMode === "intrabar"
+        ? (bull ? candle.high > price + buffer : candle.low < price - buffer) && (bull ? candles[last - 1].close <= linePriceAt(line, last - 1) : candles[last - 1].close >= linePriceAt(line, last - 1))
+        : inside && (bull ? candle.close > price + buffer : candle.close < price - buffer);
+      if (!beyond) continue;
+      const what = bull ? "descending resistance" : "ascending support";
+      const stop = trendStop(trend, candle.close, direction, price, settings);
+      const how = settings.breakMode === "intrabar" ? `${bull ? "high" : "low"} ${(bull ? candle.high : candle.low).toFixed(2)} crossed` : `close ${candle.close.toFixed(2)}`;
+      return {
+        hit: { direction, level: round(price), invalidation: round(stop.price), reason: `${bull ? "Breakout" : "Breakdown"}: ${how} ${bull ? "above" : "below"} the ${what} trendline (${clock(line.a.time)}–${clock(line.b.time)}) at ${price.toFixed(2)} (+${buffer.toFixed(2)} buffer). Stop beyond ${stop.label}.` },
+        status: bull ? "BREAKOUT CONFIRMED" : "BREAKDOWN CONFIRMED",
+      };
     }
-    const since = last - line.broken.index;
-    if (since < 1 || since > settings.retestBars) continue;
-    const now = linePriceAt(line, last);
-    const tolerance = (now * settings.tolerancePercent) / 100;
-    let held = true;
-    for (let index = line.broken.index + 1; index < last && held; index += 1) {
-      const level = linePriceAt(line, index);
-      if (direction === "CALL" ? candles[index].close < level - tolerance : candles[index].close > level + tolerance) held = false;
+  } else {
+    for (const line of trend.brokenLines) {
+      if (!line.broken) continue;
+      const direction: Direction = line.kind === "RESISTANCE" ? "CALL" : "PUT";
+      if (direction === "CALL" ? !(line.slope < 0) : !(line.slope > 0)) continue;
+      const what = direction === "CALL" ? "descending resistance" : "ascending support";
+      const anchors = `${clock(line.a.time)}–${clock(line.b.time)}`;
+      const since = last - line.broken.index;
+      if (since < 1 || since > settings.retestBars) continue;
+      const now = linePriceAt(line, last);
+      const tolerance = (now * settings.tolerancePercent) / 100;
+      let held = true;
+      for (let index = line.broken.index + 1; index < last && held; index += 1) {
+        const level = linePriceAt(line, index);
+        if (direction === "CALL" ? candles[index].close < level - tolerance : candles[index].close > level + tolerance) held = false;
+      }
+      if (!held) continue;
+      const touched = direction === "CALL" ? candle.low <= now + tolerance : candle.high >= now - tolerance;
+      const buffer = breakBuffer(now, candles, settings);
+      const beyond = direction === "CALL" ? candle.close > now + buffer : candle.close < now - buffer;
+      if (touched && beyond && strongCandle(candle, direction)) {
+        // The retest candle's extreme is the structure that must hold.
+        const stop = settings.trendStop === "swing" ? (direction === "CALL" ? candle.low : candle.high) : now;
+        return { hit: { direction, level: round(now), invalidation: round(stop), reason: `Retest of the broken ${what} trendline (${anchors}) at ${now.toFixed(2)} held; close ${candle.close.toFixed(2)}. Stop beyond the retest ${direction === "CALL" ? "low" : "high"} ${stop.toFixed(2)}.` }, status: "RETEST CONFIRMED" };
+      }
+      return { hit: null, status: "WAITING FOR RETEST" };
     }
-    if (!held) continue;
-    const touched = direction === "CALL" ? candle.low <= now + tolerance : candle.high >= now - tolerance;
-    const beyond = direction === "CALL" ? candle.close > now * (1 + settings.minBreakPercent / 100) : candle.close < now * (1 - settings.minBreakPercent / 100);
-    if (touched && beyond && strongCandle(candle, direction)) {
-      return { hit: { direction, level: round(now), invalidation: round(now), reason: `Retest of the broken ${what} trendline (${anchors}) at ${now.toFixed(2)} held; close ${candle.close.toFixed(2)}.` }, status: "RETEST CONFIRMED" };
-    }
-    return { hit: null, status: "WAITING FOR RETEST" };
   }
   const waiting = [trend.resistance && trend.resistance.slope < 0 ? "BREAKOUT" : "", trend.support && trend.support.slope > 0 ? "BREAKDOWN" : ""].filter(Boolean);
   return { hit: null, status: waiting.length ? `WAITING FOR ${waiting.join(" / ")}` : "WAITING FOR VALID TRENDLINE" };

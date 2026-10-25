@@ -218,17 +218,21 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     // Switched-off strategies draw nothing (M is off here; with only W on, no trendline either).
     expect(algoAnalysisDrawings(analyse(build(BASE), "w").analysis, { trendline: "#00f", neckline: "#fa0" }).map((drawing) => drawing.id)).toEqual(["algo:neckline:W"]);
     // After the breakout candle the resistance is broken (no longer active); the support through the equal lows stays.
-    expect(drawings.map((drawing) => drawing.id)).toEqual(["algo:trendline:support", "algo:neckline:W"]);
+    // The broken resistance stays as a dashed segment up to the breakout candle.
+    expect(drawings.map((drawing) => drawing.id)).toEqual(["algo:trendline:support", `algo:trendline:broken:resistance:${T(3)}:${T(9)}`, "algo:neckline:W"]);
+    expect(drawings[1]).toMatchObject({ kind: "trend", dash: "dashed", points: [{ time: T(3), price: 108.5 }, { time: T(16) }] });
     // Before it: a ray through the two fixed swing highs, extended to the right.
     const before = algoAnalysisDrawings(analyzeMarket({ candles: build(BASE).slice(0, 16), sessionOpen: OPEN, observationMinutes: 0, settings, enabled: both }).analysis, { trendline: "#00f", neckline: "#fa0" });
     expect(before.find((drawing) => drawing.id === "algo:trendline:resistance")).toMatchObject({ kind: "ray", points: [{ time: T(3), price: 108.5 }, { time: T(9), price: 106.5 }] });
-    expect(drawings[1]).toMatchObject({ dash: "solid", points: [{ time: T(6), price: 106.5 }, { time: T(16), price: 106.5 }] });
+    expect(drawings[2]).toMatchObject({ dash: "solid", points: [{ time: T(6), price: 106.5 }, { time: T(16), price: 106.5 }] });
     const forming = algoAnalysisDrawings(analyse(build(BASE).slice(0, 12), "w").analysis, { trendline: "#00f", neckline: "#fa0" });
     expect(forming.find((drawing) => drawing.id === "algo:neckline:W")?.dash).toBe("dashed");
     const invalid = analyse(build([...BASE.slice(0, 16), 98, 110]), "w").analysis;
     expect(algoAnalysisDrawings(invalid, { trendline: "#00f", neckline: "#fa0" }).some((drawing) => drawing.id === "algo:neckline:W")).toBe(false);
-    expect(algoPivotMarkers(done, "#888").map((marker) => marker.text)).toEqual(["", "", ""]);
-    expect(new Set(algoPivotMarkers(done, "#888").map((marker) => marker.id)).size).toBe(3);
+    // Three W pivots and the breakout arrow, all without text.
+    expect(algoPivotMarkers(done, "#888").map((marker) => marker.text)).toEqual(["", "", "", ""]);
+    expect(new Set(algoPivotMarkers(done, "#888").map((marker) => marker.id)).size).toBe(4);
+    expect(algoPivotMarkers(done, "#888")).toContainEqual(expect.objectContaining({ time: T(16), shape: "arrowUp", position: "belowBar" }));
   });
 
   it("nothing is drawn while the opening is observed; the trendline appears once the window has passed", async () => {

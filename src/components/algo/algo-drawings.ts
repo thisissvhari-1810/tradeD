@@ -10,7 +10,7 @@ import type { MarketAnalysis, PatternState } from "@/lib/algo/patterns";
  * while the pattern is still forming, solid once confirmed; not drawn once invalidated or expired) and
  * tiny squares on the pattern's pivots. Read-only, with stable ids, so a redraw never duplicates anything.
  */
-export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined, colors: { trendline: string; neckline: string }): Drawing[] {
+export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined, colors: { trendline: string; neckline: string; resistance?: string; support?: string }): Drawing[] {
   if (!analysis || !analysis.observationComplete) return [];
   const lastCandle = analysis.asOf - 60;
   const list: Drawing[] = [];
@@ -22,11 +22,15 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
       id: `algo:trendline:${line.kind.toLowerCase()}`,
       kind: "ray",
       points: [{ time: line.a.time, price: line.a.price }, { time: line.b.time, price: line.b.price }],
-      color: colors.trendline,
+      color: (line.kind === "RESISTANCE" ? colors.resistance : colors.support) ?? colors.trendline,
       width: 1,
       dash: "solid",
       locked: true,
     });
+  }
+  // Broken lines: dashed, up to the candle that broke them.
+  for (const line of on("trendline") ? analysis.brokenLines ?? [] : []) {
+    list.push({ id: `algo:trendline:broken:${line.kind.toLowerCase()}:${line.a.time}:${line.b.time}`, kind: "trend", points: [{ time: line.a.time, price: line.a.price }, { time: line.brokenAt.time, price: line.brokenAt.price }], color: (line.kind === "RESISTANCE" ? colors.resistance : colors.support) ?? colors.trendline, width: 1, dash: "dashed", locked: true });
   }
   // The opening range of the opening-range breakout, once complete (dotted, from the open to the latest candle).
   if (on("orb") && analysis.orb?.complete) {
@@ -60,6 +64,13 @@ export function algoPivotMarkers(analysis: MarketAnalysis | null | undefined, co
       list.push({ id: `algo:pivot:${pattern.kind}:${pivot.kind}:${pivot.time}`, time: pivot.time, position: pivot.kind === "HIGH" ? "aboveBar" : "belowBar", shape: "square", color, text: "", size: 0.4 });
     }
   };
+  // A breakout (up arrow under the candle) or breakdown (down arrow above it) where a trendline broke.
+  if (analysis.strategies.trendline?.enabled !== false) {
+    for (const line of analysis.brokenLines ?? []) {
+      const up = line.kind === "RESISTANCE";
+      list.push({ id: `algo:break:${line.kind}:${line.brokenAt.time}`, time: line.brokenAt.time, position: up ? "belowBar" : "aboveBar", shape: up ? "arrowUp" : "arrowDown", color, text: "", size: 0.6 });
+    }
+  }
   if (analysis.strategies.w?.enabled !== false) add(analysis.w);
   if (analysis.strategies.m?.enabled !== false) add(analysis.m);
   return list;

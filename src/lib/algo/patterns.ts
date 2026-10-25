@@ -37,9 +37,16 @@ export type PatternSettings = {
   orbMinutes: number;
   /** Support bounce / resistance rejection: how close (% of price) a candle must come to the zone. */
   zoneTolerancePercent: number;
+  /** Trendline breaks: on the candle's close (body crossing), or intrabar on its high / low (paper and replay only). */
+  breakMode: "close" | "intrabar";
+  /** The trendline breakout buffer: % of price, index points, or a multiple of the average 1-minute range. */
+  bufferMode: "percent" | "points" | "atr";
+  bufferValue: number;
+  /** A trendline trade's stop: beyond the latest swing low / high ("swing"), or beyond the broken line ("line"). */
+  trendStop: "swing" | "line";
 };
 
-export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false, orbMinutes: 15, zoneTolerancePercent: 0.03 };
+export const PATTERN_DEFAULTS: PatternSettings = { pivotStrength: 2, minSeparation: 4, tolerancePercent: 0.15, minBreakPercent: 0.02, retest: false, retestBars: 10, volume: false, orbMinutes: 15, zoneTolerancePercent: 0.03, breakMode: "close", bufferMode: "percent", bufferValue: 0.02, trendStop: "swing" };
 
 export type Pivot = { kind: "HIGH" | "LOW"; index: number; time: number; price: number; confirmedAt: number };
 
@@ -132,6 +139,8 @@ export type MarketAnalysis = {
   zones?: Zone[];
   /** The opening range for the opening-range breakout (configurable length). */
   orb?: OpeningRange | null;
+  /** Recently broken trendlines, up to the candle that broke them. */
+  brokenLines?: Array<Trendline & { brokenAt: { time: number; price: number; close: number } }>;
   strategies: Record<StrategyId, StrategyStatus>;
 };
 
@@ -350,6 +359,7 @@ export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; o
     w: w.state, m: m.state,
     zones,
     orb,
+    brokenLines: auto.brokenLines.filter((line) => line.broken).map((line) => ({ ...asTrendline(line)!, brokenAt: { time: line.broken!.time, price: line.broken!.price, close: line.broken!.close } })),
     levels: close == null ? { above: null, below: null } : { above: structure.filter((value) => value > close).sort((a, b) => a - b)[0] ?? null, below: structure.filter((value) => value < close).sort((a, b) => b - a)[0] ?? null },
     strategies: statuses,
   };

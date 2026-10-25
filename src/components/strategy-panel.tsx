@@ -263,7 +263,7 @@ function whenOf(time: number, intraday: boolean) {
  */
 function AutoTrendTab({ settings, onChange, trend }: { settings: AutoTrendSettings; onChange: (next: AutoTrendSettings) => void; trend: AutoTrend | null }) {
   const set = (patch: Partial<AutoTrendSettings>) => onChange({ ...settings, ...patch });
-  const off = !settings.trendlines && !settings.levels && !settings.markers;
+  const off = !settings.trendlines && !settings.levels && !settings.markers && !settings.breaks;
   const intraday = trend?.intraday ?? true;
   const point = (swing: Swing) => `${price(swing.price)} @ ${whenOf(swing.time, intraday)}`;
   const lineText = (line: AutoLine | null) => (line ? `${point(line.a)} → ${point(line.b)}` : "None");
@@ -273,6 +273,7 @@ function AutoTrendTab({ settings, onChange, trend }: { settings: AutoTrendSettin
         <Toggle label="Automatic trendlines" checked={settings.trendlines} swatch={settings.colors.support} onChange={(trendlines) => set({ trendlines })} />
         <Toggle label="Horizontal levels" checked={settings.levels} swatch={settings.colors.resistanceLevel} onChange={(levels) => set({ levels })} />
         <Toggle label="Swing-point markers" checked={settings.markers} swatch={settings.colors.resistance} onChange={(markers) => set({ markers })} />
+        <Toggle label="Breakout / breakdown markers" checked={settings.breaks} swatch={settings.colors.support} onChange={(breaks) => set({ breaks })} />
       </div>
 
       {off ? <p className="text-micro text-muted">Turn on trendlines, levels or markers to analyse this chart.</p> : trend ? (

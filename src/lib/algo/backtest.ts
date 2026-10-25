@@ -72,6 +72,10 @@ export type BacktestTotals = {
   /** Average result in multiples of the planned risk (risk-sized trades only). */
   averageR: number | null;
   tradesPerDay: number | null;
+  /** Net P&L per trade. */
+  averageTrade: number | null;
+  /** Share of trades closed by the stop or because the setup was invalidated (the break did not hold), %. */
+  falseBreakouts: number | null;
 };
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -140,6 +144,8 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
     targetDays: percent(ok.filter((day) => day.dailyTarget != null && day.stats.realized >= day.dailyTarget).length, ok.length),
     averageR: multiples.length ? round(multiples.reduce((sum, value) => sum + value, 0) / multiples.length) : null,
     tradesPerDay: ok.length ? round(trades / ok.length) : null,
+    averageTrade: trades ? round(running / trades) : null,
+    falseBreakouts: percent(ok.reduce((sum, day) => sum + day.trades.filter((trade) => trade.exitReason === "Stop-loss" || trade.exitReason === "Setup invalidated").length, 0), trades),
   };
 }
 
@@ -177,7 +183,7 @@ export function backtestCsv(days: BacktestDay[]): string {
       : row([day.date, variantLabel(day.variant), "Skipped", "", "", "", "", "", day.reason]));
   }
   lines.push("");
-  lines.push(row(["Totals", "Variant", "Part", "Trades", "Wins", "Losses", "Net P&L", "Max drawdown", "Win rate % / profit factor / avg win / avg loss / avg R / max losing streak / no-trade days % / target days %"]));
+  lines.push(row(["Totals", "Variant", "Part", "Trades", "Wins", "Losses", "Net P&L", "Max drawdown", "Win rate % / profit factor / avg trade / avg win / avg loss / avg R / max losing streak / false breakouts % / no-trade days % / target days %"]));
   const split = splitDates(days.map((day) => day.date));
   for (const variant of [...new Set(days.map((day) => day.variant))]) {
     const set = days.filter((day) => day.variant === variant);
@@ -185,7 +191,7 @@ export function backtestCsv(days: BacktestDay[]): string {
     for (const [part, subset] of parts) {
       if (!subset.length) continue;
       const totals = backtestTotals(subset);
-      lines.push(row(["TOTAL", variantLabel(variant), `${part}: ${totals.days} days (${totals.daysSkipped} skipped)`, totals.trades, totals.wins, totals.losses, totals.pnl.toFixed(2), totals.maxDrawdown.toFixed(2), [totals.winRate ?? "—", totals.profitFactor ?? "—", totals.averageWin ?? "—", totals.averageLoss ?? "—", totals.averageR ?? "—", totals.maxConsecutiveLosses, totals.noTradeDays ?? "—", totals.targetDays ?? "—"].join(" / ")]));
+      lines.push(row(["TOTAL", variantLabel(variant), `${part}: ${totals.days} days (${totals.daysSkipped} skipped)`, totals.trades, totals.wins, totals.losses, totals.pnl.toFixed(2), totals.maxDrawdown.toFixed(2), [totals.winRate ?? "—", totals.profitFactor ?? "—", totals.averageTrade ?? "—", totals.averageWin ?? "—", totals.averageLoss ?? "—", totals.averageR ?? "—", totals.maxConsecutiveLosses, totals.falseBreakouts ?? "—", totals.noTradeDays ?? "—", totals.targetDays ?? "—"].join(" / ")]));
     }
   }
   return `﻿${lines.join("\r\n")}\r\n`;

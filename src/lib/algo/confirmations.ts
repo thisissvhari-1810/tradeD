@@ -42,6 +42,8 @@ export type TradeSetup = {
   /** Risk sizing: the stop and target on the index, the planned risk (₹) and the setup score. */
   stopIndex?: number;
   targetIndex?: number;
+  /** The stop trails confirmed swings (no fixed target). */
+  trail?: boolean;
   risk?: number;
   score?: number;
 };

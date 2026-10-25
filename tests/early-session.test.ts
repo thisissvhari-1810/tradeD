@@ -13,10 +13,14 @@ const candle = (index: number, open: number, high: number, low: number, close: n
 const flat = (count: number, price: number) => Array.from({ length: count }, (_, index) => candle(index, price, price + 2, price - 2, price));
 
 describe("defaults: the early session replaces the old all-day settings", () => {
-  it("09:15–10:30, no waiting, ₹500 a trade, ₹1,500 a day, ₹5,000 target, reward : risk 2; old saved settings move once", () => {
-    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "10:30", observationMinutes: 0, sizing: "risk", maxDailyLoss: 1_500, risk: { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2 } });
+  it("09:15–12:00, no waiting, ₹500 a trade, ₹1,500 a day, ₹5,000 target, reward : risk 2; old saved settings move once", () => {
+    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "12:00", observationMinutes: 0, sizing: "risk", maxDailyLoss: 1_500, risk: { capital: 100_000, perTradePercent: 0.5, dailyTarget: 5_000, stopAtTarget: true, minRewardRisk: 2 } });
     const migrated = readAlgoConfig({ settingsVersion: 3, entryCutoff: "15:00", observationMinutes: 30, maxDailyLoss: 5_000, lots: 1 });
-    expect(migrated).toMatchObject({ entryCutoff: "10:30", observationMinutes: 0, maxDailyLoss: 1_500, sizing: "risk", lots: 10 });
+    expect(migrated).toMatchObject({ entryCutoff: "12:00", observationMinutes: 0, maxDailyLoss: 1_500, sizing: "risk", lots: 10 });
+    // Version 4's 10:30 default moves to 12:00 once; any other saved time is kept.
+    expect(readAlgoConfig({ settingsVersion: 4, entryCutoff: "10:30" }).entryCutoff).toBe("12:00");
+    expect(readAlgoConfig({ settingsVersion: 4, entryCutoff: "11:00" }).entryCutoff).toBe("11:00");
+    expect(readAlgoConfig({ settingsVersion: 5, entryCutoff: "10:30" }).entryCutoff).toBe("10:30");
     const kept = readAlgoConfig({ ...migrated, entryCutoff: "10:00", minScore: 70 });
     expect([kept.entryCutoff, kept.minScore]).toEqual(["10:00", 70]);
     expect(Object.values(ENGINE_LABEL)).toEqual(["BUY / LONG CANDIDATE", "SELL / SHORT CANDIDATE", "WAIT FOR CONFIRMATION", "NO TRADE", "DAILY RISK LIMIT REACHED", "TRADING WINDOW CLOSED"]);
@@ -135,5 +139,54 @@ describe("pre-market plan", async () => {
     expect(plan.notes[0]).toContain("Provisional");
     const opened = buildPlan({ date: "2026-10-16", underlying: "NIFTY", previous: { date: "2026-10-15", high: 23_200, low: 23_050, close: 23_120 }, daily, open: 23_180, risk: RISK_DEFAULTS, maxDailyLoss: 1_500, lotSize: 75, orbMinutes: 15 });
     expect(opened.gap).toEqual({ open: 23_180, points: 60, percent: 0.26 });
+  });
+});
+
+describe("trendline breakouts: detection modes, buffer, structural stop, target modes", async () => {
+  const { analyzeMarket, PATTERN_DEFAULTS } = await import("../src/lib/algo/patterns");
+  const { algoConfigProblems } = await import("../src/lib/algo/config");
+  const build = (closes: number[], first = 100): Candle[] => closes.map((close, index) => {
+    const open = index === 0 ? first : closes[index - 1];
+    return { time: T(index), open, high: Math.max(open, close) + 0.5, low: Math.min(open, close) - 0.5, close };
+  });
+  // A descending resistance through the swing highs at 3 (108.5) and 9 (106.5); the line is ≈ 104.17 at candle 16.
+  const BASE = [100, 102, 104, 108, 104, 101, 100, 102, 104, 106, 103, 101, 100, 101, 102, 103];
+  const signals = (candles: Candle[], extra: Partial<typeof PATTERN_DEFAULTS> = {}) => analyzeMarket({ candles, sessionOpen: OPEN, observationMinutes: 0, settings: { ...PATTERN_DEFAULTS, ...extra }, enabled: { trendline: true } }).signals;
+  const wick = (high: number, close: number): Candle => ({ time: T(16), open: 103, high, low: 102.5, close });
+
+  it("close mode needs the body to close beyond the line's price at that candle; intrabar mode takes the high crossing", () => {
+    const pierced = [...build(BASE), wick(106, 103.5)];
+    expect(signals(pierced)).toEqual([]);
+    expect(signals(pierced, { breakMode: "intrabar" })).toEqual([expect.objectContaining({ strategy: "trendline", direction: "CALL" })]);
+    // One signal per line: the next candle crossing again does not signal.
+    expect(signals([...pierced, { time: T(17), open: 103.5, high: 106, low: 103, close: 104 }], { breakMode: "intrabar" })).toEqual([]);
+  });
+
+  it("the buffer can be % of price, points or a multiple of the average range", () => {
+    const close = [...build(BASE), wick(110.5, 110)];
+    expect(signals(close, { bufferMode: "points", bufferValue: 5 })).toHaveLength(1);
+    expect(signals(close, { bufferMode: "points", bufferValue: 6 })).toEqual([]);
+    expect(signals(close, { bufferMode: "atr", bufferValue: 0.5 })).toHaveLength(1);
+  });
+
+  it("the stop is beyond the latest swing low (or, with the line option, the broken line)", () => {
+    const close = [...build(BASE), wick(110.5, 110)];
+    expect(signals(close)[0]).toMatchObject({ invalidation: 99.5, reason: expect.stringContaining("Stop beyond swing low 99.50") });
+    expect(signals(close, { trendStop: "line" })[0].invalidation).toBeCloseTo(104.17, 1);
+  });
+
+  it("target to the next level when it is at least the minimum multiple away; trailing has no fixed target", () => {
+    const base: PlanInput = { direction: "CALL", entryIndex: 23_160, invalidation: 23_155, zones: [{ price: 23_220, label: "previous-day high" }], price: 100, lotSize: 75, slippageTicks: 1, charges: () => 20, cash: 100_000, maxLots: 10, risk: RISK_DEFAULTS, minScore: 0, score: { structure: "BULLISH", momentum: { fast: 2, slow: 1 }, candle: { open: 23_150, high: 23_161, low: 23_149, close: 23_160 }, agreeing: 1, volume: "UNAVAILABLE" } };
+    const level = planTrade({ ...base, risk: { ...RISK_DEFAULTS, targetMode: "level" } }).plan;
+    expect(level.targetIndex).toBeCloseTo(23_220, 1);
+    expect(level.rewardRisk).toBeGreaterThan(2);
+    const trail = planTrade({ ...base, zones: [{ price: 23_170, label: "previous-day high" }], risk: { ...RISK_DEFAULTS, targetMode: "trail" } });
+    expect(trail.ok).toBe(true);
+    expect(trail.plan.targetMode).toBe("trail");
+  });
+
+  it("intrabar detection is refused for live trading", () => {
+    const live = { ...ALGO_DEFAULTS, mode: "LIVE" as const, patterns: { ...ALGO_DEFAULTS.patterns, breakMode: "intrabar" as const } };
+    expect(algoConfigProblems(live)).toContain("Intrabar breakout detection is for paper trading and replay only; live trading needs candle-close confirmation.");
   });
 });
