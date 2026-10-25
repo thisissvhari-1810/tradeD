@@ -4,7 +4,8 @@ import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
 import { ALGO_DEFAULTS, initialState, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
-import { clampFill, minuteEnds, playGate, runStats } from "../src/lib/algo/chart-replay";
+import { algoOrders, clampFill, minuteEnds, playGate, positionValuation, runStats, tradeMarkers } from "../src/lib/algo/chart-replay";
+import { switchToChartReplay } from "../src/lib/algo/config";
 
 /**
  * The Algo inside the chart's replay, end to end on the demo ledger: deterministic underlying candles,
@@ -433,7 +434,7 @@ describe("chart wiring for the algo replay", () => {
   });
 
   it("enabling the algo pauses a running replay; seeking with the algo on pauses too", () => {
-    expect(hook).toMatch(/if \(next\) callbacks\.current\.onPause\(\);/);
+    expect(hook).toMatch(/if \(next\) \{\s*callbacks\.current\.onPause\(\);/);
     expect(desk.match(/current\.status === "playing" && !algoHolds \? "playing" : "paused"/g)?.length).toBe(2);
   });
 
@@ -450,7 +451,8 @@ describe("chart wiring for the algo replay", () => {
 
   it("trade markers are drawn on the chart from the run's entries and exits", () => {
     expect(desk).toMatch(/markers=\{algoMarkers\}/);
-    expect(desk).toMatch(/CALL" : "PUT"\} BUY/);
+    expect(desk).toMatch(/tradeMarkers\(algoRun\.events, replay\.cursor\)/);
+    expect(desk).toMatch(/onMarkerClick=/);
   });
 
   it("steps are sent one at a time with the replay clock, never the computer clock", () => {
@@ -588,5 +590,91 @@ describe("the Algo's own ₹1,00,000 account", () => {
     const server = readFileSync("src/server/algo.ts", "utf8");
     expect(server).not.toMatch(/optionPaperAccount\.upsert/);
     expect(readFileSync("src/server/options-paper.ts", "utf8")).toMatch(/export function paperCapitalPaise/);
+  });
+});
+
+describe("CALL/PUT execution in chart replay: orders, P&L, markers", () => {
+  it("an ATM option that did not trade in the signal minute still fills from its last fresh premium", async () => {
+    // No PUT candle at minute 30 (the signal minute); the minute-29 candle (100) is the latest premium.
+    feed.premiums = premiums().filter((candle) => candle.time !== m(30));
+    const result = await run(underlying("DOWN"), { cursor: m(40) });
+    expect(result.state.position).not.toBeNull();
+    expect(db.state.executions).toHaveLength(1);
+  });
+
+  it("a stale option premium is a visible rejection with its reason, not a silent skip", async () => {
+    feed.premiums = premiums().filter((candle) => candle.time < m(25)); // last trade 5 minutes before the signal
+    const result = await run(underlying("DOWN"), { cursor: m(40) });
+    expect(db.state.orders).toHaveLength(0);
+    const rows = algoOrders(result.events, null);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ group: "rejected", status: "REJECTED", side: "PUT", action: "BUY" });
+    expect(rows[0].reason).toMatch(/Stale option quote/);
+  });
+
+  it("missing option history is listed as a rejected order with the reason", async () => {
+    feed.missing = true;
+    const result = await run(underlying("DOWN"), { cursor: m(40) });
+    const rejected = algoOrders(result.events, null).filter((row) => row.group === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason.length).toBeGreaterThan(10);
+  });
+
+  it("the order list shows the open entry as active, then BUY and SELL as completed with realized P&L", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const open = await run(underlying("DOWN"), { cursor: m(34) });
+    const active = algoOrders(open.events, open.state.position!.entryKey);
+    expect(active).toEqual([expect.objectContaining({ action: "BUY", side: "PUT", status: "FILLED", group: "active", quantity: 75 })]);
+    const closed = await run(underlying("DOWN"), { state: open.state, processedThrough: open.processedThrough, cursor: m(45) });
+    const rows = algoOrders([...open.events, ...closed.events], null);
+    expect(rows.map((row) => `${row.action}:${row.group}`)).toEqual(["SELL:completed", "BUY:completed"]);
+    expect(rows[0].pnl).toBeGreaterThan(0);
+    expect(rows[0].reason).toBe("Target");
+  });
+
+  it("unrealized P&L follows the replay premium: quantity already includes the lot size (never multiplied twice)", () => {
+    const position = { avg: 120, quantity: 75, entryCharges: 20 };
+    expect(positionValuation(position, 135)).toEqual({ invested: 9_000, value: 10_125, unrealized: 1_105, unrealizedPercent: 12.28 });
+    expect(positionValuation(position, 110).unrealized).toBe(-770);
+    expect(positionValuation(position, null)).toMatchObject({ invested: 9_000, value: null, unrealized: null });
+  });
+
+  it("entry and exit markers sit at the simulated fill times, never past the replay time, once per event", async () => {
+    feed.premiums = premiums((index) => (index === 36 ? { low: 100, high: 150, close: 145 } : null));
+    const result = await run(underlying("DOWN"), { cursor: m(45) });
+    const markers = tradeMarkers(result.events, m(45));
+    expect(markers.map((marker) => [marker.kind, marker.time])).toEqual([["entry", m(31)], ["exit", m(37)]]);
+    expect(markers[0]).toMatchObject({ side: "PUT" });
+    expect(markers[0].text).toMatch(/^PUT BUY 23150PE @₹/);
+    expect(markers[0].detail.join(" ")).toMatch(/Underlying at the signal: 23140\.00/);
+    expect(markers[1].text).toMatch(/^EXIT Target \+₹/);
+    // The same events again (a reprocessed candle) never add markers; before the exit time only the entry shows.
+    expect(tradeMarkers([...result.events, ...result.events], m(45))).toHaveLength(2);
+    expect(tradeMarkers(result.events, m(36))).toHaveLength(1);
+  });
+
+  it("switching the Algo to chart replay stops a live-price session and refuses while a position is open", () => {
+    const paper = { ...config, mode: "PAPER" as const };
+    expect(switchToChartReplay(paper, { running: true, entries: true, position: null, pending: null })).toMatchObject({ ok: true, stopped: true, config: { mode: "REPLAY" } });
+    const opened = { running: true, entries: true, position: { entryKey: "k" } as unknown as AlgoState["position"], pending: null };
+    expect(switchToChartReplay(paper, opened)).toMatchObject({ ok: false });
+    expect(switchToChartReplay(config, opened)).toMatchObject({ ok: true, stopped: false });
+  });
+
+  it("the chart panel's switch is always shown in replay, and enabling it switches the mode on the server", () => {
+    const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    const hook = readFileSync("src/components/algo/use-chart-algo.ts", "utf8");
+    expect(panel).not.toMatch(/data && replayMode \? \(\s*<label/);
+    expect(panel).toMatch(/aria-label="Enable Algo for this replay"/);
+    expect(hook).toMatch(/action: "chartMode"/);
+    expect(readFileSync("src/server/algo.ts", "utf8")).toMatch(/case "chartMode":/);
+  });
+
+  it("the right panel renders the run's real position, orders and rejections", () => {
+    const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
+    expect(panel).toMatch(/algoOrders\(run\.events, position\?\.entryKey \?\? null\)/);
+    expect(panel).toMatch(/"active", "completed", "rejected", "all"/);
+    expect(panel).toMatch(/Last rejection/);
+    expect(panel).not.toMatch(/sample|mock/i);
   });
 });

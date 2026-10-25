@@ -92,12 +92,26 @@ export function useChartAlgo(input: {
     }
   }, [apply]);
 
-  const setEnabled = useCallback((next: boolean) => {
+  const remember = useCallback((next: boolean) => {
     setEnabledState(next);
     try { localStorage.setItem(enabledKey(user), next ? "1" : "0"); } catch { /* Storage is optional. */ }
-    if (next) callbacks.current.onPause();
-    else if (sessionRef.current) void command("disarm", { action: "chartDisarm", session: sessionRef.current });
-  }, [command, user]);
+  }, [user]);
+
+  /**
+   * Enabling in the chart's replay switches the Algo to chart replay on the server first (a live-price
+   * paper session is stopped; an open live-price position refuses with its reason), so the chart and the
+   * Algo never run on different clocks. The replay pauses: Play then asks for confirmation.
+   */
+  const setEnabled = useCallback(async (next: boolean) => {
+    if (next) {
+      callbacks.current.onPause();
+      if (data?.config.mode !== "REPLAY" && !(await command("mode", { action: "chartMode" }))) return;
+      remember(true);
+      return;
+    }
+    remember(false);
+    if (sessionRef.current) void command("disarm", { action: "chartDisarm", session: sessionRef.current });
+  }, [command, data?.config.mode, remember]);
 
   // One step at a time: each sends the replay time; the server processes every minute completed since.
   const stepping = useRef(false);
@@ -122,12 +136,10 @@ export function useChartAlgo(input: {
         wait = 1_500;
         if (/busy/i.test(message)) return;
         failures.current += 1;
-        // Minutes are never skipped (the next step catches up), but the position is not protected while
-        // updates fail, so the replay pauses and says why.
-        if (failures.current >= 2) {
-          setError(`Algo update failed: ${message} The replay was paused; press Play to retry.`);
-          callbacks.current.onPause();
-        }
+        // Minutes are never skipped (the next step catches up). Every failure is shown; after a second one
+        // the replay pauses, because the position is not protected while updates fail.
+        setError(`Algo update failed: ${message}${failures.current >= 2 ? " The replay was paused; press Play to retry." : " Retrying."}`);
+        if (failures.current >= 2) callbacks.current.onPause();
       })
       .finally(() => {
         // The next step goes out once this one is back (after a pause when it failed).
@@ -154,7 +166,6 @@ export function useChartAlgo(input: {
     gate,
     clearError: () => setError(""),
     refresh: load,
-    useReplayMode: () => (data ? command("mode", { action: "save", config: { ...data.config, mode: "REPLAY" } }) : Promise.resolve(false)),
     /** Confirms the run; `forSession` is the replay session just created for a first run. */
     arm: (at: number, forSession: string | null = session) => (forSession ? command("arm", { action: "chartArm", session: forSession, cursor: at }) : Promise.resolve(false)),
     exit: (at: number, emergency = false) => (session ? command(emergency ? "emergency" : "exit", { action: "chartExit", session, cursor: at, ...(emergency ? { emergency: true } : {}) }) : Promise.resolve(false)),

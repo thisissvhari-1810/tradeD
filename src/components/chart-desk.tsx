@@ -20,7 +20,7 @@ import { StrategyPanel } from "@/components/strategy-panel";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoHistory } from "@/components/algo/algo-history";
-import { EXIT_LABEL } from "@/lib/algo/chart-replay";
+import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { STRATEGY_DEFAULTS, loadStrategySettings, saveStrategySettings, type StrategySettings } from "@/components/strategy-settings";
 import type { S1Data } from "@/lib/trading/s1";
 import { IconButton } from "@/components/icon-button";
@@ -801,29 +801,15 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const algoRun = algoAllowed ? algo.run : null;
   const algoPosition = algoRun?.position ?? null;
   const algoHolds = algoAllowed && algo.enabled;
+  // Entry / exit markers at their simulated fill times, one per event (the same rules as the tests).
+  const algoTrades = useMemo(() => (algoRun && algoRun.underlying === symbol ? tradeMarkers(algoRun.events, replay.cursor) : []), [algoRun, symbol, replay.cursor]);
   const algoMarkers = useMemo<ChartMarker[]>(() => {
-    if (!algoRun || algoRun.underlying !== symbol) return [];
     const { profit, loss } = desk.appearance.tokens;
-    const entries = new Map(algoRun.events.filter((event) => event.kind === "ENTRY" && event.order).map((event) => [event.order!.key, event]));
-    const list: ChartMarker[] = [];
-    for (const event of algoRun.events) {
-      if (event.kind === "ENTRY" && event.order?.price != null) {
-        // The entry fills when its signal candle closes (a reconciled entry carries its own time).
-        const time = event.key.startsWith("entry:") ? event.time + 60 : event.time;
-        const call = event.side === "CALL";
-        list.push({ id: event.key, time, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown", color: call ? profit : loss, text: `${call ? "CALL" : "PUT"} BUY ${event.contract?.strike ?? ""}${event.contract?.right ?? ""} @₹${event.order.price.toFixed(2)}` });
-      }
-      if (event.kind === "EXIT" && event.order && event.pnl != null) {
-        const entry = entries.get(event.order.key.replace(/:exit:\d+$/, ""));
-        const cost = entry?.order?.price != null && event.order.quantity ? entry.order.price * event.order.quantity : null;
-        const percent = cost ? ` (${event.pnl >= 0 ? "+" : ""}${((event.pnl / cost) * 100).toFixed(1)}%)` : "";
-        const reason = EXIT_LABEL[/^Exit \(([A-Z_]+)\)/.exec(event.message)?.[1] ?? ""] ?? "Exit";
-        list.push({ id: event.key, time: event.time, position: entry?.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: event.pnl >= 0 ? profit : loss, text: `EXIT ${reason} ${event.pnl >= 0 ? "+" : "−"}₹${Math.abs(event.pnl).toFixed(2)}${percent}` });
-      }
-    }
-    const cursor = replay.cursor;
-    return cursor == null ? list : list.filter((marker) => marker.time <= cursor);
-  }, [algoRun, symbol, desk.appearance.tokens, replay.cursor]);
+    return algoTrades.map((marker) => marker.kind === "entry"
+      ? { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "belowBar" : "aboveBar", shape: marker.side === "CALL" ? "arrowUp" : "arrowDown", color: marker.side === "CALL" ? profit : loss, text: marker.text }
+      : { id: marker.id, time: marker.time, position: marker.side === "CALL" ? "aboveBar" : "belowBar", shape: "circle", color: (marker.pnl ?? 0) >= 0 ? profit : loss, text: marker.text });
+  }, [algoTrades, desk.appearance.tokens]);
+  const [markerPopover, setMarkerPopover] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   const algoEntryLevel = useMemo<ChartReference | null>(() => {
     if (!algoPosition || !algoRun || algoRun.underlying !== symbol) return null;
     const signal = algoRun.events.find((event) => event.evaluation && event.evaluation.time === algoPosition.signalTime);
@@ -1388,8 +1374,19 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 streamKey={`${optionView ? `opt-${optionView.securityId || optionView.underlying}-${optionView.expiry}-${optionView.strike}-${optionView.right}` : symbol}-${timeframe}-${optionView ? "contract" : replay.active ? `replay-${replay.date}` : "live"}`}
                 references={algoEntryLevel ? [...sessionLevels, algoEntryLevel] : sessionLevels}
                 markers={algoMarkers}
+                onMarkerClick={(ids, point) => setMarkerPopover({ ids, ...point })}
                 pageScroll={variant === "positions" && phoneLayout}
               />
+            ) : null}
+            {markerPopover ? (
+              <div role="dialog" aria-label="Algo trade details" className="surface-overlay absolute z-40 w-64 rounded-lg p-2.5 text-data shadow-e4" style={{ left: Math.max(8, Math.min(markerPopover.x + 12, (chartAreaRef.current?.clientWidth ?? 600) - 272)), top: Math.max(8, markerPopover.y - 20) }}>
+                <div className="mb-1 flex items-center justify-between gap-2"><span className="font-semibold">Algo trade</span><button type="button" aria-label="Close trade details" className="grid h-6 w-6 place-items-center rounded-md text-muted hover:bg-hover" onClick={() => setMarkerPopover(null)}>×</button></div>
+                {algoTrades.filter((marker) => markerPopover.ids.includes(marker.id)).map((marker) => (
+                  <div key={marker.id} className="border-t border-border-soft py-1.5 first:border-t-0">
+                    {marker.detail.map((line, index) => <p key={line} className={index === 0 ? cx("font-semibold", marker.kind === "entry" ? (marker.side === "CALL" ? "text-profit" : "text-loss") : (marker.pnl ?? 0) >= 0 ? "text-profit" : "text-loss") : "text-text-2"}>{line}</p>)}
+                  </div>
+                ))}
+              </div>
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}
             {shown.length > 0 ? (

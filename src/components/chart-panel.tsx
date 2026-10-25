@@ -99,6 +99,7 @@ export function ChartPanel({
   focusToken = 0,
   references = [],
   markers = [],
+  onMarkerClick,
   paint,
   stay = false,
   overlays,
@@ -142,6 +143,8 @@ export function ChartPanel({
   focusToken?: number;
   references?: ChartReference[];
   markers?: ChartMarker[];
+  /** A click on a bar that carries trade markers: their ids and the click point within the chart. */
+  onMarkerClick?: (ids: string[], point: { x: number; y: number }) => void;
   paint?: ChartPaint;
   /** The chart sits in a scrolling page (Positions on phones): vertical swipes scroll the page, not the chart. */
   pageScroll?: boolean;
@@ -158,6 +161,9 @@ export function ChartPanel({
   const overlaySeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
   const referenceLines = useRef<IPriceLine[]>([]);
   const markerApi = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  // Which marker ids sit on which displayed bar (for clicks).
+  const markerBars = useRef(new Map<number, string[]>());
+  const onMarkerClickRef = useLatest(onMarkerClick);
   const oscSeries = useRef<Array<ISeriesApi<SeriesType>>>([]);
   const viewRef = useLatest({ showSma, showEma, showBands, showVwap, showSupertrend, oscillator, indicators });
   const candlesRef = useLatest(candles);
@@ -432,6 +438,7 @@ export function ChartPanel({
     const bars = candlesRef.current;
     const seen = new Set<string>();
     const placed = [];
+    markerBars.current = new Map();
     for (const item of markers) {
       if (seen.has(item.id)) continue;
       seen.add(item.id);
@@ -441,6 +448,7 @@ export function ChartPanel({
         if (bars[mid].time <= item.time) { bar = bars[mid].time; low = mid + 1; } else high = mid - 1;
       }
       if (bar == null) continue;
+      markerBars.current.set(bar, [...(markerBars.current.get(bar) ?? []), item.id]);
       placed.push({ time: bar as UTCTimestamp, position: item.position, shape: item.shape, color: item.color, text: item.text, size: 1 });
     }
     placed.sort((a, b) => a.time - b.time);
@@ -461,9 +469,14 @@ export function ChartPanel({
       setHover(bar);
       onHoverRef.current?.(bar);
     };
+    const onClick = (param: MouseEventParams) => {
+      const ids = typeof param.time === "number" ? markerBars.current.get(param.time) : undefined;
+      if (ids?.length && param.point) onMarkerClickRef.current?.(ids, { x: param.point.x, y: param.point.y });
+    };
     chart.subscribeCrosshairMove(onMove);
-    return () => chart.unsubscribeCrosshairMove(onMove);
-  }, [candles, chartType, compare, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators, onHoverRef]);
+    chart.subscribeClick(onClick);
+    return () => { chart.unsubscribeCrosshairMove(onMove); chart.unsubscribeClick(onClick); };
+  }, [candles, chartType, compare, oscillator, showBands, showEma, showSma, showVolume, showVwap, showSupertrend, indicators, onHoverRef, onMarkerClickRef]);
 
   useEffect(() => {
     // Side-to-side drag and pinch still move and zoom the chart; only vertical touch drags go to the page.

@@ -1,6 +1,6 @@
 import { ALL_LINE_TYPES, type CustomLevel, type LineType } from "./lines";
 import { protectiveProblem, type Protective } from "./options";
-import { ALGO_DEFAULTS, type AlgoConfig } from "./runner";
+import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "./runner";
 
 /**
  * Reads and validates Algo settings (the server applies this to every save, so limits are never only a
@@ -63,4 +63,15 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!Number.isInteger(config.slippageTicks) || config.slippageTicks < 0 || config.slippageTicks > 20) problems.push("Slippage must be 0 to 20 ticks.");
   for (const level of config.custom) if (!(level.price > 0)) problems.push(`The extra level "${level.label || level.id}" needs a price above 0.`);
   return problems;
+}
+
+/**
+ * Switching the Algo to chart replay (historical paper trading on the replay clock), from the chart's
+ * Enable switch. A live-price paper position or pending order must be closed first (it is never moved
+ * between clocks); a running live-price session is stopped, so the two modes never run at once.
+ */
+export function switchToChartReplay(config: AlgoConfig, state: Pick<AlgoState, "running" | "entries" | "position" | "pending">): { ok: true; config: AlgoConfig; stopped: boolean } | { ok: false; reason: string } {
+  if (config.mode === "REPLAY") return { ok: true, config, stopped: false };
+  if (state.position || state.pending) return { ok: false, reason: "A live-price paper position or order is open. Exit it in Strategy → Algo trade before switching the Algo to chart replay." };
+  return { ok: true, config: { ...config, mode: "REPLAY" }, stopped: state.running };
 }

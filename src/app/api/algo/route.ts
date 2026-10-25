@@ -26,6 +26,7 @@ const body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("emergency") }).strict(),
   z.object({ action: z.literal("acknowledge") }).strict(),
   z.object({ action: z.literal("tick") }).strict(),
+  z.object({ action: z.literal("chartMode") }).strict(),
   z.object({ action: z.literal("replay"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict(),
   z.object({ action: z.literal("chartArm"), session, cursor }).strict(),
   z.object({ action: z.literal("chartStep"), session, cursor }).strict(),

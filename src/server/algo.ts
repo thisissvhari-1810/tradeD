@@ -4,7 +4,7 @@ import { AppError } from "@/lib/http";
 import { mayPractice } from "@/lib/auth/permissions";
 import { kolkataParts } from "@/lib/market/clock";
 import { optionCharges } from "@/lib/options/engine";
-import { algoConfigProblems, readAlgoConfig } from "@/lib/algo/config";
+import { algoConfigProblems, readAlgoConfig, switchToChartReplay } from "@/lib/algo/config";
 import { strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { atmStrike, type ChainInput, type Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
@@ -14,10 +14,10 @@ import { gateFor } from "@/server/live-gate";
 import { getS1Data, sessionMinuteTape } from "@/server/market";
 import { loadOptionChain } from "@/server/option-chain";
 import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/option-replay";
-import { ensurePracticeAccount, walletKey } from "@/server/practice-account";
-import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
+import { ensurePracticeAccount } from "@/server/practice-account";
+import { FILL_STALE_SECONDS, replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
-import { runStats } from "@/lib/algo/chart-replay";
+import { positionValuation, runStats } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter } from "@/server/algo-replay";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { featuresOf } from "@/lib/auth/features";
@@ -263,6 +263,12 @@ export function replayAdapter(input: { underlying: string; date: string; candles
     return tapes.get(key)!;
   };
   const candleAt = (tape: Candle[], time: number) => tape.find((candle) => candle.time === time) ?? null;
+  // The latest premium candle at or before `time` that is still fresh enough to trade on (an ATM option
+  // that did not trade in one minute keeps its last price, but never one older than the fill limit).
+  const lastAt = (tape: Candle[], time: number) => {
+    const found = [...tape].reverse().find((candle) => candle.time <= time) ?? null;
+    return found && time - found.time <= FILL_STALE_SECONDS ? found : null;
+  };
   return {
     kind: "replay",
     setClock: (now) => { clock = now; },
@@ -274,6 +280,7 @@ export function replayAdapter(input: { underlying: string; date: string; candles
       const view = input.chain;
       const now = clock;
       const spotCandle = [...input.candles].filter((candle) => candle.time + 60 <= now).at(-1);
+      let quoteAsOf = now;
       const spot = spotCandle?.close ?? null;
       const strikes = view.strikes.map((row) => ({ strike: row.strike, ce: null as ChainInput["strikes"][number]["ce"], pe: null as ChainInput["strikes"][number]["pe"] }));
       const strike = spot != null ? atmStrike(view.strikes.map((row) => row.strike), spot, input.config.rounding) : null;
@@ -281,18 +288,22 @@ export function replayAdapter(input: { underlying: string; date: string; candles
       const side = right === "CE" ? row?.ce : row?.pe;
       if (row && side?.securityId && view.lotSize && spotCandle) {
         const tape = await tapeOf({ underlying: view.symbol, expiry: view.expiry!, strike: row.strike, right, securityId: side.securityId, lotSize: view.lotSize });
-        const premium = candleAt(tape, spotCandle.time);
+        const premium = lastAt(tape, spotCandle.time);
         const quote = premium ? { ltp: premium.close, bid: premium.close, ask: premium.close, securityId: side.securityId } : { ltp: null, bid: null, ask: null, securityId: side.securityId };
         const target = strikes.find((item) => item.strike === row.strike)!;
         if (right === "CE") target.ce = quote; else target.pe = quote;
+        // The quote is as old as its candle: a premium from an earlier minute is checked against the age limit.
+        if (premium) quoteAsOf = premium.time + 60;
       }
-      return { underlying: view.symbol, spot, expiry: view.expiry, asOf: new Date(now * 1000).toISOString(), lotSize: view.lotSize, strikes };
+      return { underlying: view.symbol, spot, expiry: view.expiry, asOf: new Date(quoteAsOf * 1000).toISOString(), lotSize: view.lotSize, strikes };
     },
     async mark(contract, now) {
       const tape = await tapeOf(contract);
       const candle = candleAt(tape, now - 60);
-      if (!candle) return null;
-      return { bid: candle.close, ask: candle.close, candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close }, asOf: now };
+      if (candle) return { bid: candle.close, ask: candle.close, candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close }, asOf: now };
+      // No trade in this minute: the last traded premium stands (its own range was checked in its minute).
+      const last = lastAt(tape, now - 60);
+      return last ? { bid: last.close, ask: last.close, candle: null, asOf: last.time + 60 } : null;
     },
     async enter(order) {
       if (orders.has(order.key)) return orders.get(order.key)!;
@@ -376,6 +387,7 @@ export type AlgoCommand =
   | { action: "emergency" }
   | { action: "acknowledge" }
   | { action: "tick" }
+  | { action: "chartMode" }
   | { action: "replay"; date: string }
   | ChartCommand;
 
@@ -436,6 +448,17 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
         if (state.position) {
           await startExit(state, { sessionId: session.id, sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, state) }, command.action === "emergency" ? "EMERGENCY" : "MANUAL", null, (event) => events.push({ time: now, ...event }));
         } else if (command.action === "exit") throw new AppError("There is no open algo position.", 409);
+        break;
+      }
+      case "chartMode": {
+        const switched = switchToChartReplay(config, state);
+        if (!switched.ok) throw new AppError(switched.reason, 409, "POSITION_OPEN");
+        if (switched.config !== config) await prisma.algoSession.update({ where: { id: session.id }, data: { config: switched.config as unknown as Prisma.InputJsonValue } });
+        if (switched.stopped) {
+          Object.assign(state, { running: false, entries: false });
+          note("mode-stop", "Live-price paper session stopped: the Algo now follows the chart replay.");
+        }
+        note("mode", "Execution mode: Chart replay (historical paper trading on the Algo account, on the replay clock).");
         break;
       }
       case "acknowledge":
@@ -736,13 +759,7 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
       const candle = tape.filter((item) => item.time + 60 <= at).at(-1) ?? null;
       const premium = candle?.close ?? null;
       if (candle) await cacheReplayMark(current.replaySession, contract, candle.close, candle.time + 60, at);
-      const invested = state.position.avg * state.position.quantity;
-      const value = premium == null ? null : premium * state.position.quantity;
-      const unrealized = value == null ? null : Math.round((value - invested - state.position.entryCharges) * 100) / 100;
-      position = {
-        ...state.position, premium, premiumAt: candle ? candle.time + 60 : null, invested: Math.round(invested * 100) / 100, value: value == null ? null : Math.round(value * 100) / 100,
-        unrealized, unrealizedPercent: unrealized == null || !invested ? null : Math.round((unrealized / invested) * 10_000) / 100,
-      };
+      position = { ...state.position, premium, premiumAt: candle ? candle.time + 60 : null, ...positionValuation(state.position, premium) };
     }
     const events = eventsOf(current.id);
     run = {

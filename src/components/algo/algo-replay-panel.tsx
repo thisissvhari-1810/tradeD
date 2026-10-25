@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { Bot, ChevronDown, History, OctagonX, Play } from "lucide-react";
 import { cx } from "@/components/ui";
-import { EXIT_LABEL } from "@/lib/algo/chart-replay";
+import { algoOrders } from "@/lib/algo/chart-replay";
 import type { AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
@@ -41,19 +41,24 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
   const [open, setOpen] = useState(() => typeof window === "undefined" || !window.matchMedia("(max-width: 1023px)").matches);
   const [confirmExit, setConfirmExit] = useState(false);
   const [confirmEmergency, setConfirmEmergency] = useState(false);
+  const [filter, setFilter] = useState<"active" | "completed" | "rejected" | "all">("all");
   const data = algo.data;
   const run = algo.run;
   const position = run?.position ?? null;
   const replayMode = data?.config.mode === "REPLAY";
+  const enabled = algo.enabled && replayMode;
   const state = run?.state;
-  const status: AlgoStatus = !algo.enabled && !position ? "DISABLED" : state?.status ?? (algo.enabled ? "READY" : "DISABLED");
+  const status: AlgoStatus = !enabled && !position ? "DISABLED" : state?.status ?? (enabled ? "READY" : "DISABLED");
   const badge = position?.exit ? BADGE.EXIT_PENDING! : BADGE[status] ?? BADGE.DISABLED!;
-  const lastExit = [...(run?.events ?? [])].reverse().find((event) => event.kind === "EXIT");
   const account = data?.account;
   const legacyRun = data?.runWallet === "DEMO" && run != null;
+  const orders = run ? algoOrders(run.events, position?.entryKey ?? null) : [];
+  const shownOrders = orders.filter((row) => filter === "all" || row.group === filter).slice(0, 30);
+  const lastRejection = orders.find((row) => row.group === "rejected");
+  const optionSymbol = position ? `${position.contract.underlying} ${position.contract.strike} ${position.contract.right === "CE" ? "CE" : "PE"}` : "";
 
   return (
-    <aside className="flex min-h-0 shrink-0 flex-col border-border bg-panel text-data max-lg:max-h-[45dvh] max-lg:border-t lg:w-[19rem] lg:border-l" aria-label="Algo trading">
+    <aside className="flex min-h-0 shrink-0 flex-col border-border bg-panel text-data max-lg:max-h-[45dvh] max-lg:border-t lg:w-[20rem] lg:border-l" aria-label="Algo trading">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="font-semibold">Algo</h2>
@@ -67,86 +72,110 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory }: { algo
         {algo.error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{algo.error} <button type="button" className="ml-1 underline" onClick={algo.clearError}>Dismiss</button></p> : null}
         {!data ? <p className="text-micro text-muted">Loading the algo…</p> : null}
 
-        {data && !replayMode ? (
-          <div className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro text-warning">
-            <p>The Algo is set to {data.config.mode === "PAPER" ? "paper trading at live prices" : "live"}. Switch it to chart replay to trade this replay with the demo wallet.</p>
-            <button type="button" className="mt-1 font-semibold underline" disabled={Boolean(algo.busy)} onClick={() => void algo.useReplayMode()}>Use chart replay mode</button>
-          </div>
-        ) : null}
-
-        {data && replayMode ? (
+        {data ? (
           <label className="flex cursor-pointer items-center justify-between gap-2 rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5">
-            <span>
+            <span className="min-w-0">
               <span className="block font-medium">Enable Algo</span>
-              <span className="block text-micro text-muted">{algo.enabled ? (run?.armed ? "Confirmed: trading this replay." : "Press Play to confirm and start.") : "Replay plays without trading."}</span>
+              <span className="block text-micro text-muted">
+                Mode: {replayMode ? "Chart replay (historical paper, replay clock)" : data.config.mode === "PAPER" ? "Paper at live prices. Enabling switches it to chart replay." : "Live (unavailable)"}
+              </span>
+              <span className="block text-micro text-muted">{enabled ? (run?.armed ? "Confirmed: trading this replay." : "Press Play to confirm and start.") : "Replay plays without trading."}</span>
             </span>
-            <input type="checkbox" role="switch" className="oc-check" aria-label="Enable Algo for this replay" checked={algo.enabled} onChange={(event) => algo.setEnabled(event.target.checked)} />
+            <input type="checkbox" role="switch" className="oc-check" aria-label="Enable Algo for this replay" disabled={algo.busy === "mode"} checked={enabled} onChange={(event) => void algo.setEnabled(event.target.checked)} />
           </label>
         ) : null}
 
-        {data && replayMode && data.config.underlying !== chartSymbol ? (
+        {data && data.config.underlying !== chartSymbol ? (
           <p className="text-micro text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p>
         ) : null}
 
-        {position ? (
-          <section className="rounded-md border border-border-soft p-2" aria-label="Open algo position">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="font-semibold">{position.side === "CALL" ? "CALL" : "PUT"} BUY · {position.contract.underlying} {position.contract.strike} {position.contract.right}</p>
-              <span className="text-micro text-muted">exp {position.contract.expiry}</span>
+        {/* A. Account summary (the Algo account's ledger) */}
+        {account ? (
+          // Folded to its one-line summary while a trade is open, so the position card leads.
+          <details key={position ? "trading" : "flat"} className="group rounded-md border border-border-soft" open={!position}>
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-2 py-1.5">
+              <span className="eyebrow">Algo account</span>
+              <span className="num text-micro"><span className="text-muted">Equity </span><span className="font-semibold">{account.equity}</span><span className="text-muted"> · Entries </span>{state?.tradesToday ?? 0}/{data?.config.maxTrades}</span>
+            </summary>
+            <div className="border-t border-border-soft px-2 py-1.5">
+              <AlgoAccountFigures account={account} compact />
+              {legacyRun ? <p className="mt-1 text-micro text-warning">This replay session started before the Algo account existed, so its trades stay on your demo wallet until it ends. New sessions use the Algo account.</p> : null}
             </div>
+          </details>
+        ) : null}
+
+        {/* B. Active position */}
+        {position ? (
+          <section className="rounded-md border-2 border-border p-2" aria-label="Open algo position">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="font-semibold">{optionSymbol} — <span className={position.side === "CALL" ? "text-profit" : "text-loss"}>{position.side} BUY</span></p>
+              <span className="whitespace-nowrap rounded-pill bg-sunken px-1.5 text-micro font-medium">{position.exit ? "EXIT PENDING" : "OPEN"}</span>
+            </div>
+            <p className="text-micro text-muted">Expiry {position.contract.expiry} · lot {position.contract.lotSize} · entered {ist(position.openedAt)} IST</p>
             <p className={cx("num mt-1 text-xl font-semibold leading-tight", tone(position.unrealized))}>{inr(position.unrealized, true)} <span className="text-data font-medium">{position.unrealizedPercent == null ? "" : `(${position.unrealizedPercent > 0 ? "+" : ""}${position.unrealizedPercent.toFixed(2)}%)`}</span></p>
-            <p className="text-micro text-muted">Unrealized, after entry charges · premium as of {ist(position.premiumAt)} IST</p>
+            <p className="text-micro text-muted">Unrealized P&amp;L, after entry charges · premium as of {ist(position.premiumAt)} IST</p>
             <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} />
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
               <Item label="Entry premium" value={inr(position.avg)} />
               <Item label="Current premium" value={inr(position.premium)} />
-              <Item label="Quantity" value={`${position.quantity} (${position.lots} × ${position.contract.lotSize})`} />
-              <Item label="Entry time" value={`${ist(position.openedAt)} IST`} />
-              <Item label="Invested" value={inr(position.invested)} />
-              <Item label="Market value" value={inr(position.value)} />
-              <Item label="Stop-loss" value={inr(position.stop)} tone="text-loss" hint={position.premium != null ? (position.premium <= position.stop ? "reached" : `${inr(position.premium - position.stop)} away`) : undefined} />
-              <Item label="Target" value={inr(position.target)} tone="text-profit" hint={position.premium != null ? (position.premium >= position.target ? "reached" : `${inr(position.target - position.premium)} away`) : undefined} />
-              <Item label="Time in trade" value={run ? `${Math.max(0, Math.round((run.processedThrough - position.openedAt) / 60))} min` : "—"} />
+              <Item label="Quantity" value={`${position.quantity} (${position.lots} lot × ${position.contract.lotSize})`} />
               <Item label="Replay time" value={`${ist(cursor)} IST`} />
+              <Item label="Entry cost" value={inr(position.invested)} />
+              <Item label="Current value" value={inr(position.value)} />
+              <Item label="Stop-loss (premium)" value={inr(position.stop)} tone="text-loss" hint={position.premium != null ? (position.premium <= position.stop ? "reached" : `${inr(position.premium - position.stop)} away`) : undefined} />
+              <Item label="Target (premium)" value={inr(position.target)} tone="text-profit" hint={position.premium != null ? (position.premium >= position.target ? "reached" : `${inr(position.target - position.premium)} away`) : undefined} />
             </dl>
             <button type="button" className="mt-2 h-9 w-full rounded-md bg-loss font-semibold text-on-signal hover:brightness-110 disabled:opacity-50" disabled={Boolean(algo.busy) || Boolean(position.exit) || cursor == null} onClick={() => setConfirmExit(true)}>
               {position.exit ? "Exit pending…" : algo.busy === "exit" ? "Exiting…" : "Exit Position"}
             </button>
           </section>
         ) : run ? (
-          <section className="rounded-md border border-border-soft p-2 text-micro" aria-label="Latest algo activity">
+          <section className="rounded-md border border-dashed border-border p-2 text-micro" aria-label="No open algo position">
             <p className="font-medium text-text-2">No open position</p>
-            <p className="mt-1 text-muted">Last signal: {state?.lastSignal ? `${ist(state.lastSignal.time + 60)} · ${state.lastSignal.explanation}` : "none yet"}</p>
-            <p className="mt-1 text-muted">Last order: {state?.lastOrder ? `${state.lastOrder.status} · ${state.lastOrder.message}` : "none yet"}</p>
-            {lastExit ? <p className={cx("mt-1 font-medium", tone(lastExit.pnl))}>Last trade: {EXIT_LABEL[/^Exit \(([A-Z_]+)\)/.exec(lastExit.message)?.[1] ?? ""] ?? "Exit"} · {inr(lastExit.pnl, true)}</p> : null}
+            <p className="mt-1 text-muted">Last signal: {state?.lastSignal ? `${ist(state.lastSignal.time + 60)} IST · ${state.lastSignal.explanation}` : `none yet (processed to ${ist(run.processedThrough)} IST)`}</p>
+            {lastRejection ? <p className="mt-1 text-loss">Last rejection ({ist(lastRejection.time)} IST): {lastRejection.reason}</p> : null}
           </section>
-        ) : data && replayMode ? (
-          <p className="text-micro leading-snug text-muted">When enabled and confirmed, the algo checks each completed 1-minute candle of {data.config.underlying} against your Strategy lines. A body crossing down buys the ATM PUT, up buys the ATM CALL, priced from that contract&apos;s real 1-minute premium history at the replay time.</p>
+        ) : data ? (
+          <p className="text-micro leading-snug text-muted">When enabled and confirmed, the algo checks each completed 1-minute candle of {data.config.underlying} against your enabled Strategy lines. A body crossing down buys the ATM PUT, up buys the ATM CALL, priced from that contract&apos;s real 1-minute premium history at the replay time.</p>
         ) : null}
 
+        {/* C. Orders */}
         {run ? (
-          <dl className="grid grid-cols-3 gap-2 rounded-md border border-border-soft bg-sunken/50 p-2">
-            <Item label="Trades" value={`${run.stats.trades} / ${run.config.maxTrades}`} />
-            <Item label="Win / loss" value={`${run.stats.wins} / ${run.stats.losses}`} />
-            <Item label="Realized" value={inr(run.stats.realized, true)} tone={tone(run.stats.realized)} />
-          </dl>
-        ) : null}
-
-        {account ? (
-          <div className="rounded-md border border-border-soft p-2">
-            <p className="eyebrow mb-1">Algo account</p>
-            <AlgoAccountFigures account={account} compact />
-            {legacyRun ? <p className="mt-1 text-micro text-warning">This replay session started before the Algo account existed, so its trades stay on your demo wallet until it ends. New sessions use the Algo account.</p> : null}
-          </div>
+          <section aria-label="Algo orders">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="eyebrow">Orders</span>
+              <div className="flex rounded-md border border-border-soft p-0.5" role="group" aria-label="Filter orders">
+                {(["active", "completed", "rejected", "all"] as const).map((key) => (
+                  <button key={key} type="button" aria-pressed={filter === key} className={cx("h-6 rounded px-1.5 text-micro", filter === key ? "bg-primary-soft font-semibold text-primary" : "text-muted hover:text-text")} onClick={() => setFilter(key)}>{key === "active" ? "Active" : key === "completed" ? "Completed" : key === "rejected" ? "Rejected" : "All"}</button>
+                ))}
+              </div>
+            </div>
+            {shownOrders.length ? (
+              <ol className="space-y-1">
+                {shownOrders.map((row) => (
+                  <li key={row.id} className="rounded-md border border-border-soft px-2 py-1">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="num text-micro text-muted">{ist(row.time)}</span>
+                      <span className={cx("text-micro font-semibold", row.action === "BUY" ? "text-profit" : row.action === "SELL" ? "text-info" : "text-muted")}>{row.action}</span>
+                      <span className="text-micro font-medium">{row.side ?? ""}</span>
+                      <span className={cx("ml-auto rounded-pill px-1.5 text-micro font-semibold", row.status === "REJECTED" ? "bg-loss-soft text-loss" : row.status === "FILLED" || row.status === "COMPLETED" ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{row.status}</span>
+                    </div>
+                    <p className="truncate text-micro text-text-2" title={row.contract}>{row.contract}{row.quantity != null ? ` · ${row.quantity} @ ${inr(row.premium)}` : ""}</p>
+                    {row.pnl != null ? <p className={cx("num text-micro font-medium", tone(row.pnl))}>{row.reason} · realized {inr(row.pnl, true)}</p> : row.group === "active" && position && row.action === "BUY" ? <p className={cx("num text-micro font-medium", tone(position.unrealized))}>Open · unrealized {inr(position.unrealized, true)}</p> : row.group === "rejected" ? <p className="text-micro text-loss">{row.reason}</p> : null}
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="text-micro text-muted">{filter === "all" ? "No orders yet in this replay session." : `No ${filter} orders.`}</p>}
+          </section>
         ) : null}
 
         {run && (run.armed || position) ? (
           <div className="flex flex-wrap gap-1.5">
-            {run.armed ? <button type="button" className="h-8 rounded-md border border-border px-2.5 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(algo.busy)} onClick={() => algo.setEnabled(false)}>Stop new entries</button> : null}
+            {run.armed ? <button type="button" className="h-8 rounded-md border border-border px-2.5 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(algo.busy)} onClick={() => void algo.setEnabled(false)}>Stop new entries</button> : null}
             <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md border border-loss/50 px-2.5 font-medium text-loss hover:bg-loss-soft disabled:opacity-50" style={{ color: "var(--loss)" }} disabled={Boolean(algo.busy) || cursor == null} onClick={() => setConfirmEmergency(true)}><OctagonX className="h-3.5 w-3.5" aria-hidden />Emergency stop</button>
           </div>
         ) : null}
-        <p className="text-micro leading-snug text-muted">Algo account only (₹1,00,000 practice capital, separate from your demo funds): fills come from historical 1-minute option data at the replay time and show under Algo account in Portfolio and Home. No broker order is ever sent from replay.</p>
+        <p className="text-micro leading-snug text-muted">Algo account only (₹1,00,000 practice capital, separate from your demo funds). Fills come from historical 1-minute option data at the replay time; nothing is ever sent to a broker from replay.</p>
       </div>
 
       {confirmExit && position ? (
