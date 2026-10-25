@@ -109,7 +109,7 @@ describe("strategy drawings and styles", () => {
 
 describe("strategy settings persistence", () => {
   it("fills missing or invalid values from the defaults and clamps opacity to 50%", () => {
-    const parsed = parseStrategySettings(JSON.stringify({ version: 2, enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
+    const parsed = parseStrategySettings(JSON.stringify({ version: 3, enabled: true, closeBox: { border: "red", opacity: 0.9, width: 7 }, high: { color: "#000000", extend: "session" } }));
     expect(parsed.enabled).toBe(true);
     expect(parsed.closeBox.border).toBe("#7E22CE");
     expect(parsed.closeBox.opacity).toBe(0.5);
@@ -134,6 +134,13 @@ describe("strategy settings persistence", () => {
     expect([old.closeBox.opacity, old.openBox.opacity]).toEqual([0, 0]);
     const chosen = parseStrategySettings(JSON.stringify({ version: 2, closeBox: { opacity: 0.2 } }));
     expect(chosen.closeBox.opacity).toBe(0.2);
+  });
+
+  it("draws the 9:15 low line in the high line's green (#15803D), resetting an older saved colour once", () => {
+    expect(STRATEGY_DEFAULTS.low.color).toBe("#15803D");
+    expect(parseStrategySettings(JSON.stringify({ version: 2, low: { color: "#DC2626" } })).low.color).toBe("#15803D");
+    expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C" } })).low.color).toBe("#15803D");
+    expect(parseStrategySettings(JSON.stringify({ version: 3, low: { color: "#2563EB" } })).low.color).toBe("#2563EB");
   });
 
   it("carries over the old S1 on / off", () => {
@@ -330,7 +337,7 @@ describe("latest session before the open; matching 9:15 colours", () => {
     expect(STRATEGY_DEFAULTS.low.color).toBe(STRATEGY_DEFAULTS.high.color);
     expect(STRATEGY_DEFAULTS.low.dash).toBe("solid");
     expect(parseStrategySettings(JSON.stringify({ low: { color: "#B91C1C", width: 3 } })).low).toMatchObject({ color: "#15803D", width: 3 });
-    expect(parseStrategySettings(JSON.stringify({ low: { color: "#123456" } })).low.color).toBe("#123456");
+    expect(parseStrategySettings(JSON.stringify({ version: 3, low: { color: "#123456" } })).low.color).toBe("#123456");
   });
 });
 

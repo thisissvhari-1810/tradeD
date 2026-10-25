@@ -21,10 +21,11 @@ export type StrategySettings = {
 
 const KEY = "td-strategy";
 /**
- * Saved-settings version. Version 2 made both boxes' fill fully transparent (opacity 0): settings saved
- * before it have their fill opacity reset to 0 once; after that the learner's own choice is kept.
+ * Saved-settings version, for one-time resets of saved values (later choices are kept):
+ *   2: both boxes' fill became fully transparent (opacity 0).
+ *   3: the 9:15 low line uses the same dark green as the high line (#15803D).
  */
-const VERSION = 2;
+const VERSION = 3;
 
 export const STRATEGY_DEFAULTS: StrategySettings = {
   enabled: false,
@@ -87,7 +88,10 @@ export function parseStrategySettings(raw: string | null, legacyOn = false): Str
   } catch {
     row = {};
   }
-  const current = row.version === VERSION;
+  const version = typeof row.version === "number" ? row.version : 1;
+  const current = version >= 2;
+  // Before version 3 the low line could be saved in another colour: it becomes the high line's green.
+  const low = version < 3 && row.low && typeof row.low === "object" ? { ...row.low, color: STRATEGY_DEFAULTS.low.color } : row.low;
   return {
     enabled: flag(row.enabled, legacyOn),
     boxSpan: row.boxSpan === "session" ? "session" : "candles",
@@ -96,7 +100,7 @@ export function parseStrategySettings(raw: string | null, legacyOn = false): Str
     openBox: box(row.openBox, STRATEGY_DEFAULTS.openBox, current),
     high: level(row.high, STRATEGY_DEFAULTS.high),
     // The low line's old default red becomes the new default green; a colour the user chose stays.
-    low: level(row.low && typeof row.low === "object" && (row.low as Partial<StrategyLevel>).color?.toUpperCase() === "#B91C1C" ? { ...row.low, color: STRATEGY_DEFAULTS.low.color } : row.low, STRATEGY_DEFAULTS.low),
+    low: level(low, STRATEGY_DEFAULTS.low),
   };
 }
 
