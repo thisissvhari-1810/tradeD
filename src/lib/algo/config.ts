@@ -50,7 +50,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     entryCutoff: typeof row.entryCutoff === "string" && /^(09|1[0-5]):[0-5]\d$/.test(row.entryCutoff) ? row.entryCutoff : ALGO_DEFAULTS.entryCutoff,
     strategies: strategiesOf(row.strategies),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
-    observationMinutes: !Number.isFinite(num(row.observationMinutes)) || (num(row.settingsVersion) !== 2 && num(row.observationMinutes) === 15) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
+    observationMinutes: !Number.isFinite(num(row.observationMinutes)) || (!(num(row.settingsVersion) >= 2) && num(row.observationMinutes) === 15) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
     filters: filtersOf(row.filters),
     structureStop: typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,

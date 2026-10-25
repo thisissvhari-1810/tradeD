@@ -8,6 +8,7 @@ import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
+import { announceSaved, announceUnsaved } from "@/components/algo/algo-settings-sync";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
@@ -63,7 +64,10 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     try {
       const next = await api<AlgoData>("/api/algo", body);
       apply(next);
-      if (label === "save") setDraft(next.config);
+      if (label === "save") {
+        setDraft(next.config);
+        announceSaved();
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The request failed.");
     } finally {
@@ -86,6 +90,12 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [active, apply]);
+
+  const unsaved = Boolean(data && draft && JSON.stringify(draft) !== JSON.stringify(data.config));
+  useEffect(() => {
+    announceUnsaved(unsaved);
+  }, [unsaved]);
+  useEffect(() => () => announceUnsaved(false), []);
 
   if (!data || !draft) return <p className="text-micro text-muted" role="status">{error || "Loading the algo…"}</p>;
 

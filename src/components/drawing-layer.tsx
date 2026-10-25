@@ -376,8 +376,14 @@ export function DrawingLayer({
 
   useEffect(() => {
     project();
+    // This layer's effect runs before the chart (its parent) loads new candles, so the price scale is
+    // still the previous series' (e.g. right after a timeframe change). Project again once the chart has
+    // painted the new data; the visible range may not change, so no range event would do it.
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => project());
+    });
     const chart = chartRef.current;
-    if (!chart) return;
+    if (!chart) return () => window.cancelAnimationFrame(frame);
     const onRange = () => project();
     chart.timeScale().subscribeVisibleTimeRangeChange(onRange);
     chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
@@ -390,6 +396,7 @@ export function DrawingLayer({
     };
     chart.subscribeClick(onClick);
     return () => {
+      window.cancelAnimationFrame(frame);
       chart.timeScale().unsubscribeVisibleTimeRangeChange(onRange);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       chart.timeScale().unsubscribeSizeChange(onRange);

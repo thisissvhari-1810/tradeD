@@ -8,6 +8,7 @@ import type { LineDash } from "@/components/drawing-model";
 import { STRATEGY_DEFAULTS, setAllVisible, type StrategyBox, type StrategyLevel, type StrategyLine, type StrategySettings } from "@/components/strategy-settings";
 import { price, type StrategyView } from "@/components/strategy-overlay";
 import type { S1Data } from "@/lib/trading/s1";
+import { AUTO_TREND_DEFAULTS, AUTO_TREND_LIMITS, type AutoLine, type AutoTrend, type AutoTrendSettings, type Swing } from "@/lib/chart/trend-engine";
 
 const WIDTHS = [1, 2, 3, 4] as const;
 /** Gap kept between the panel and the chart edges while dragging. */
@@ -18,7 +19,7 @@ const DASHES: Array<{ id: LineDash; label: string }> = [{ id: "solid", label: "S
  * The Strategy panel: on / off, which drawings show, the prices used and every drawing's style.
  * Changes apply to the chart at once and are saved; they never change a calculated price.
  */
-export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent, manualRectangles = 0, left = null, symbol = "" }: {
+export function StrategyPanel({ settings, onChange, data, view, loading, error, disabledReason, onClose, dates, onDates, today, autoCurrent, manualRectangles = 0, left = null, symbol = "", autoTrend, onAutoTrend, trend }: {
   settings: StrategySettings;
   onChange: (next: StrategySettings) => void;
   data: S1Data | null;
@@ -40,6 +41,10 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   manualRectangles?: number;
   /** The chart's symbol (offered as an Algo underlying). */
   symbol?: string;
+  /** The automatic trendline engine's settings and its current result for this chart. */
+  autoTrend: AutoTrendSettings;
+  onAutoTrend: (next: AutoTrendSettings) => void;
+  trend: AutoTrend | null;
 }) {
   const set = (patch: Partial<StrategySettings>) => onChange({ ...settings, ...patch });
   // Dragged by its header, like the option chain. Each opening starts below the Strategy button again.
@@ -47,7 +52,7 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
   const drag = useRef<{ id: number; dx: number; dy: number } | null>(null);
   const [moved, setMoved] = useState<{ x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [tab, setTab] = useState<"levels" | "algo">("levels");
+  const [tab, setTab] = useState<"levels" | "trend" | "algo">("levels");
   // The Algo tab stays mounted once opened, so its checks keep running while Levels is shown.
   const [algoSeen, setAlgoSeen] = useState(false);
   function startDrag(event: ReactPointerEvent<HTMLElement>) {
@@ -105,9 +110,9 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
       </header>
 
       <div className="flex gap-1 border-b border-border px-3 pt-1.5" role="tablist" aria-label="Strategy sections">
-        {(["levels", "algo"] as const).map((key) => (
+        {(["levels", "trend", "algo"] as const).map((key) => (
           <button key={key} type="button" role="tab" aria-selected={tab === key} className={cx("-mb-px border-b-2 px-2 pb-1.5 font-medium", tab === key ? "border-primary text-text" : "border-transparent text-muted hover:text-text")} onClick={() => { setTab(key); if (key === "algo") setAlgoSeen(true); }}>
-            {key === "levels" ? "Levels" : "Algo trade"}
+            {key === "levels" ? "Levels" : key === "trend" ? "Auto trend" : "Algo trade"}
           </button>
         ))}
       </div>
@@ -115,6 +120,12 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
       {algoSeen ? (
         <div className={cx("min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-2.5", tab !== "algo" && "hidden")} role="tabpanel" aria-label="Algo trade">
           <AlgoPanel chartSymbol={symbol} />
+        </div>
+      ) : null}
+
+      {tab === "trend" ? (
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-2.5" role="tabpanel" aria-label="Auto trend">
+          <AutoTrendTab settings={autoTrend} onChange={onAutoTrend} trend={trend} />
         </div>
       ) : null}
 
@@ -234,6 +245,126 @@ export function StrategyPanel({ settings, onChange, data, view, loading, error, 
       </footer>
     </section>
   );
+}
+
+const STRUCTURE_TONE: Record<string, string> = { BULLISH: "text-profit", BEARISH: "text-loss", SIDEWAYS: "text-warning", UNCONFIRMED: "text-muted" };
+const SEQUENCE: Record<string, string> = { HIGHER: "Higher", LOWER: "Lower", EQUAL: "Equal" };
+
+/** When a swing or level was: IST time on intraday charts, the date on daily and longer. */
+function whenOf(time: number, intraday: boolean) {
+  const iso = new Date((time + 19_800) * 1000).toISOString();
+  return intraday ? iso.slice(11, 16) : iso.slice(0, 10);
+}
+
+/**
+ * The automatic trendline engine: what it read from this chart's completed candles (session range,
+ * opening observation, swing structure, the active lines and levels) and its settings. Everything shown is
+ * computed from the chart's own candles; nothing here places or changes an order.
+ */
+function AutoTrendTab({ settings, onChange, trend }: { settings: AutoTrendSettings; onChange: (next: AutoTrendSettings) => void; trend: AutoTrend | null }) {
+  const set = (patch: Partial<AutoTrendSettings>) => onChange({ ...settings, ...patch });
+  const off = !settings.trendlines && !settings.levels && !settings.markers;
+  const intraday = trend?.intraday ?? true;
+  const point = (swing: Swing) => `${price(swing.price)} @ ${whenOf(swing.time, intraday)}`;
+  const lineText = (line: AutoLine | null) => (line ? `${point(line.a)} → ${point(line.b)}` : "None");
+  return (
+    <>
+      <div className="grid grid-cols-1 gap-y-1.5">
+        <Toggle label="Automatic trendlines" checked={settings.trendlines} swatch={settings.colors.support} onChange={(trendlines) => set({ trendlines })} />
+        <Toggle label="Horizontal levels" checked={settings.levels} swatch={settings.colors.resistanceLevel} onChange={(levels) => set({ levels })} />
+        <Toggle label="Swing-point markers" checked={settings.markers} swatch={settings.colors.resistance} onChange={(markers) => set({ markers })} />
+      </div>
+
+      {off ? <p className="text-micro text-muted">Turn on trendlines, levels or markers to analyse this chart.</p> : trend ? (
+        <>
+          <p className={cx("text-micro leading-snug", trend.phase === "ACTIVE" ? "text-text-2" : "text-warning")} role="status">{trend.message}</p>
+          {trend.session ? (
+            <div>
+              <p className="eyebrow mb-1">Session {trend.session.date}</p>
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
+                <Info label="Highest high" text={`${price(trend.session.high)} @ ${whenOf(trend.session.highTime, true)}`} />
+                <Info label="Deepest low" text={`${price(trend.session.low)} @ ${whenOf(trend.session.lowTime, true)}`} />
+                {trend.observation ? <Info label={`Opening ${settings.observationMinutes} min${trend.observation.complete ? "" : " (so far)"}`} text={`${price(trend.observation.low)} – ${price(trend.observation.high)}`} /> : null}
+                {trend.observation ? <div className="min-w-0"><dt className="text-micro text-muted">Opening structure</dt><dd className={cx("truncate font-semibold", STRUCTURE_TONE[trend.observation.structure])}>{trend.observation.structure}</dd></div> : null}
+              </dl>
+            </div>
+          ) : null}
+          {trend.phase === "ACTIVE" ? (
+            <div>
+              <p className="eyebrow mb-1">Structure</p>
+              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
+                <div className="min-w-0"><dt className="text-micro text-muted">Market</dt><dd className={cx("truncate font-semibold", STRUCTURE_TONE[trend.structure])}>{trend.structure}</dd></div>
+                <Info label="Swings (confirmed)" text={String(trend.swings.length)} />
+                <Info label="Highs" text={trend.highs ? `${SEQUENCE[trend.highs]} highs` : "—"} />
+                <Info label="Lows" text={trend.lows ? `${SEQUENCE[trend.lows]} lows` : "—"} />
+              </dl>
+              {trend.change ? <p className="mt-1 text-micro text-warning">{trend.change}</p> : null}
+              <dl className="mt-1.5 space-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
+                <LineInfo label="Support" color={settings.colors.support} text={lineText(trend.support)} now={trend.support?.now} touches={trend.support?.touches} />
+                <LineInfo label="Resistance" color={settings.colors.resistance} text={lineText(trend.resistance)} now={trend.resistance?.now} touches={trend.resistance?.touches} />
+                {trend.brokenLines.map((line) => <LineInfo key={line.id} label={`${line.kind === "SUPPORT" ? "Support" : "Resistance"} broken`} color={line.kind === "SUPPORT" ? settings.colors.support : settings.colors.resistance} text={`Close ${price(line.broken!.close)} @ ${whenOf(line.broken!.time, intraday)} through ${price(line.broken!.price)}`} />)}
+                {trend.levels.map((level) => <LineInfo key={level.id} label={`${level.source === "OPENING_RANGE" ? "Opening range" : "Equal"} ${level.source === "OPENING_RANGE" ? (level.kind === "SUPPORT" ? "low" : "high") : level.kind === "SUPPORT" ? "lows" : "highs"}`} color={level.kind === "SUPPORT" ? settings.colors.supportLevel : settings.colors.resistanceLevel} text={`${price(level.price)}${level.members.length ? ` (${level.members.length} swings)` : ""}`} />)}
+                {trend.provisional.length ? <LineInfo label="Provisional (not confirmed yet)" color="#8A8F98" text={trend.provisional.map((swing) => `${swing.kind === "HIGH" ? "high" : "low"} ${point(swing)}`).join(" · ")} /> : null}
+              </dl>
+            </div>
+          ) : null}
+        </>
+      ) : <p className="text-micro text-muted">Waiting for candles.</p>}
+
+      <div>
+        <p className="eyebrow mb-1">Swing detection</p>
+        <div className="space-y-1">
+          <Row label="Candles left of a swing"><NumberField label="Candles left of a swing" value={settings.left} limits={AUTO_TREND_LIMITS.left} step={1} onChange={(left) => set({ left })} /></Row>
+          <Row label="Candles right (confirmation)"><NumberField label="Candles right of a swing" value={settings.right} limits={AUTO_TREND_LIMITS.right} step={1} onChange={(right) => set({ right })} /></Row>
+          <Row label="Minimum swing (× avg range)"><NumberField label="Minimum swing" value={settings.minSwingAtr} limits={AUTO_TREND_LIMITS.minSwingAtr} step={0.1} onChange={(minSwingAtr) => set({ minSwingAtr })} /></Row>
+          <Row label="Lookback (candles)"><NumberField label="Lookback" value={settings.lookback} limits={AUTO_TREND_LIMITS.lookback} step={10} onChange={(lookback) => set({ lookback })} /></Row>
+          <Row label="Equal / touch tolerance (%)"><NumberField label="Tolerance" value={settings.tolerancePercent} limits={AUTO_TREND_LIMITS.tolerancePercent} step={0.01} onChange={(tolerancePercent) => set({ tolerancePercent })} /></Row>
+          <Row label="Break confirmation (% close)"><NumberField label="Break confirmation" value={settings.breakPercent} limits={AUTO_TREND_LIMITS.breakPercent} step={0.01} onChange={(breakPercent) => set({ breakPercent })} /></Row>
+          <Row label="Opening observation (min)"><NumberField label="Opening observation" value={settings.observationMinutes} limits={AUTO_TREND_LIMITS.observationMinutes} step={5} onChange={(observationMinutes) => set({ observationMinutes })} /></Row>
+        </div>
+        <p className="mt-1 text-micro leading-snug text-muted">A swing is confirmed only after the candles to its right have closed; the forming candle is never used. 1–5 minute charts read today&apos;s session only.</p>
+      </div>
+
+      <div>
+        <p className="eyebrow mb-1">Colors</p>
+        <div className="space-y-1">
+          <Row label="Support line"><Color label="Support line color" value={settings.colors.support} onChange={(support) => set({ colors: { ...settings.colors, support } })} /></Row>
+          <Row label="Resistance line"><Color label="Resistance line color" value={settings.colors.resistance} onChange={(resistance) => set({ colors: { ...settings.colors, resistance } })} /></Row>
+          <Row label="Support level"><Color label="Support level color" value={settings.colors.supportLevel} onChange={(supportLevel) => set({ colors: { ...settings.colors, supportLevel } })} /></Row>
+          <Row label="Resistance level"><Color label="Resistance level color" value={settings.colors.resistanceLevel} onChange={(resistanceLevel) => set({ colors: { ...settings.colors, resistanceLevel } })} /></Row>
+        </div>
+      </div>
+      <button type="button" className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-muted hover:bg-hover hover:text-text" onClick={() => onChange(AUTO_TREND_DEFAULTS)}><RotateCcw className="h-3.5 w-3.5" aria-hidden />Reset auto trend</button>
+    </>
+  );
+}
+
+function LineInfo({ label, color, text, now, touches }: { label: string; color: string; text: string; now?: number; touches?: number }) {
+  return (
+    <div className="min-w-0">
+      <dt className="flex items-center gap-1.5 text-micro text-muted"><span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />{label}{now != null ? <span className="num ml-auto">now {price(now)}{touches ? ` · ${touches} touch${touches === 1 ? "" : "es"}` : ""}</span> : null}</dt>
+      <dd className="num break-words text-micro font-medium text-text">{text}</dd>
+    </div>
+  );
+}
+
+/** A number committed on blur or Enter (clamped to its limits), so typing is never fought mid-number. */
+function NumberField({ label, value, limits, step, onChange }: { label: string; value: number; limits: readonly [number, number]; step: number; onChange: (value: number) => void }) {
+  const [text, setText] = useState(String(value));
+  // A new value from outside (a reset, a clamp) replaces what is shown.
+  const [shownFor, setShownFor] = useState(value);
+  if (shownFor !== value) {
+    setShownFor(value);
+    setText(String(value));
+  }
+  const commit = () => {
+    const parsed = Number(text);
+    if (text.trim() === "" || !Number.isFinite(parsed)) return setText(String(value));
+    const next = Math.min(limits[1], Math.max(limits[0], parsed));
+    setText(String(next));
+    if (next !== value) onChange(next);
+  };
+  return <input type="number" inputMode="decimal" className="compact-field w-[5.5rem] shrink-0 text-right" aria-label={label} value={text} min={limits[0]} max={limits[1]} step={step} onChange={(event) => setText(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") commit(); }} />;
 }
 
 function signed(value: number) {

@@ -179,10 +179,12 @@ describe("wiring", () => {
   });
 
   it("strategy drawings stay separate from manual drawings", () => {
-    // Read-only overlays: the strategy's boxes and lines, plus the Algo's derived trendlines / necklines.
+    // Read-only overlays: the strategy's boxes and lines, the auto trend engine's lines and levels, and the
+    // Algo's derived trendlines / necklines. None of them is ever saved as a manual drawing.
     expect(desk).toContain("overlays={chartOverlays}");
-    expect(desk).toMatch(/const chartOverlays = useMemo\(\(\) => \(algoDrawings\.length \? \[\.\.\.strategyOverlay, \.\.\.algoDrawings\] : strategyOverlay\)/);
+    expect(desk).toMatch(/const chartOverlays = useMemo\(\(\) => \(algoDrawings\.length \|\| autoDrawings\.length \? \[\.\.\.strategyOverlay, \.\.\.autoDrawings, \.\.\.algoDrawings\] : strategyOverlay\)/);
     expect(desk).not.toMatch(/setDrawings\([^)]*algoDrawings/);
+    expect(desk).not.toMatch(/setDrawings\([^)]*autoDrawings/);
   });
 });
 

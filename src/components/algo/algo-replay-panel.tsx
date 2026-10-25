@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, Download, History, LogIn, LogOut, OctagonX, Play, Radio, RotateCcw, ShieldCheck, Zap } from "lucide-react";
 import { downloadAlgoReport } from "@/components/algo/algo-report";
 import { cx } from "@/components/ui";
@@ -10,7 +10,8 @@ import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
-import { STRATEGY_LABEL } from "@/lib/algo/patterns";
+import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
+import { useUnsavedSettings } from "@/components/algo/algo-settings-sync";
 import type { Confirmation } from "@/lib/algo/confirmations";
 
 const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
@@ -462,6 +463,12 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   const gate = algo.gate;
   const config = data?.config;
   const run = algo.run;
+  const unsaved = useUnsavedSettings();
+  // Always confirm with the settings saved right now (they may have been changed since the chart loaded them).
+  const refresh = algo.refresh;
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
   const position = run?.position ?? null;
   if (!data || !config || !gate) return null;
   if (gate.kind === "behind") {
@@ -479,7 +486,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   }
   const ended = run?.status === "ENDED";
   const rows: Array<[string, string]> = [
-    ["Strategy", "Line body-cross"],
+    ["Observation", config.observationMinutes ? `First ${config.observationMinutes} min analysis only` : "Off"],
     ["Underlying", config.underlying],
     ["Signal timeframe", "1 minute (completed candles)"],
     ["Replay", `${date} from ${ist(cursor)} IST`],
@@ -491,14 +498,27 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Target", config.target.mode === "percent" ? `${config.target.value}% of premium` : `₹${config.target.value} above entry`],
     ["Max daily loss", inr(config.maxDailyLoss)],
     ["Max trades", String(config.maxTrades)],
+    ["Cooldown", `${config.cooldownMinutes} min`],
+    ["Entry cutoff", `${config.entryCutoff} IST`],
+    ["Breakout buffer", `${config.filters.breakoutBufferPercent}% (body cross)`],
+    ["Second candle", config.filters.secondCandle ? "Required" : "Off"],
+    ["Momentum (9/21 EMA)", config.filters.momentum ? "Must agree" : "Off"],
+    ["Level block after stop", config.filters.levelBlockMinutes ? `${config.filters.levelBlockMinutes} min` : "Off"],
+    ["Structure stop", config.structureStop ? "On" : "Off"],
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];
+  const strategies = STRATEGY_IDS.filter((id) => config.strategies[id]).map((id) => STRATEGY_LABEL[id]).join(", ") || "None enabled";
   return (
     <Dialog title="Start Algo Trading Replay?" onClose={onCancel}>
       <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. Stop-loss and target rules will be monitored throughout the replay.</p>
+      {unsaved ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">The Algo settings in the Strategy panel have unsaved changes. The replay uses the saved settings shown below: press Save settings there first to use your changes.</p> : null}
       {ended ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">This replay session&apos;s algo run has ended ({run?.endReason === "SESSION_END" ? "session close" : "reset"}). Reset the replay to start a new isolated session.</p> : null}
       {gate.kind === "confirm" && gate.skippedMinutes > 0 ? <p className="mt-2 rounded-md bg-info-soft px-2 py-1.5 text-micro text-info">The replay moved forward {gate.skippedMinutes} minute{gate.skippedMinutes === 1 ? "" : "s"} since the algo last ran. Those minutes are processed in order first (signals, stop-loss and target), exactly as if the replay had played through them.</p> : null}
-      <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
+      <div className="mt-3">
+        <p className="text-micro text-muted">Strategies</p>
+        <p className="font-medium text-text">{strategies}</p>
+      </div>
+      <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1.5">
         {rows.map(([label, value]) => <Item key={label} label={label} value={value} />)}
       </dl>
       <p className="mt-3 rounded-md bg-demo-soft px-2 py-1.5 text-micro text-demo">Simulated trading on the Algo account (its own practice capital). Fills use historical 1-minute option premiums; nothing is sent to a broker.</p>

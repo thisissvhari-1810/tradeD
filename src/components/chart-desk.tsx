@@ -42,7 +42,9 @@ import { api, istTime, money, moveOf, tone, type Quote } from "@/components/api"
 import { useDesk } from "@/components/shell";
 import { feedStatusLabel, useMarketStream } from "@/components/market-stream";
 import { kolkataParts } from "@/lib/market/clock";
-import { applyLiveTick, CHART_SPANS, mergeLiveHistory, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
+import { applyLiveTick, CHART_SPANS, INTRADAY_SECONDS, mergeLiveHistory, SPAN_LABEL, type ChartSpan } from "@/lib/market/spans";
+import { AUTO_TREND_DEFAULTS, analyzeTrend, completedCandles, type AutoTrendSettings } from "@/lib/chart/trend-engine";
+import { autoTrendDrawings, autoTrendMarkers, loadAutoTrendSettings, saveAutoTrendSettings } from "@/components/auto-trend-drawings";
 import {
   buyingPower,
   cancelDemoOrder,
@@ -291,6 +293,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const [optionView, setOptionView] = useState<OptionChartRequest | null>(null);
   // Strategy: settings (on / off, styles) are remembered; levels are fetched per symbol and session (live or the replay date).
   const [strategy, setStrategy] = useState<StrategySettings>(STRATEGY_DEFAULTS);
+  // The automatic trendline engine's settings (saved in this browser).
+  const [autoTrend, setAutoTrend] = useState<AutoTrendSettings>(AUTO_TREND_DEFAULTS);
   const [strategyOpen, setStrategyOpen] = useState(false);
   // The Strategy panel opens below its button: the button's left edge within the chart area (px).
   const [strategyLeft, setStrategyLeft] = useState<number | null>(null);
@@ -403,6 +407,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   if (hydrated && !restored) {
     setRestored(true);
     setStrategy(loadStrategySettings());
+    setAutoTrend(loadAutoTrendSettings());
     const saved = readReplaySession();
     const live = readStorage("td-mode") === "live";
     if (saved) setReplay((current) => ({ ...current, ...saved, active: saved.active && !live }));
@@ -832,10 +837,27 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const analysisNow = replay.active ? (algoRun && algoRun.underlying === symbol ? algoRun.state.analysis ?? null : null) : liveAnalysis;
   const algoAnalysis = analysisNow && (!replay.active || replay.cursor == null || analysisNow.asOf <= replay.cursor + 60) ? analysisNow : null;
   const algoDrawings = useMemo(() => algoAnalysisDrawings(algoAnalysis, { trendline: desk.appearance.tokens.info, neckline: desk.appearance.tokens.warning }), [algoAnalysis, desk.appearance.tokens]);
+  // The automatic trendline engine on this chart's own candles and timeframe. The forming candle is never
+  // analysed: in replay the last candle until the replay clock passes its close, live while the market is
+  // open. Drawings and markers are rebuilt only when their content changes (not on every tick).
+  const autoTrendOn = autoTrend.trendlines || autoTrend.levels || autoTrend.markers;
+  const spanSeconds = INTRADAY_SECONDS[timeframe] ?? null;
+  const lastShown = shown.at(-1) ?? null;
+  const formingCandle = !lastShown ? false : replay.active && !optionView ? (spanSeconds == null || replay.cursor == null ? true : lastShown.time + spanSeconds > replay.cursor) : Boolean(quote?.marketOpen);
+  const trend = useMemo(() => (autoTrendOn ? analyzeTrend(completedCandles(shown, formingCandle), spanSeconds, autoTrend) : null), [autoTrendOn, shown, formingCandle, spanSeconds, autoTrend]);
+  const autoDrawingsJson = JSON.stringify(autoTrendDrawings(trend, autoTrend));
+  const autoDrawings = useMemo<Drawing[]>(() => JSON.parse(autoDrawingsJson), [autoDrawingsJson]);
+  const autoMarkersJson = JSON.stringify(autoTrendMarkers(trend, autoTrend, desk.appearance.tokens.muted));
+  const autoMarkers = useMemo<ChartMarker[]>(() => JSON.parse(autoMarkersJson), [autoMarkersJson]);
+  const changeAutoTrend = useCallback((next: AutoTrendSettings) => {
+    setAutoTrend(next);
+    saveAutoTrendSettings(next);
+  }, []);
   const algoMarkers = useMemo<ChartMarker[]>(() => [
+    ...autoMarkers,
     ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
     ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
-  ], [algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor]);
+  ], [autoMarkers, algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor]);
   // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).
   const [markerTip, setMarkerTip] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   // The trade shown in the detail view, and a strategy line highlighted from it.
@@ -1192,7 +1214,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, replay.date, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
-  const chartOverlays = useMemo(() => (algoDrawings.length ? [...strategyOverlay, ...algoDrawings] : strategyOverlay), [strategyOverlay, algoDrawings]);
+  const chartOverlays = useMemo(() => (algoDrawings.length || autoDrawings.length ? [...strategyOverlay, ...autoDrawings, ...algoDrawings] : strategyOverlay), [strategyOverlay, autoDrawings, algoDrawings]);
   // Strategy drawings are derived, not stored: each refresh reconciles to the same ids. The log below
   // shows that (created / updated / retained / removed). On in development, or with
   // localStorage "td-debug-strategy" = "1"; it runs only when the strategy result changes.
@@ -1504,6 +1526,9 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 onClose={() => setStrategyOpen(false)}
                 left={strategyLeft}
                 symbol={symbol}
+                autoTrend={autoTrend}
+                onAutoTrend={changeAutoTrend}
+                trend={trend}
               />
             ) : null}
             {chainOpen ? (

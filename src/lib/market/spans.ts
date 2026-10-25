@@ -23,7 +23,7 @@ export function isChartSpan(value: string | null): value is ChartSpan {
   return CHART_SPANS.includes(value as ChartSpan);
 }
 
-const INTRADAY_SECONDS: Partial<Record<ChartSpan, number>> = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400 };
+export const INTRADAY_SECONDS: Partial<Record<ChartSpan, number>> = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400 };
 
 /** Move the forming candle with a traded price. Closed candles and after-hours gaps stay as history. */
 export function applyLiveTick(candles: Candle[], span: ChartSpan, last: number, nowSec: number, marketOpen: boolean, volumeDelta = 0, previousTradeTime = 0): Candle[] {

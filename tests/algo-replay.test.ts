@@ -1301,6 +1301,10 @@ describe("the first 30 minutes are for reading the market", () => {
     expect(readAlgoConfig({ observationMinutes: 15 }).observationMinutes).toBe(30);
     expect(readAlgoConfig({}).observationMinutes).toBe(30);
     expect(readAlgoConfig({ observationMinutes: 15, settingsVersion: 2 }).observationMinutes).toBe(15);
+    // Saved under the current version (3): a 15-minute choice stays 15, and the same for a 10% stop / 25% target.
+    const saved = readAlgoConfig({ observationMinutes: 15, settingsVersion: 3, stop: { mode: "percent", value: 10 }, target: { mode: "percent", value: 25 } });
+    expect([saved.observationMinutes, saved.stop.value, saved.target.value]).toEqual([15, 10, 25]);
+    expect(readAlgoConfig(saved)).toEqual(saved);
     expect(readAlgoConfig({ observationMinutes: 20 }).observationMinutes).toBe(20);
   });
 

@@ -5,6 +5,7 @@ import { api } from "@/components/api";
 import { playGate, type PlayGate } from "@/lib/algo/chart-replay";
 import { newReplaySession } from "@/lib/options/replay-premium";
 import type { AlgoData } from "@/components/algo/algo-panel";
+import { useOnSettingsSaved } from "@/components/algo/algo-settings-sync";
 
 export type ChartAlgo = ReturnType<typeof useChartAlgo>;
 
@@ -142,6 +143,13 @@ export function useChartAlgo(input: {
     if (!active) return;
     void load();
   }, [active, session, load]);
+
+  // Settings saved in the Strategy drawer's Algo panel: reload them, so the start dialog and the replay panel
+  // never show the settings from before the save.
+  const reloadSaved = useCallback(() => {
+    if (active) void load();
+  }, [active, load]);
+  useOnSettingsSaved(reloadSaved);
 
   const command = useCallback(async (label: string, body: Record<string, unknown>) => {
     setBusy(label);
