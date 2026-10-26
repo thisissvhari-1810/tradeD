@@ -106,7 +106,7 @@ function CapitalBlock({ capital, available, position, config }: { capital: NonNu
           <Cell label="Committed capital" value={inr(position.avg * position.quantity + position.entryCharges)} />
           <Cell label="Quantity" value={`${position.lots} lot${position.lots === 1 ? "" : "s"} · ${position.quantity}`} />
           <Cell label="Entry premium" value={inr(position.avg)} />
-          <Cell label="Target / stop premium" value={`${inr(position.target)} / ${inr(position.stop)}`} />
+          <Cell label="Target / stop premium" value={`${inr(position.target)} / ${position.stop > 0 ? inr(position.stop) : "None"}`} />
           <Cell label="Charges (entry; exit est.)" value={`${inr(position.entryCharges)}; ≈${inr(position.entryCharges)}`} />
           <Cell label="Net P&L now" value={position.unrealized == null ? "—" : inr(position.unrealized)} tone={(position.unrealized ?? 0) > 0 ? "text-profit" : (position.unrealized ?? 0) < 0 ? "text-loss" : undefined} />
           <p className="col-span-2 text-muted">Net P&amp;L is after the entry charges; the exit&apos;s charges are deducted when it fills. Target and stop are on the option premium, not the account.</p>
@@ -121,6 +121,39 @@ function CapitalBlock({ capital, available, position, config }: { capital: NonNu
         </>
       ) : <p className="col-span-2 text-muted">No signal yet: the quantity is planned from the actual premium and lot size when one appears.</p>}
     </dl>
+  );
+}
+
+/**
+ * Mathi Strategy at a glance: the mode, the latest signal, entries used of the session's limit, the
+ * position, the target rule, that there is no stop-loss, and whether a new entry may be taken (and if not, why).
+ */
+export function MathiStatus({ state, config, mode, now }: { state: AlgoState | null | undefined; config: AlgoConfig; mode: string; now: number | null }) {
+  const trades = state?.tradesToday ?? 0;
+  const risk = { ...RISK_DEFAULTS, ...config.risk };
+  const clock = now == null ? null : ist(now);
+  const blocked = !state ? "No session yet"
+    : trades >= config.maxTrades ? `DAILY TRADE LIMIT REACHED — ${trades}/${config.maxTrades}`
+    : state.riskLocked || (state.realizedToday ?? 0) <= -config.maxDailyLoss ? `Daily loss limit ₹${config.maxDailyLoss} reached`
+    : risk.stopAtTarget && (state.realizedToday ?? 0) >= risk.dailyTarget ? `Daily target ₹${risk.dailyTarget} reached`
+    : clock && clock > config.entryCutoff ? `Entry window closed at ${config.entryCutoff} IST`
+    : state.position ? "A position is open (one at a time)"
+    : !state.entries ? "New entries are switched off"
+    : null;
+  const signal = state?.lastSignal && (state.lastSignal.decision === "CALL" || state.lastSignal.decision === "PUT") ? `${state.lastSignal.decision === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"} at ${ist(state.lastSignal.time + 60)}` : "Waiting";
+  return (
+    <section className="rounded-lg border border-border-soft" aria-label="Mathi Strategy status">
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 px-3 py-2 text-xs">
+        <Cell label="Strategy" value="Mathi Strategy" />
+        <Cell label="Mode" value={mode} />
+        <Cell label="Signal" value={signal} tone={signal.startsWith("CALL") ? "text-profit" : signal.startsWith("PUT") ? "text-loss" : undefined} />
+        <Cell label="Trades" value={`${trades}/${config.maxTrades}`} tone={trades >= config.maxTrades ? "text-warning" : undefined} />
+        <Cell label="Position" value={state?.position ? `Open · ${state.position.side === "CALL" ? "ATM CE" : "ATM PE"}` : "None"} />
+        <Cell label="Target" value={`Entry premium +${config.target.value}%`} />
+        <Cell label="Stop-loss" value={config.stopLoss === false ? "None" : "On"} />
+        <Cell label="Entry" value={blocked ? `Blocked — ${blocked}` : "Enabled"} tone={blocked ? "text-warning" : "text-profit"} />
+      </dl>
+    </section>
   );
 }
 

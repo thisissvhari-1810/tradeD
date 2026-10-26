@@ -120,7 +120,7 @@ function Detail({ event, lines }: { event: AlgoEvent; lines: AlgoData["lines"] }
       ) : null}
       {event.contract ? <p>Contract: ATM {event.side ?? event.contract.right} {event.contract.strike} · {event.contract.expiry} · lot {event.contract.lotSize}{event.contract.bid != null ? ` · bid ${price(event.contract.bid)} / ask ${price(event.contract.ask)}` : ""}</p> : null}
       {event.order ? <p>Order {event.order.status}{event.order.quantity ? ` · ${event.order.quantity} qty` : ""}{event.order.price != null ? ` @ ₹${price(event.order.price)}` : ""}{event.order.charges != null ? ` · charges ₹${price(event.order.charges)}` : ""} <span className="text-micro text-muted">(simulated; key …{event.order.key.slice(-12)})</span></p> : null}
-      {event.stop != null || event.target != null ? <p>Stop-loss ₹{price(event.stop)} · target ₹{price(event.target)}</p> : null}
+      {event.stop != null || event.target != null ? <p>{event.stop ? `Stop-loss ₹${price(event.stop)} · ` : "No stop-loss · "}target ₹{price(event.target)}</p> : null}
       {event.pnl != null ? <p className={event.pnl >= 0 ? "text-profit" : "text-loss"}>Net P&amp;L ₹{price(event.pnl)} (after charges)</p> : null}
       {event.reasons?.length ? <ul className="list-disc pl-4 text-loss">{event.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul> : null}
     </div>

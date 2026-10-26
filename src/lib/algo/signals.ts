@@ -34,6 +34,32 @@ export function bodyCross(previous: Pick<Candle, "close">, current: Pick<Candle,
   return { kind: "NONE", direction: null, detail: "No crossing." };
 }
 
+/**
+ * The body rule (Mathi Strategy): a bullish candle that opens at or below the line crosses it UP once its
+ * close is above the line — by any amount when `fraction` is 0, or with at least `fraction` of its body
+ * (close − open) above it; a bearish candle that opens at or
+ * above it crosses DOWN once that share of its body (open − close) is below. Exactly on the line is not
+ * beyond it, and a wick never counts. With the candle still forming, its current price is the close.
+ */
+export function bodyShareCross(current: Pick<Candle, "open" | "high" | "low" | "close">, level: number, fraction: number): CrossResult {
+  const { open, close, high, low } = current;
+  const body = Math.abs(close - open);
+  if (close > open && open <= level + PAISA && close > level + PAISA) {
+    const share = (close - level) / body;
+    return share + 1e-9 >= fraction
+      ? { kind: "CROSS", direction: "UP", detail: fraction > 0 ? `${Math.round(share * 100)}% of the bullish body is above the line (needs ${Math.round(fraction * 100)}%).` : `The bullish body crossed the line by ${(close - level).toFixed(2)} points.` }
+      : { kind: "WICK", direction: null, detail: `Only ${Math.round(share * 100)}% of the bullish body is above the line (needs ${Math.round(fraction * 100)}%).` };
+  }
+  if (close < open && open >= level - PAISA && close < level - PAISA) {
+    const share = (level - close) / body;
+    return share + 1e-9 >= fraction
+      ? { kind: "CROSS", direction: "DOWN", detail: fraction > 0 ? `${Math.round(share * 100)}% of the bearish body is below the line (needs ${Math.round(fraction * 100)}%).` : `The bearish body crossed the line by ${(level - close).toFixed(2)} points.` }
+      : { kind: "WICK", direction: null, detail: `Only ${Math.round(share * 100)}% of the bearish body is below the line (needs ${Math.round(fraction * 100)}%).` };
+  }
+  if (high > level && low < level) return { kind: "WICK", direction: null, detail: "The body did not cross the line in the candle's direction (wick or the wrong colour)." };
+  return { kind: "NONE", direction: null, detail: "No crossing." };
+}
+
 export type CrossEvent = { lineId: string; lineType: LineType; label: string; price: number; direction: Direction };
 export type LineNote = { lineId: string; label: string; price: number; kind: Exclude<CrossKind, "CROSS" | "NONE">; detail: string };
 
@@ -66,10 +92,10 @@ export function sameSession(a: number, b: number) {
  * Evaluates one candle against every enabled line and consolidates the crossings into one decision.
  * A candle still forming (its minute not finished at `now`) is never a confirmed signal.
  */
-export function evaluateCandle(input: { previous: Candle | null; candle: Candle; lines: AlgoLine[]; enabled: (line: AlgoLine) => boolean; now: number }): CandleEvaluation {
+export function evaluateCandle(input: { previous: Candle | null; candle: Candle; lines: AlgoLine[]; enabled: (line: AlgoLine) => boolean; now: number; fraction?: number; forming?: boolean }): CandleEvaluation {
   const { previous, candle, lines, enabled, now } = input;
   const base = { time: candle.time, previousClose: previous?.close ?? null, candle, events: [] as CrossEvent[], notes: [] as LineNote[] };
-  if (candle.time + 60 > now) return { ...base, decision: "FORMING", explanation: "This candle is still forming; signals use completed candles only." };
+  if (candle.time + 60 > now && !input.forming) return { ...base, decision: "FORMING", explanation: "This candle is still forming; signals use completed candles only." };
   if (!previous || !sameSession(previous.time, candle.time) || previous.time >= candle.time) {
     return { ...base, decision: "NO_PREVIOUS", explanation: "No earlier completed candle in this session to compare with." };
   }
@@ -78,7 +104,7 @@ export function evaluateCandle(input: { previous: Candle | null; candle: Candle;
     // Disabled lines, and lines not yet known when the previous candle formed, are not compared.
     if (!enabled(line) || previous.time < line.activeFrom) continue;
     evaluated += 1;
-    const result = bodyCross(previous, candle, line.price);
+    const result = input.fraction != null ? bodyShareCross(candle, line.price, input.fraction) : bodyCross(previous, candle, line.price);
     if (result.kind === "CROSS" && result.direction) base.events.push({ lineId: line.id, lineType: line.type, label: line.label, price: line.price, direction: result.direction });
     else if (result.kind !== "NONE" && result.kind !== "CROSS") base.notes.push({ lineId: line.id, label: line.label, price: line.price, kind: result.kind, detail: result.detail });
   }

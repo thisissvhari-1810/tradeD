@@ -8,10 +8,9 @@ import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
-import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
+import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
-import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
 import type { algoView } from "@/server/algo";
@@ -196,6 +195,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       {/* Live paper: the same market analysis, strategies and confirmations as the replay dashboard. */}
       {paper && (state.running || state.analysis) ? (
         <>
+          <MathiStatus state={state} config={data.config} mode="Live-price paper trading" now={checkedAt ?? state.analysis?.asOf ?? null} />
           <EngineCard state={state} config={data.config} date={state.sessionDate} now={checkedAt ?? state.analysis?.asOf ?? null} unrealized={data.position?.unrealized ?? null} />
           <MarketAnalysisSection analysis={state.analysis} symbol={data.config.underlying} time={state.analysis?.asOf ?? null} />
           <StrategyRows analysis={state.analysis} />
@@ -211,7 +211,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             <Info label="Average entry" text={inr(position.avg)} />
             <Info label="Current bid" text={inr(position.bid)} />
             <Info label="Unrealized" text={inr(position.unrealized)} tone={(position.unrealized ?? 0) >= 0 ? "text-profit" : "text-loss"} />
-            <Info label="Stop-loss" text={inr(position.stop)} />
+            <Info label="Stop-loss" text={position.stop > 0 ? inr(position.stop) : "None"} />
             <Info label="Target" text={inr(position.target)} />
             <Info label="Exit status" text={position.exit ? `Exiting (${position.exit.reason})` : "Protected by TradeD checks"} />
           </dl>
@@ -233,53 +233,64 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             <input type="date" className="compact-field w-[9.5rem]" aria-label="Expiry (empty = nearest)" value={draft.expiry === "nearest" ? "" : draft.expiry} onChange={(event) => set({ expiry: event.target.value || "nearest" })} />
           </Field>
           <p className="text-right text-micro text-muted">{draft.expiry === "nearest" ? "Nearest valid expiry" : "Fixed expiry"}</p>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Mathi Strategy summary">
+            <Info label="Strategy" text="Mathi Strategy" />
+            <Info label="Entry signals" text="Enabled line breakouts / breakdowns" />
+            <Info label="Body confirmation" text={draft.crossPercent ? `${draft.crossPercent}% of the body` : "Any body crossing"} />
+            <Info label="Entry cutoff" text={draft.entryCutoff >= "15:30" ? "None" : `${draft.entryCutoff} IST`} />
+            <Info label="Stop-loss" text={draft.stopLoss === false ? "Disabled" : "On"} />
+            <Info label="Profit target" text={`${draft.target.value}% of option premium`} />
+            <Info label="Maximum trades" text={`${draft.maxTrades} per session`} />
+            <Info label="Underlying · timeframe" text={`${draft.underlying} · 1 minute`} />
+            <Info label="Trading mode" text={draft.mode === "REPLAY" ? "Chart replay" : draft.mode === "PAPER" ? "Live-price paper trading" : "Live"} />
+          </dl>
           <p className="eyebrow pt-2">Trading window (IST)</p>
           <Field label="Entries from"><input type="time" className="compact-field w-[9.5rem]" aria-label="Entries from" value={draft.entryStart} min="09:15" max="15:29" onChange={(event) => set({ entryStart: event.target.value || "09:15" })} /></Field>
-          <Field label="No new entries after"><input type="time" className="compact-field w-[9.5rem]" aria-label="No new entries after" value={draft.entryCutoff} min="09:16" max="15:29" onChange={(event) => set({ entryCutoff: event.target.value || "10:30" })} /></Field>
-          <Field label="At the window's end">
-            <select className="compact-field w-[9.5rem]" aria-label="At the window's end" value={draft.windowExit} onChange={(event) => set({ windowExit: event.target.value === "close" ? "close" : "hold" })}>
-              <option value="hold">Keep open</option>
-              <option value="close">Close it</option>
-            </select>
-          </Field>
-          <p className="text-micro text-muted">A setup is taken as soon as it is confirmed on a completed candle — at 09:17 if that is when it appears. No new entries after the window; the target, a loss limit or no valid setup also mean no trade.</p>
-          <p className="eyebrow pt-2">Capital and risk</p>
-          <Field label="Position sizing">
-            <select className="compact-field w-[9.5rem]" aria-label="Position sizing" value={draft.sizing} onChange={(event) => set({ sizing: event.target.value === "fixed" ? "fixed" : "risk" })}>
-              <option value="risk">By risk</option>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Entry cutoff</span><input type="checkbox" className="oc-check" aria-label="Use an entry cutoff" checked={draft.entryCutoff < "15:30"} onChange={(event) => set({ entryCutoff: event.target.checked ? "14:30" : "15:30" })} /></label>
+          {draft.entryCutoff < "15:30" ? <Field label="No new entries after"><input type="time" className="compact-field w-[9.5rem]" aria-label="No new entries after" value={draft.entryCutoff} min="09:16" max="15:29" onChange={(event) => set({ entryCutoff: event.target.value || "15:30" })} /></Field> : <p className="text-right text-micro text-muted">None: entries until the session closes</p>}
+          <p className="text-micro text-muted">A line breakout is taken as soon as it is confirmed — at 09:17 if that is when it appears. No new entries after the window.</p>
+          <p className="eyebrow pt-2">Entry: strategy-line breakouts</p>
+          <p className="text-micro text-muted">Mathi Strategy trades only the enabled strategy lines (below): ATM CE when a bullish candle that opened at or below a line closes above it, ATM PE when a bearish candle that opened at or above a line closes below it. A wick never counts. W / M, bounce / rejection, trendline and opening-range signals are not used.</p>
+          <Field label="Body past the line (%)"><NumberInput value={draft.crossPercent} step={5} min={0} onChange={(crossPercent) => set({ crossPercent })} /></Field>
+          <p className="text-micro text-muted">{draft.crossPercent ? `At least ${draft.crossPercent}% of the candle's body must be past the line.` : "0 = any genuine crossing: the body opens at or before the line and closes past it, by any amount (e.g. 7 points). A wick alone never counts."}</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Enter while the candle forms (live paper)</span><input type="checkbox" className="oc-check" aria-label="Enter while the candle forms" checked={draft.intrabar} onChange={(event) => set({ intrabar: event.target.checked })} /></label>
+          <p className="text-micro text-muted">Live-price paper only, when the data feed provides the forming candle; once per candle. Replay uses 1-minute candles, so there the share is checked when each minute completes.</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Second-candle confirmation</span><input type="checkbox" className="oc-check" aria-label="Second-candle confirmation" checked={draft.filters.secondCandle} onChange={(event) => set({ filters: { ...draft.filters, secondCandle: event.target.checked } })} /></label>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
+          <p className="text-micro text-muted">Both off by default: one completed candle that crosses with enough of its body is the signal.</p>
+
+          <p className="eyebrow pt-2">Quantity, target and limits</p>
+          <Field label="Position size">
+            <select className="compact-field w-[9.5rem]" aria-label="Position size" value={draft.sizing === "capital" ? "capital" : "fixed"} onChange={(event) => set({ sizing: event.target.value === "capital" ? "capital" : "fixed", lots: event.target.value === "capital" ? 50 : 1 })}>
+              <option value="capital">By capital</option>
               <option value="fixed">Fixed lots</option>
             </select>
           </Field>
-          {draft.sizing === "risk" ? (
+          {draft.sizing === "capital" ? (
             <>
-              <Field label="Capital (₹)"><NumberInput value={draft.risk.capital} step={10_000} min={10_000} onChange={(capital) => set({ risk: { ...draft.risk, capital } })} /></Field>
-              <Field label="Risk per trade (%)"><NumberInput value={draft.risk.perTradePercent} step={0.1} min={0.1} onChange={(perTradePercent) => set({ risk: { ...draft.risk, perTradePercent } })} /></Field>
-              <p className="text-right text-micro text-muted">= ₹{Number.isFinite(draft.risk.capital * draft.risk.perTradePercent) ? (Math.round(draft.risk.capital * draft.risk.perTradePercent) / 100).toLocaleString("en-IN") : "—"} lost at most per trade (charges included)</p>
-              <Field label="Max lots per trade"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
-              <Field label="Min reward : risk"><NumberInput value={draft.risk.minRewardRisk} step={0.5} min={0.5} onChange={(minRewardRisk) => set({ risk: { ...draft.risk, minRewardRisk } })} /></Field>
-              <Field label="Min stop distance (%)"><NumberInput value={draft.risk.minStopPercent} step={0.01} min={0.01} onChange={(minStopPercent) => set({ risk: { ...draft.risk, minStopPercent } })} /></Field>
-              <Field label="Min setup score (0–100)"><NumberInput value={draft.minScore} step={5} min={0} onChange={(minScore) => set({ minScore })} /></Field>
-              <Field label="Target">
-                <select className="compact-field w-[9.5rem]" aria-label="Target method" value={draft.risk.targetMode} onChange={(event) => set({ risk: { ...draft.risk, targetMode: event.target.value === "level" ? "level" : event.target.value === "trail" ? "trail" : "multiple" } })}>
-                  <option value="multiple">Reward : risk ×</option>
-                  <option value="level">Next level</option>
-                  <option value="trail">Trailing stop</option>
+              <Field label="Capital Allocation (%)"><NumberInput value={draft.allocation.percent} step={5} min={1} onChange={(percent) => set({ allocation: { ...draft.allocation, percent } })} /></Field>
+              <Field label="Maximum Capital (₹)"><NumberInput value={draft.allocation.maxCapital} step={10_000} min={1_000} onChange={(maxCapital) => set({ allocation: { ...draft.allocation, maxCapital } })} /></Field>
+              <Field label="If unaffordable">
+                <select className="compact-field w-[9.5rem]" aria-label="Unaffordable order policy" value={draft.allocation.policy} onChange={(event) => set({ allocation: { ...draft.allocation, policy: event.target.value === "reject" ? "reject" : "reduce" } })}>
+                  <option value="reduce">Buy affordable lots</option>
+                  <option value="reject">Skip the trade</option>
                 </select>
               </Field>
-              <p className="text-micro text-muted">{draft.risk.targetMode === "level" ? "The next opposing support / resistance, if it is at least the minimum reward : risk away (else the fixed multiple)." : draft.risk.targetMode === "trail" ? "No fixed target: the index stop trails each swing confirmed after the entry, and never moves back." : "The target is the minimum reward : risk times the stop distance."}</p>
-              <Field label="Daily profit target (₹)"><NumberInput value={draft.risk.dailyTarget} step={500} min={1} onChange={(dailyTarget) => set({ risk: { ...draft.risk, dailyTarget } })} /></Field>
-              <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Stop new entries at the target</span><input type="checkbox" className="oc-check" aria-label="Stop new entries at the target" checked={draft.risk.stopAtTarget} onChange={(event) => set({ risk: { ...draft.risk, stopAtTarget: event.target.checked } })} /></label>
-              <p className="text-micro text-muted">The stop goes on the index just beyond the setup&apos;s invalidation; lots are sized so a stop-out (charges and slippage included) loses at most the risk per trade. If even one lot risks more, the setup is skipped. The target is a goal, never a reason to add risk.</p>
+              <Field label="Max lots per trade"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
+              <p className="text-micro text-muted">Each trade buys the most whole lots whose premium and entry charges fit {draft.allocation.percent}% of ₹{Number.isFinite(draft.allocation.maxCapital) ? draft.allocation.maxCapital.toLocaleString("en-IN") : "—"} and the cash actually available (rounded down, never a part lot).</p>
             </>
           ) : (
-            <>
-              <Field label="Quantity (lots)"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
-              <Protect label="Stop-loss" value={draft.stop} onChange={(stop) => set({ stop })} />
-              <Protect label="Target" value={draft.target} onChange={(target) => set({ target })} />
-            </>
+            <Field label="Quantity (lots)"><NumberInput value={draft.lots} step={1} min={1} onChange={(lots) => set({ lots })} /></Field>
           )}
-          <Field label={`Max daily loss (₹)${draft.sizing === "risk" && draft.risk.capital > 0 ? ` ${Math.round((draft.maxDailyLoss / draft.risk.capital) * 1000) / 10}%` : ""}`}><NumberInput value={draft.maxDailyLoss} step={500} min={1} onChange={(maxDailyLoss) => set({ maxDailyLoss })} /></Field>
+          <Field label="Target (% of premium)"><NumberInput value={draft.target.value} step={0.5} min={0.5} onChange={(value) => set({ target: { mode: "percent", value } })} /></Field>
+          <p className="text-micro text-muted">Exit when the option&apos;s own premium reaches its entry price + {Number.isFinite(draft.target.value) ? draft.target.value : "—"}% (₹100 → ₹{Number.isFinite(draft.target.value) ? (100 * (1 + draft.target.value / 100)).toFixed(2) : "—"}). Net P&amp;L is lower after charges and slippage.</p>
+          <p className="text-micro text-muted"><strong className="text-text-2">No stop-loss.</strong> A Mathi trade exits only at its target, when you exit it, or at the session end.</p>
           <Field label="Max trades / session"><NumberInput value={draft.maxTrades} step={1} min={1} onChange={(maxTrades) => set({ maxTrades })} /></Field>
+          <p className="text-micro text-muted">Successful entries count (a closed trade still counts; a rejected order does not). At the limit new entries stop until the next session; an open trade is still managed to its target.</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Pause the replay at the limit</span><input type="checkbox" className="oc-check" aria-label="Pause the replay at the trade limit" checked={draft.stopAtLimit} onChange={(event) => set({ stopAtLimit: event.target.checked })} /></label>
+          <Field label="Max daily loss (₹)"><NumberInput value={draft.maxDailyLoss} step={500} min={1} onChange={(maxDailyLoss) => set({ maxDailyLoss })} /></Field>
+          <Field label="Daily profit target (₹)"><NumberInput value={draft.risk.dailyTarget} step={500} min={1} onChange={(dailyTarget) => set({ risk: { ...draft.risk, dailyTarget } })} /></Field>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Stop new entries at the daily target</span><input type="checkbox" className="oc-check" aria-label="Stop new entries at the target" checked={draft.risk.stopAtTarget} onChange={(event) => set({ risk: { ...draft.risk, stopAtTarget: event.target.checked } })} /></label>
           <Field label="Max open positions"><span className="w-[9.5rem] text-right text-text-2">1 (one per underlying)</span></Field>
           <Field label="Cooldown (minutes)"><NumberInput value={draft.cooldownMinutes} step={1} min={0} onChange={(cooldownMinutes) => set({ cooldownMinutes })} /></Field>
           <Field label="Opposite signal">
@@ -288,7 +299,8 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
               <option value="exit-first">Exit first, then wait</option>
             </select>
           </Field>
-          <Field label="Conflicting signals"><span className="w-[9.5rem] text-right text-text-2">No entry</span></Field>
+
+          <p className="eyebrow pt-2">Execution safeguards</p>
           <Field label="ATM rounding">
             <select className="compact-field w-[9.5rem]" value={draft.rounding} onChange={(event) => set({ rounding: event.target.value as AlgoConfig["rounding"] })}>
               <option value="nearest">Nearest strike</option>
@@ -299,62 +311,6 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <Field label="Max bid/ask spread (%)"><NumberInput value={draft.maxSpreadPercent} step={0.5} min={0.5} onChange={(maxSpreadPercent) => set({ maxSpreadPercent })} /></Field>
           <Field label="Max quote age (s)"><NumberInput value={draft.maxQuoteAgeSeconds} step={5} min={5} onChange={(maxQuoteAgeSeconds) => set({ maxQuoteAgeSeconds })} /></Field>
           <Field label="Paper slippage (ticks)"><NumberInput value={draft.slippageTicks} step={1} min={0} onChange={(slippageTicks) => set({ slippageTicks })} /></Field>
-          <p className="eyebrow pt-2">Strategies</p>
-          {STRATEGY_IDS.map((id) => (
-            <label key={id} className="flex min-h-7 cursor-pointer items-center justify-between gap-2">
-              <span className="text-muted">{STRATEGY_LABEL[id]}</span>
-              <input type="checkbox" className="oc-check" aria-label={`${STRATEGY_LABEL[id]} strategy`} checked={draft.strategies[id]} onChange={(event) => set({ strategies: { ...draft.strategies, [id]: event.target.checked } })} />
-            </label>
-          ))}
-          <Field label="Opening range (minutes)"><NumberInput value={draft.patterns.orbMinutes} step={1} min={1} onChange={(orbMinutes) => set({ patterns: { ...draft.patterns, orbMinutes } })} /></Field>
-          <Field label="Zone tolerance (%)"><NumberInput value={draft.patterns.zoneTolerancePercent} step={0.01} min={0} onChange={(zoneTolerancePercent) => set({ patterns: { ...draft.patterns, zoneTolerancePercent } })} /></Field>
-          <p className="text-micro text-muted">Bounce and rejection: how close a candle must come to a support / resistance zone (0.03% ≈ 7 NIFTY points).</p>
-          <Field label="Wait before entries (min)"><NumberInput value={draft.observationMinutes} step={1} min={0} onChange={(observationMinutes) => set({ observationMinutes })} /></Field>
-          <p className="text-micro text-muted">{draft.observationMinutes ? `No new entries in the first ${draft.observationMinutes} minutes after 09:15.` : "No waiting period: setups are taken as soon as they are confirmed."}</p>
-          <p className="eyebrow pt-2">Trade filters</p>
-          <Field label="Breakout buffer (%)"><NumberInput value={draft.filters.breakoutBufferPercent} step={0.01} min={0} onChange={(breakoutBufferPercent) => set({ filters: { ...draft.filters, breakoutBufferPercent } })} /></Field>
-          <p className="text-micro text-muted">A line break counts only when the candle body crosses the line and closes at least this far beyond it (0.03% ≈ 7 NIFTY points).</p>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Second-candle confirmation</span><input type="checkbox" className="oc-check" aria-label="Second-candle confirmation" checked={draft.filters.secondCandle} onChange={(event) => set({ filters: { ...draft.filters, secondCandle: event.target.checked } })} /></label>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
-          <Field label="Block a level after a stop (min)"><NumberInput value={draft.filters.levelBlockMinutes} step={5} min={0} onChange={(levelBlockMinutes) => set({ filters: { ...draft.filters, levelBlockMinutes } })} /></Field>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Structure stop (index back through the level)</span><input type="checkbox" className="oc-check" aria-label="Structure stop" checked={draft.structureStop} onChange={(event) => set({ structureStop: event.target.checked })} /></label>
-          <p className="eyebrow pt-2">Trendline breakouts</p>
-          <Field label="Detection">
-            <select className="compact-field w-[9.5rem]" aria-label="Breakout detection" value={draft.patterns.breakMode} onChange={(event) => set({ patterns: { ...draft.patterns, breakMode: event.target.value === "intrabar" ? "intrabar" : "close" } })}>
-              <option value="close">Candle close</option>
-              <option value="intrabar">Intrabar cross</option>
-            </select>
-          </Field>
-          {draft.patterns.breakMode === "intrabar" ? <p className="text-micro text-warning">Intrabar: the candle&apos;s high (low) crossing the line is enough, so more false breakouts. Paper and replay only; live trading needs candle-close confirmation.</p> : null}
-          <Field label="Breakout buffer">
-            <span className="flex w-[9.5rem] gap-1">
-              <input type="number" className="compact-field min-w-0 flex-1 text-right" aria-label="Breakout buffer value" step={draft.patterns.bufferMode === "points" ? 1 : draft.patterns.bufferMode === "atr" ? 0.1 : 0.01} min={0} value={Number.isFinite(draft.patterns.bufferValue) ? draft.patterns.bufferValue : ""} onChange={(event) => set({ patterns: { ...draft.patterns, bufferValue: event.target.value === "" ? NaN : Number(event.target.value) } })} />
-              <select className="compact-field w-[4.25rem]" aria-label="Breakout buffer unit" value={draft.patterns.bufferMode} onChange={(event) => {
-                const bufferMode = event.target.value === "points" ? "points" : event.target.value === "atr" ? "atr" : "percent";
-                set({ patterns: { ...draft.patterns, bufferMode, bufferValue: bufferMode === "points" ? 5 : bufferMode === "atr" ? 0.3 : 0.02 } });
-              }}>
-                <option value="percent">%</option>
-                <option value="points">pts</option>
-                <option value="atr">× range</option>
-              </select>
-            </span>
-          </Field>
-          <p className="text-micro text-muted">Measured from the line&apos;s own price at that candle (a diagonal line moves), not its starting price.</p>
-          <Field label="Stop beyond">
-            <select className="compact-field w-[9.5rem]" aria-label="Trendline stop" value={draft.patterns.trendStop} onChange={(event) => set({ patterns: { ...draft.patterns, trendStop: event.target.value === "line" ? "line" : "swing" } })}>
-              <option value="swing">Latest swing</option>
-              <option value="line">The broken line</option>
-            </select>
-          </Field>
-          <p className="eyebrow pt-2">Trendline / W / M settings</p>
-          <Field label="Swing sensitivity (candles)"><NumberInput value={draft.patterns.pivotStrength} step={1} min={1} onChange={(pivotStrength) => set({ patterns: { ...draft.patterns, pivotStrength } })} /></Field>
-          <Field label="Min. bottoms / tops apart"><NumberInput value={draft.patterns.minSeparation} step={1} min={2} onChange={(minSeparation) => set({ patterns: { ...draft.patterns, minSeparation } })} /></Field>
-          <Field label="Max. lows / highs gap (%)"><NumberInput value={draft.patterns.tolerancePercent} step={0.05} min={0.01} onChange={(tolerancePercent) => set({ patterns: { ...draft.patterns, tolerancePercent } })} /></Field>
-          <Field label="Min. breakout beyond (%)"><NumberInput value={draft.patterns.minBreakPercent} step={0.01} min={0} onChange={(minBreakPercent) => set({ patterns: { ...draft.patterns, minBreakPercent } })} /></Field>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Wait for a retest</span><input type="checkbox" className="oc-check" aria-label="Retest mode" checked={draft.patterns.retest} onChange={(event) => set({ patterns: { ...draft.patterns, retest: event.target.checked } })} /></label>
-          {draft.patterns.retest ? <Field label="Retest window (candles)"><NumberInput value={draft.patterns.retestBars} step={1} min={1} onChange={(retestBars) => set({ patterns: { ...draft.patterns, retestBars } })} /></Field> : null}
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Require breakout volume</span><input type="checkbox" className="oc-check" aria-label="Volume confirmation" checked={draft.patterns.volume} onChange={(event) => set({ patterns: { ...draft.patterns, volume: event.target.checked } })} /></label>
-          {draft.patterns.volume ? <p className="text-micro text-muted">Applied only when the feed has volume (index candles usually do not); otherwise shown as unavailable.</p> : null}
           {dirty ? (
             <div className="flex gap-1.5 pt-1">
               <button type="button" className="h-8 flex-1 rounded-md bg-primary font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={Boolean(busy)} onClick={() => void run("save", { action: "save", config: draft })}>{busy === "save" ? "Saving…" : "Save settings"}</button>
@@ -459,21 +415,6 @@ export function Field({ label, children }: { label: string; children: React.Reac
 
 export function NumberInput({ value, step, min, onChange }: { value: number; step: number; min: number; onChange: (value: number) => void }) {
   return <input type="number" className="compact-field w-[9.5rem] text-right" value={Number.isFinite(value) ? value : ""} step={step} min={min} onChange={(event) => onChange(event.target.value === "" ? NaN : Number(event.target.value))} />;
-}
-
-function Protect({ label, value, onChange }: { label: string; value: AlgoConfig["stop"]; onChange: (value: AlgoConfig["stop"]) => void }) {
-  return (
-    <div className="flex min-h-7 items-center justify-between gap-2">
-      <span className="min-w-0 truncate text-muted">{label}</span>
-      <span className="flex w-[9.5rem] gap-1">
-        <input type="number" className="compact-field min-w-0 flex-1 text-right" aria-label={`${label} value`} value={Number.isFinite(value.value) ? value.value : ""} step={value.mode === "percent" ? 1 : 0.5} min={0} onChange={(event) => onChange({ ...value, value: event.target.value === "" ? NaN : Number(event.target.value) })} />
-        <select className="compact-field w-[4.25rem]" aria-label={`${label} unit`} value={value.mode} onChange={(event) => onChange({ ...value, mode: event.target.value === "points" ? "points" : "percent" })}>
-          <option value="percent">% prem.</option>
-          <option value="points">₹ prem.</option>
-        </select>
-      </span>
-    </div>
-  );
 }
 
 export function Info({ label, text, tone }: { label: string; text: string; tone?: string }) {

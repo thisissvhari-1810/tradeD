@@ -86,6 +86,17 @@ export type AlgoConfig = {
   structureStop: boolean;
   /** Swing, pattern and breakout settings for the trendline, W and M strategies. */
   patterns: PatternSettings;
+  /** Line crossings: "body" — the candle opens at or before the line and closes past it (Mathi Strategy); "classic" —
+   * the previous close and this open on one side, this close on the other. */
+  crossRule: "body" | "classic";
+  /** "body" rule: the share of the candle's body that must be past the line, % (0 = any genuine crossing). */
+  crossPercent: number;
+  /** Automatic stop-loss exits. Mathi Strategy runs without one (shown clearly); Algo - Primary Strategy keeps its premium stop. */
+  stopLoss: boolean;
+  /** Live-price paper: also check the forming candle (at its current price) when the data feed provides it. */
+  intrabar: boolean;
+  /** Pause the replay once the session's entries are used up (otherwise it keeps playing; new entries stay blocked). */
+  stopAtLimit: boolean;
 };
 
 export const ALGO_DEFAULTS: AlgoConfig = {
@@ -93,9 +104,11 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   mode: "PAPER",
   timeframe: "1m",
   expiry: "nearest",
-  lots: 10,
-  stop: { mode: "percent", value: 20 },
-  target: { mode: "percent", value: 40 },
+  // Mathi Strategy: a line breakout buys as many whole ATM lots as the ₹1,00,000 capital pays for (up to
+  // 50 lots); +3% on the option premium; no stop-loss.
+  lots: 50,
+  stop: { mode: "percent", value: 3 },
+  target: { mode: "percent", value: 3 },
   // 2% of the ₹1,00,000 capital (two full-risk losses).
   maxDailyLoss: 2_000,
   maxTrades: 3,
@@ -111,20 +124,28 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   slippageTicks: 1,
   // The session's first half: entries from 09:15 to 12:00 IST, as soon as a setup is confirmed (no waiting period).
   entryStart: "09:15",
-  entryCutoff: "12:00",
+  // Mathi Strategy: no entry cutoff — entries until the session's close (15:30).
+  entryCutoff: "15:30",
   windowExit: "hold",
-  sizing: "risk",
+  sizing: "capital",
   allocation: ALLOCATION_DEFAULTS,
   risk: RISK_DEFAULTS,
   minScore: 60,
-  strategies: { line: true, trendline: true, w: true, m: true, orb: true, bounce: true, rejection: true },
+  // Only strategy-line crossings: W / M, bounce / rejection, trendline and opening-range signals are off.
+  strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false },
   observationMinutes: 0,
   engine: "existing",
   primary: PRIMARY_SETTINGS_DEFAULTS,
-  settingsVersion: 6,
-  filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0.03, secondCandle: true, momentum: true },
-  structureStop: true,
+  settingsVersion: 9,
+  filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
+  structureStop: false,
   patterns: PATTERN_DEFAULTS,
+  // Any genuine body crossing of an enabled line (no minimum points, no share of the body).
+  crossRule: "body",
+  crossPercent: 0,
+  stopLoss: false,
+  intrabar: true,
+  stopAtLimit: false,
 };
 
 /**
@@ -135,6 +156,7 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
   ...ALGO_DEFAULTS,
   engine: "primary",
   mode: "REPLAY",
+  entryCutoff: "12:00",
   // Up to 100% of the ₹1,00,000 demo capital in whole lots; +3% / −3% on the executed option premium.
   sizing: "capital",
   lots: 50,
@@ -142,6 +164,11 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
   target: { mode: "percent", value: 3 },
   maxDailyLoss: 3_000,
   maxTrades: 2,
+  stopLoss: true,
+  stopAtLimit: true,
+  crossRule: "classic",
+  crossPercent: 0,
+  intrabar: false,
   minScore: 0,
   filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
   structureStop: false,
@@ -222,6 +249,8 @@ export type AlgoState = {
   blockedLevels?: Array<{ level: number; until: number }>;
   /** The engine's state on the latest evaluated candle. */
   engine?: EngineState | null;
+  /** A candle already entered on while it was forming (live paper), so its completed evaluation does not enter again. */
+  formingEntry?: number | null;
 };
 
 export function initialState(sessionDate: string): AlgoState {
@@ -265,6 +294,8 @@ export type AlgoEvent = {
   stop?: number;
   target?: number;
   pnl?: number;
+  /** On exits: (exit − entry) × quantity before charges; `pnl` is after both legs' charges. */
+  gross?: number;
   reasons?: string[];
   /** On entries: the strategy and the broken level the trade was taken on. */
   setup?: TradeSetup;
@@ -316,7 +347,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
     const fresh = state.lastCandle == null ? (latest ? [latest] : []) : completed.filter((candle) => candle.time > state.lastCandle!);
     for (const candle of fresh) {
       const index = completed.indexOf(candle);
-      const lineEvaluation = evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now });
+      const lineEvaluation = evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: config.crossRule === "body" ? (config.crossPercent ?? 0) / 100 : undefined });
       const evaluation = coordinate(lineEvaluation, completed.slice(0, index + 1), input, state);
       const signal = evaluation.decision === "CALL" || evaluation.decision === "PUT";
       const isLatest = candle === latest && (adapter.kind === "replay" || now - (candle.time + 60) <= FRESH_SECONDS);
@@ -326,6 +357,12 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
       let plan: TradePlan | null = null;
       let capital: CapitalPlan | null = null;
       let entered = false;
+      // Already entered on this candle while it was forming (live paper): the same signal is not traded twice.
+      if (signal && state.formingEntry === candle.time) {
+        state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
+        log({ key: `eval:${candle.time}`, time: candle.time, kind, message: `${evaluation.explanation} Already entered on this candle while it was forming.`, evaluation });
+        continue;
+      }
       if (signal) {
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
         if (!isLatest) {
@@ -350,6 +387,22 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
       state.engine = { ...engineState(state, config, candle.time, evaluation, { entered, reasons, plan }), capital };
     }
     if (latest && (state.lastCandle == null || latest.time > state.lastCandle)) state.lastCandle = latest.time;
+    // Live paper with share-of-body crossings: the forming candle may enter as soon as its share is reached
+    // (at its current price), once; its completed evaluation then does not enter again.
+    const forming = input.candles.filter((candle) => candle.time + 60 > now && candle.time <= now && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).at(-1);
+    if (config.intrabar && config.crossRule === "body" && adapter.kind === "paper" && forming && state.formingEntry !== forming.time && !(config.filters?.secondCandle) && (state.lastCandle == null || forming.time > state.lastCandle)) {
+      const previous = completed.at(-1) ?? null;
+      const lineEvaluation = evaluateCandle({ previous, candle: forming, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: (config.crossPercent ?? 0) / 100, forming: true });
+      if (lineEvaluation.decision === "CALL" || lineEvaluation.decision === "PUT") {
+        const evaluation = coordinate(lineEvaluation, [...completed, forming], input, state);
+        if (evaluation.decision === "CALL" || evaluation.decision === "PUT") {
+          const result = await tryEntry(state, input, evaluation, log);
+          if (result.ok) state.formingEntry = forming.time;
+          log({ key: `eval-forming:${forming.time}`, time: forming.time, kind: result.ok ? "EVALUATION" : "REJECTED", message: `${evaluation.explanation} (candle still forming, at its current price) ${result.message}`, evaluation, reasons: result.reasons });
+          state.engine = { ...engineState(state, config, forming.time, evaluation, { entered: result.ok, reasons: result.reasons, plan: result.plan ?? null }), capital: result.capital ?? null };
+        }
+      }
+    }
   }
 
   await confirm(state, input, log);
@@ -380,7 +433,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
       reasons.push("Opposing signal: exiting the open position first. A reversal needs a new signal after the exit is confirmed.");
     } else reasons.push("Opposing signal ignored while a position is open.");
   }
-  if (state.tradesToday >= config.maxTrades) reasons.push(`Daily trade limit reached (${config.maxTrades}).`);
+  if (state.tradesToday >= config.maxTrades) reasons.push(`DAILY TRADE LIMIT REACHED — ${state.tradesToday}/${config.maxTrades}: new entries are blocked until the next session.`);
   if (state.realizedToday <= -config.maxDailyLoss) { state.riskLocked = true; reasons.push("Daily loss limit reached (risk lock)."); }
   if (state.lastEntryAt != null && config.cooldownMinutes > 0 && now - state.lastEntryAt < config.cooldownMinutes * 60) reasons.push(`Cooling down (${config.cooldownMinutes} min between entries).`);
   const clock = istClock(evaluation.time + 60);
@@ -390,7 +443,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (evaluation.time + 60 < observationEnd) reasons.push(`Observation period: the first ${config.observationMinutes} minutes (to ${istClock(observationEnd)} IST) are analysis only; no new entries.`);
   else if (clock < (config.entryStart ?? "09:15")) reasons.push(`Before the entry window (${config.entryStart}–${config.entryCutoff} IST).`);
   else if (clock > config.entryCutoff) reasons.push(`Trading window closed at ${config.entryCutoff} IST: no new entries.`);
-  if (sizing !== "fixed" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  if (risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (sizing !== "risk") {
     const problem = protectiveProblem(config.stop, config.target);
     if (problem) reasons.push(problem);
@@ -531,7 +584,8 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
   // Risk sizing: the premium levels follow the index stop / target (moved with the actual fill price).
   const plan = pending.plan ?? null;
   const offset = plan ? fill.price - plan.entryPrice : 0;
-  const stop = plan ? money(Math.max(TICK, plan.premiumStop + offset)) : levels.ok ? levels.stop : money(fill.price * 0.5);
+  // Without a stop-loss (Mathi Strategy) the stop level is 0: no premium can reach it, so no stop exit.
+  const stop = input.config.stopLoss === false && !plan ? 0 : plan ? money(Math.max(TICK, plan.premiumStop + offset)) : levels.ok ? levels.stop : money(fill.price * 0.5);
   // A trailing exit has no premium target (the trailing index stop closes it).
   const target = plan ? (plan.targetMode === "trail" ? money(fill.price * 100) : money(plan.premiumTarget + offset)) : levels.ok ? levels.target : money(fill.price * 1.5);
   state.position = {
@@ -650,7 +704,7 @@ function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, e
   const risk = { ...RISK_DEFAULTS, ...config.risk };
   const at = (status: EngineStatus, reason: string, plan: TradePlan | null = null): EngineState => ({ status, reason, time, plan });
   if (state.riskLocked || state.realizedToday <= -config.maxDailyLoss) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${config.maxDailyLoss}: no new entries today.`);
-  if ((config.sizing ?? "fixed") !== "fixed" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  if (risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (clock > config.entryCutoff) return at("TRADING_WINDOW_CLOSED", `Entries closed at ${config.entryCutoff} IST.${state.position ? " The open position stays protected by its stop and target." : ""}`);
   if (result.entered && (evaluation.decision === "CALL" || evaluation.decision === "PUT")) return at(evaluation.decision === "CALL" ? "BUY_CANDIDATE" : "SELL_CANDIDATE", evaluation.explanation, result.plan);
   if (state.awaiting) return at("WAIT_FOR_CONFIRMATION", evaluation.explanation);
@@ -691,13 +745,15 @@ function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, {
   const quantity = Math.min(fill.quantity, position.quantity);
   const share = position.quantity ? quantity / position.quantity : 1;
   const entryCharges = position.entryCharges * share;
-  const pnl = money((fill.price - position.avg) * quantity - entryCharges - fill.charges);
+  const gross = money((fill.price - position.avg) * quantity);
+  const charges = money(entryCharges + fill.charges);
+  const pnl = money(gross - charges);
   state.realizedToday = money(state.realizedToday + pnl);
   position.quantity -= quantity;
   position.entryCharges -= entryCharges;
   const key = position.exit?.key ?? `${position.entryKey}:exit:${position.exitAttempts}`;
-  const message = `Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note.replace(/\.$/, "")}` : ""}. Realized ₹${pnl}${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
-  log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, stop: position.stop, target: position.target });
+  const message = `Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note.replace(/\.$/, "")}` : ""}. Realized ₹${pnl} (gross ₹${gross}, charges ₹${charges})${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
+  log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, gross, stop: position.stop, target: position.target });
   state.lastOrder = { time: input.now, status: position.quantity > 0 ? "PARTIAL" : "COMPLETED", message };
   if (position.quantity > 0) {
     // Partially closed: the rest is exited again on the next check (a new key: the first exit is known).

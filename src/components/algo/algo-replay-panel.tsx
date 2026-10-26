@@ -10,8 +10,8 @@ import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
-import { STRATEGY_IDS, STRATEGY_LABEL } from "@/lib/algo/patterns";
-import { EngineCard, MarketPlanSection } from "@/components/algo/algo-engine";
+import { STRATEGY_LABEL } from "@/lib/algo/patterns";
+import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
 import { useSelectedStrategy, useUnsavedSettings } from "@/components/algo/algo-settings-sync";
 import { blockedMessage, STRATEGY_NAME } from "@/lib/algo/exclusive";
 import type { Confirmation } from "@/lib/algo/confirmations";
@@ -156,6 +156,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
         {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
+        {run && run.strategy !== "PRIMARY_STRATEGY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} /> : null}
         {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
         {run ? <ReportDownload runId={run.id} /> : null}
         {run?.strategy === "PRIMARY_STRATEGY" ? <SignalAudit events={run.events} /> : null}
@@ -404,7 +405,7 @@ export function ExitConfirm({ algo, position, cursor, onClose }: { algo: ChartAl
         <Item label="Current premium" value={inr(position.premium)} />
         <Item label="Estimated exit value" value={inr(position.value)} />
         <Item label="Unrealized P&L" value={inr(position.unrealized, true)} tone={tone(position.unrealized)} />
-        <Item label="Stop-loss / target" value={`${inr(position.stop)} / ${inr(position.target)}`} />
+        <Item label="Stop-loss / target" value={`${position.stop > 0 ? inr(position.stop) : "None"} / ${inr(position.target)}`} />
       </dl>
       <p className="mt-3 text-xs text-muted">The exit fills at the last completed 1-minute premium at the replay time ({ist(cursor)} IST), less one tick of slippage per your settings, whether the replay is playing or paused. Minutes up to the replay time are checked first, so a stop-loss or target already reached is applied instead. Final realized P&amp;L includes charges and can differ from the estimate.</p>
       <div className="mt-4 flex justify-end gap-2">
@@ -425,8 +426,11 @@ function Metric({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** Stop — entry — target on the option premium, with the current premium marked. */
-export function PremiumBar({ stop, entry, target, current }: { stop: number; entry: number; target: number; current: number | null }) {
-  const span = target - stop;
+export function PremiumBar({ stop: stopLevel, entry, target, current }: { stop: number | null; entry: number; target: number; current: number | null }) {
+  // Without a stop-loss the bar's left end is as far below the entry as the target is above it.
+  const hasStop = stopLevel != null && stopLevel > 0;
+  const stop = hasStop ? stopLevel : Math.min(entry - (target - entry), current ?? entry);
+  const span = Math.max(0.01, target - stop);
   const at = (value: number) => `${Math.min(100, Math.max(0, ((value - stop) / span) * 100))}%`;
   return (
     <div className="mt-2" aria-label="Option premium against stop-loss and target">
@@ -434,7 +438,7 @@ export function PremiumBar({ stop, entry, target, current }: { stop: number; ent
         <span className="absolute top-1/2 h-3 w-px -translate-y-1/2 bg-text-2" style={{ left: at(entry) }} title={`Entry ₹${entry}`} />
         {current != null ? <span className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-panel bg-primary" style={{ left: at(current) }} title={`Current ₹${current}`} /> : null}
       </div>
-      <div className="mt-0.5 flex justify-between text-micro text-muted"><span>SL {stop.toFixed(2)}</span><span>Entry {entry.toFixed(2)}</span><span>TGT {target.toFixed(2)}</span></div>
+      <div className="mt-0.5 flex justify-between text-micro text-muted"><span>{hasStop ? `SL ${stop.toFixed(2)}` : "No SL"}</span><span>Entry {entry.toFixed(2)}</span><span>TGT {target.toFixed(2)}</span></div>
     </div>
   );
 }
@@ -503,8 +507,9 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     );
   }
   const ended = run?.status === "ENDED";
+  const mathi = strategy !== "PRIMARY_STRATEGY";
+  const noCutoff = config.entryCutoff >= "15:30";
   const rows: Array<[string, string]> = [
-    ["Observation", config.observationMinutes ? `First ${config.observationMinutes} min analysis only` : "Off"],
     ["Underlying", config.underlying],
     ["Signal timeframe", "1 minute (completed candles)"],
     ["Replay", `${date} from ${ist(cursor)} IST`],
@@ -512,34 +517,34 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Algo account cash", data.account.cashAvailable],
     ["Algo account equity", data.account.equity],
     ["Quantity", config.sizing === "capital" ? `Whole lots for up to ${config.allocation.percent}% of ₹${config.allocation.maxCapital.toLocaleString("en-IN")} (max ${config.lots})` : config.sizing === "risk" ? `Sized to ₹${Math.round(config.risk.capital * config.risk.perTradePercent) / 100} risk (max ${config.lots} lots)` : `${config.lots} lot${config.lots === 1 ? "" : "s"} (ATM CALL / PUT)`],
-    ["Stop-loss", config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
-    ["Target", config.target.mode === "percent" ? `${config.target.value}% of premium` : `₹${config.target.value} above entry`],
+    ["Target", config.target.mode === "percent" ? `${config.target.value}% of the option premium` : `₹${config.target.value} above entry`],
+    ["Stop-loss", config.stopLoss === false ? "None" : config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
+    ["Max trades", `${config.maxTrades} per session`],
     ["Max daily loss", inr(config.maxDailyLoss)],
-    ["Max trades", String(config.maxTrades)],
     ["Cooldown", `${config.cooldownMinutes} min`],
-    ["Entry cutoff", `${config.entryCutoff} IST`],
-    ["Breakout buffer", `${config.filters.breakoutBufferPercent}% (body cross)`],
-    ["Second candle", config.filters.secondCandle ? "Required" : "Off"],
-    ["Momentum (9/21 EMA)", config.filters.momentum ? "Must agree" : "Off"],
-    ["Level block after stop", config.filters.levelBlockMinutes ? `${config.filters.levelBlockMinutes} min` : "Off"],
-    ["Structure stop", config.structureStop ? "On" : "Off"],
+    ["Entry cutoff", noCutoff ? "None" : `${config.entryCutoff} IST`],
+    // Optional Mathi confirmations are listed only when switched on.
+    ...(mathi && config.filters.secondCandle ? [["Second candle", "Required"] as [string, string]] : []),
+    ...(mathi && config.filters.momentum ? [["Momentum (9/21 EMA)", "Must agree"] as [string, string]] : []),
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];
   const strategies = strategy === "PRIMARY_STRATEGY"
     ? `Opening range ${config.primary.orMinutes} min + ${config.primary.vwap ? "VWAP side" : "no VWAP filter"} + ${config.primary.trend === "ema" ? `${config.primary.trendFast}/${config.primary.trendSlow} EMA trend` : "no trend filter"}${config.primary.continuation ? " + continuation" : ""}${config.primary.retest ? " + retest" : ""}${config.primary.supportBreak ? " + support breakdown" : ""}; a break waits ${config.primary.confirmBars} candles for confirmation`
-    : STRATEGY_IDS.filter((id) => config.strategies[id]).map((id) => STRATEGY_LABEL[id]).join(", ") || "None enabled";
+    : config.crossPercent
+      ? `Strategy-line breakouts: ATM CE when ${config.crossPercent}% of a bullish candle's body is above an enabled line, ATM PE when that share of a bearish body is below it`
+      : "Strategy-line breakouts: ATM CE when a bullish candle's body crosses up through an enabled line, ATM PE when a bearish body crosses down (any amount; a wick alone never counts)";
   const lock = data.lock;
   const blocked = lock.owner !== "NONE" && lock.owner !== strategy && lock.activity && (lock.activity.running || lock.activity.position || lock.activity.pending) ? blockedMessage(lock.owner, strategy, lock.activity) : null;
   return (
     <Dialog title="Start Algo Trading Replay?" onClose={onCancel}>
-      <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. Stop-loss and target rules will be monitored throughout the replay.</p>
+      <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. {config.stopLoss === false ? `The +${config.target.value}% premium target is monitored throughout the replay; there is no stop-loss.` : "Stop-loss and target rules will be monitored throughout the replay."}</p>
       <p className="mt-2 text-xs font-semibold text-text">{STRATEGY_NAME[strategy]}</p>
       {blocked ? <p className="mt-2 rounded-md bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{blocked}</p> : null}
       {unsaved ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">The Algo settings in the Strategy panel have unsaved changes. The replay uses the saved settings shown below: press Save settings there first to use your changes.</p> : null}
       {ended ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">This replay session&apos;s algo run has ended ({run?.endReason === "SESSION_END" ? "session close" : "reset"}). Reset the replay to start a new isolated session.</p> : null}
       {gate.kind === "confirm" && gate.skippedMinutes > 0 ? <p className="mt-2 rounded-md bg-info-soft px-2 py-1.5 text-micro text-info">The replay moved forward {gate.skippedMinutes} minute{gate.skippedMinutes === 1 ? "" : "s"} since the algo last ran. Those minutes are processed in order first (signals, stop-loss and target), exactly as if the replay had played through them.</p> : null}
       <div className="mt-3">
-        <p className="text-micro text-muted">{strategy === "PRIMARY_STRATEGY" ? "Rules" : "Strategies"}</p>
+        <p className="text-micro text-muted">{strategy === "PRIMARY_STRATEGY" ? "Rules" : "Entry rule"}</p>
         <p className="font-medium text-text">{strategies}</p>
       </div>
       <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1.5">

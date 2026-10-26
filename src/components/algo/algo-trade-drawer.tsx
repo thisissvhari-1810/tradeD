@@ -33,7 +33,7 @@ export function tradeSummary(trade: AlgoTrade, max: number, position: LivePositi
     trade.status === "COMPLETED"
       ? `Exit ${ist(trade.exitTime)} IST · ${inr(trade.exitPremium)} (${trade.exitReason ?? "Exit"}) · realized ${inr(trade.realized, true)}${trade.returnPercent == null ? "" : ` (${trade.returnPercent.toFixed(2)}%)`}`
       : `Open · premium ${inr(position?.premium)} · unrealized ${inr(position?.unrealized, true)}`,
-    `Stop-loss ${inr(trade.stop)} · target ${inr(trade.target)} (option premium) · simulated replay trade`,
+    `${trade.stop ? `Stop-loss ${inr(trade.stop)}` : "No stop-loss"} · target ${inr(trade.target)} (option premium) · simulated replay trade`,
   ];
   return lines.join("\n");
 }
@@ -81,11 +81,14 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
   const currentPremium = completed ? trade.exitPremium : live?.premium ?? null;
   const cost = Math.round(trade.entryPremium * trade.quantity * 100) / 100;
   const value = completed ? (trade.exitPremium != null ? Math.round(trade.exitPremium * trade.quantity * 100) / 100 : null) : live?.value ?? null;
-  const stop = trade.stop;
+  // 0 (or none) = no stop-loss (Mathi Strategy).
+  const stop = trade.stop ? trade.stop : null;
   const target = trade.target;
   const toStop = currentPremium != null && stop != null ? currentPremium - stop : null;
   const toTarget = currentPremium != null && target != null ? target - currentPremium : null;
-  const risk = !completed && toStop != null && toTarget != null && stop != null && target != null
+  const risk = !completed && stop == null && toTarget != null && target != null
+    ? toTarget <= 0 ? "Target reached: exit on the next processed minute" : toTarget / Math.max(0.01, target - trade.entryPremium) < 0.2 ? "Approaching the target" : "Within range (no stop-loss)"
+    : !completed && toStop != null && toTarget != null && stop != null && target != null
     ? toStop <= 0 ? "Stop-loss reached: exit on the next processed minute" : toTarget <= 0 ? "Target reached: exit on the next processed minute"
       : toStop / Math.max(0.01, target - stop) < 0.2 ? "Approaching the stop-loss" : toTarget / Math.max(0.01, target - stop) < 0.2 ? "Approaching the target" : "Within range"
     : completed ? `Closed (${trade.exitReason ?? "exit"})` : "Premium unavailable";
@@ -163,13 +166,13 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
 
         <Section title="Risk management (option premium)">
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <Row label="Stop-loss premium"><span className="text-loss">{inr(stop)}</span></Row>
+            <Row label="Stop-loss premium">{stop == null ? "None" : <span className="text-loss">{inr(stop)}</span>}</Row>
             <Row label="Target premium"><span className="text-profit">{inr(target)}</span></Row>
             <Row label="Distance to stop-loss">{toStop == null ? "—" : inr(toStop)}</Row>
             <Row label="Distance to target">{toTarget == null ? "—" : inr(toTarget)}</Row>
             <Row label="Risk status"><span className={risk.startsWith("Within") ? "text-text" : risk.startsWith("Closed") ? "text-text-2" : "text-warning"}>{risk}</span></Row>
           </dl>
-          {stop != null && target != null ? <PremiumBar stop={stop} entry={trade.entryPremium} target={target} current={currentPremium} /> : null}
+          {target != null ? <PremiumBar stop={stop} entry={trade.entryPremium} target={target} current={currentPremium} /> : null}
           <p className="mt-1 text-xs text-muted">These are option premiums, not index prices. The chart&apos;s candles are the underlying index.</p>
         </Section>
 

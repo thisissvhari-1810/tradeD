@@ -111,14 +111,15 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
   const events: AlgoEvent[] = [];
   let processedThrough = input.processedThrough;
   // Once the session's trades are all done nothing more is processed: the replay stops at that minute.
-  let completed = sessionComplete(state, input.config.maxTrades);
+  const limit = input.config.stopAtLimit === false ? Infinity : input.config.maxTrades;
+  let completed = sessionComplete(state, limit);
   for (const end of completed ? [] : minuteEnds(processedThrough, input.cursor, input.sessionOpen, input.sessionClose)) {
     adapter.setClock(end);
     const result = await advance(state, { sessionId: input.runId, sessionDate: input.date, config: input.config, candles: input.candles, lines: input.lines, now: end, adapter });
     state = result.state;
     events.push(...result.events);
     processedThrough = end;
-    if (sessionComplete(state, input.config.maxTrades)) {
+    if (sessionComplete(state, limit)) {
       completed = true;
       break;
     }

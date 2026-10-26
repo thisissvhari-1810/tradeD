@@ -705,7 +705,7 @@ async function simulateDay(sessionId: string, date: string, config: AlgoConfig) 
     events.push(...result.events);
     // Like chart replay: the session stops once its trades are all done, or once the entry window has
     // closed with nothing open (no later candle can enter).
-    if (sessionComplete(state, config.maxTrades)) break;
+    if (sessionComplete(state, config.stopAtLimit === false ? Infinity : config.maxTrades)) break;
     if (!state.position && !state.pending && new Date((clock + 19_800) * 1000).toISOString().slice(11, 16) > config.entryCutoff) break;
   }
   if (state.position) {
@@ -980,7 +980,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
   current.status = current.recovery ? "RECOVERY_REQUIRED" : current.position?.exit ? "EXIT_PENDING" : current.position ? "POSITION_OPEN" : current.running ? (current.entries ? "MONITORING" : "READY") : "DISABLED";
   await saveChartRun(existing, { state: current as unknown as Prisma.InputJsonValue, processedThrough: through, ...(command.emergency ? { armed: false } : {}) }, events);
   // A manual exit of the last trade completes the session just as a stop-loss or target would.
-  if (!command.emergency && sessionComplete(current, runConfig.maxTrades)) await completeRun(user, existing.id, wallet);
+  if (!command.emergency && sessionComplete(current, runConfig.stopAtLimit === false ? Infinity : runConfig.maxTrades)) await completeRun(user, existing.id, wallet);
 }
 
 /** The run for the chart's replay session, the run history, and the demo wallet. */

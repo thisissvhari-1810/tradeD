@@ -179,7 +179,9 @@ export function tradeMarkers(events: AlgoEvent[], cursor: number | null, options
     const status = trade.status === "OPEN" ? `Open · running P&L ${open?.unrealized == null ? "—" : signedRupee(open.unrealized)}` : trade.status === "EXIT_PENDING" ? "Exit pending" : `Completed · realized ${trade.realized == null ? "—" : signedRupee(trade.realized)}`;
     list.push({
       id: `marker:${trade.entryKey}:entry`, entryKey: trade.entryKey, time: trade.entryTime, kind: "entry", side: trade.side, pnl: null,
-      tip: `${trade.side} entry · ${ist(trade.entryTime)} · ${rupee(trade.entryPremium)}${trade.status === "OPEN" && open?.unrealized != null ? ` · ${signedRupee(open.unrealized)} open` : ""}`,
+      tip: trade.strategy === "line" && trade.lines.length
+        ? `${trade.side === "CALL" ? "ATM CE — LINE BREAKOUT" : "ATM PE — LINE BREAKDOWN"} · ${trade.lines.map((name, index) => `${name}${trade.linePrices[index] != null ? ` ${trade.linePrices[index].toFixed(2)}` : ""}`).join(", ")} · ${ist(trade.signalTime)} · ${trade.strike ?? ""} ${trade.right} @ ${rupee(trade.entryPremium)}${trade.status === "OPEN" && open?.unrealized != null ? ` · ${signedRupee(open.unrealized)} open` : ""}`
+        : `${trade.side} entry · ${ist(trade.entryTime)} · ${rupee(trade.entryPremium)}${trade.status === "OPEN" && open?.unrealized != null ? ` · ${signedRupee(open.unrealized)} open` : ""}`,
       text: `${label} ${trade.side} BUY ${trade.strike ?? ""}${trade.right} @${rupee(trade.entryPremium)}`,
       detail: [
         `Trade ${trade.number}/${max} · BUY ${trade.side}`,

@@ -208,7 +208,7 @@ function premiums(shape: (index: number) => { low: number; high: number; close: 
 }
 
 // The engine's replay tests run with the entry filters and the structure stop off; the filters have their own tests.
-const config: AlgoConfig = { ...ALGO_DEFAULTS, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+const config: AlgoConfig = { ...ALGO_DEFAULTS, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false }, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
 
 async function run(candles: Candle[], options: { state?: AlgoState; processedThrough?: number; cursor: number; config?: AlgoConfig }) {
   return stepChartRun({
@@ -1107,7 +1107,8 @@ describe("minimal chart markers, completion after the last trade, Algo on by def
     const even = algoChartMarkers([{ ...trades[1], pnl: 0 }], tokens, null);
     expect(even[0].color).toBe("#888");
     expect(algoChartMarkers(trades, tokens, trades[0].entryKey).filter((marker) => marker.size === SELECTED_MARKER_SIZE)).toHaveLength(2);
-    expect(trades[0].tip).toMatch(/^PUT entry · \d\d:\d\d · ₹/);
+    // A line breakout names the setup, the crossed line and its price, the signal time, the contract and the premium.
+    expect(trades[0].tip).toMatch(/^ATM PE — LINE BREAKDOWN · Test line 23150\.00 · \d\d:\d\d · 23150 PE @ ₹/);
     expect(trades[1].tip).toMatch(/^PUT exit \(Target\) · \d\d:\d\d · \+₹/);
   });
 
@@ -1142,8 +1143,9 @@ describe("minimal chart markers, completion after the last trade, Algo on by def
     expect(server).toMatch(/if \(ran\.completed\) await completeRun\(user, existing\.id, wallet\);/);
     expect(server).toMatch(/async function completeRun[\s\S]{0,300}if \(run\.status === "ENDED" && run\.summary\) return;[\s\S]{0,200}"COMPLETED"/);
     expect(server).toMatch(/if \(wallet === "ALGO" && reason !== "COMPLETED"\) await startAlgoPeriod/);
-    expect(server).toMatch(/!command\.emergency && sessionComplete\(current, runConfig\.maxTrades\)/);
-    expect(readFileSync("src/server/algo-replay.ts", "utf8")).toMatch(/if \(sessionComplete\(state, input\.config\.maxTrades\)\) \{\s*completed = true;\s*break;/);
+    // Completion at the entry limit only when the settings ask to pause there (Mathi Strategy keeps playing by default).
+    expect(server).toMatch(/!command\.emergency && sessionComplete\(current, runConfig\.stopAtLimit === false \? Infinity : runConfig\.maxTrades\)/);
+    expect(readFileSync("src/server/algo-replay.ts", "utf8")).toMatch(/const limit = input\.config\.stopAtLimit === false \? Infinity : input\.config\.maxTrades;[\s\S]*if \(sessionComplete\(state, limit\)\) \{\s*completed = true;\s*break;/);
   });
 
   it("the chart pauses on completion, shows the summary once, and Close keeps the replay paused", () => {
@@ -1306,7 +1308,7 @@ describe("the first 30 minutes are for reading the market", () => {
     expect(readAlgoConfig({ observationMinutes: 30, settingsVersion: 3 }).observationMinutes).toBe(0);
     expect(readAlgoConfig({}).observationMinutes).toBe(0);
     // Saved under the current version (4): a 15-minute choice stays 15, and the same for a 10% stop / 25% target.
-    const saved = readAlgoConfig({ observationMinutes: 15, settingsVersion: 4, stop: { mode: "percent", value: 10 }, target: { mode: "percent", value: 25 } });
+    const saved = readAlgoConfig({ observationMinutes: 15, settingsVersion: 7, stop: { mode: "percent", value: 10 }, target: { mode: "percent", value: 25 } });
     expect([saved.observationMinutes, saved.stop.value, saved.target.value]).toEqual([15, 10, 25]);
     expect(readAlgoConfig(saved)).toEqual(saved);
   });
@@ -1393,7 +1395,8 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
     const chop = day(LINE - 12, { 31: LINE + 12, 32: LINE - 12, 34: LINE + 12, 35: LINE - 12, 37: LINE + 12, 38: LINE - 12 });
     // Each trade's option premium dips through its stop the minute after entry (as on your day).
     feed.premiums = premiums((index) => ([32, 33, 35, 36, 38, 39].includes(index) ? { low: 60, high: 100, close: 100 } : null));
-    await run(chop, { cursor: m(60), config: { ...config, filters: ALGO_DEFAULTS.filters, structureStop: true } });
+    // The trade filters as they were (Mathi Strategy now runs with them off by default).
+    await run(chop, { cursor: m(60), config: { ...config, filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0.03, secondCandle: true, momentum: true }, structureStop: true } });
     expect(buys().length).toBeLessThanOrEqual(1);
     // Without the filters the same minutes trade three times (the losses you saw).
     Object.assign(db.state, { accounts: [{ id: "acc1", userId: "u1", mode: "ALGO", currentPeriodId: "p1", cashAvailable: START, cashReserved: 0n }], orders: [], instruments: [], positions: [], executions: [], ledger: [], quotes: [], closed: [], periods: [], seq: 0 });
@@ -1401,19 +1404,22 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
     expect(buys().length).toBeGreaterThanOrEqual(3);
   });
 
-  it("old saved settings: a 5% / 10% stop and target become 20% / 40% once; later choices are kept", () => {
-    const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2 });
-    expect([old.stop.value, old.target.value, old.structureStop]).toEqual([20, 40, true]);
+  it("old saved Mathi settings move once to the line-breakout version (3% target, no stop-loss); later choices are kept", () => {
+    const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2, filters: { secondCandle: true, momentum: true } });
+    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 0, 3]);
+    // A saved 50% share (version 7 / 8) moves once to any genuine crossing; a share chosen later is kept.
+    expect(readAlgoConfig({ settingsVersion: 8, crossPercent: 50 }).crossPercent).toBe(0);
+    expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 30 }).crossPercent).toBe(30);
     expect(old.filters).toEqual(ALGO_DEFAULTS.filters);
-    const chosen = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 3 });
-    expect([chosen.stop.value, chosen.target.value]).toEqual([5, 10]);
+    const chosen = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 7, stopLoss: true });
+    expect([chosen.stop.value, chosen.target.value, chosen.stopLoss]).toEqual([5, 10, true]);
   });
 });
 
 describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   // Line break only (the other setups have their own tests), no filters, any score: the window and sizing alone.
   // The ₹500 / ₹1,500 / ₹5,000 limits these cases were written for.
-  const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", maxDailyLoss: 1_500, risk: { ...ALGO_DEFAULTS.risk, perTradePercent: 0.5, dailyTarget: 5_000 }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+  const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, mode: "REPLAY", maxDailyLoss: 1_500, risk: { ...ALGO_DEFAULTS.risk, perTradePercent: 0.5, dailyTarget: 5_000 }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
   /** Flat 10 above the line, a body crossing down to `by` below it at `at`, then flat there; `after` overrides closes. */
   function crossing(at: number, by: number, after: Record<number, number> = {}): Candle[] {
     const candles: Candle[] = [];
@@ -1445,7 +1451,8 @@ describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   });
 
   it("no new entries after 12:00: the trading window is closed", async () => {
-    const result = await run(crossing(170, 3), { cursor: m(172), config: early });
+    // The optional cutoff (Mathi Strategy has none by default; Algo - Primary Strategy uses 12:00).
+    const result = await run(crossing(170, 3), { cursor: m(172), config: { ...early, entryCutoff: "12:00" } });
     expect(buys()).toHaveLength(0);
     expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Trading window closed at 12:00 IST"))).toBe(true);
     expect(result.state.engine).toMatchObject({ status: "TRADING_WINDOW_CLOSED" });
@@ -1472,7 +1479,7 @@ describe("session strategy: 09:15–12:00, risk-based sizing", () => {
 
 describe("trailing stop", () => {
   it("moves the index stop to each swing high confirmed after a PUT entry, never back", async () => {
-    const early: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", risk: { ...ALGO_DEFAULTS.risk, targetMode: "trail" }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+    const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, mode: "REPLAY", risk: { ...ALGO_DEFAULTS.risk, targetMode: "trail" }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
     // Cross down at 1 (to LINE − 3), fall, bounce to a swing high at 6 (high LINE − 11), then fall further.
     const path: Record<number, number> = { 0: LINE + 10, 1: LINE - 3, 2: LINE - 10, 3: LINE - 14, 4: LINE - 18, 5: LINE - 22, 6: LINE - 12, 7: LINE - 24, 8: LINE - 28 };
     const candles: Candle[] = [];
@@ -1614,5 +1621,146 @@ describe("Algo - Primary Strategy re-entries in chart replay", () => {
     clearReplayTapes();
     const again = await run(session(), { cursor: m(70), config: primary });
     expect(again.events.filter((event) => event.evaluation?.audit).map((event) => [event.time, event.evaluation!.audit!.decision, event.evaluation!.audit!.setup?.type ?? null])).toEqual(decisions);
+  });
+});
+
+describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no stop-loss, 3 entries", () => {
+  // Full-capital sizing (the default); the daily-target stop is off here so all three entries can be shown —
+  // at full capital two +3% winners already pass the ₹3,000 daily target (its own test below).
+  const mathi: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
+  /** Flat closes at `base` off the line; `moves` sets a candle's open and close (index → [open, close]). */
+  function path(moves: Record<number, [number, number]>, base: (index: number) => number): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const [open, close] = moves[index] ?? [index > 0 ? candles[index - 1].close : base(index), base(index)];
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+  // Up at 5 (55% of the body above), down at 10, up at 15, down at 20 — each a fresh crossing of the same line.
+  // (At 15 the body runs from 15 below to 15 above: exactly 50% beyond the line.)
+  const level = (index: number) => (index < 5 ? LINE - 10 : index < 10 ? LINE + 12 : index < 15 ? LINE - 15 : index < 20 ? LINE + 15 : LINE - 15);
+  const moves: Record<number, [number, number]> = { 5: [LINE - 10, LINE + 12], 10: [LINE + 12, LINE - 15], 15: [LINE - 15, LINE + 15], 20: [LINE + 15, LINE - 15] };
+
+  it("any genuine body crossing: a 7-point crossing enters; touching the line or a wick does not", async () => {
+    const { bodyShareCross } = await import("../src/lib/algo/signals");
+    const at = (open: number, close: number) => ({ open, close, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5 });
+    // Line 25,000: open 24,990, close 25,007 — 7 points past the line (41% of the body) is enough.
+    expect(bodyShareCross(at(24_990, 25_007), 25_000, 0)).toMatchObject({ kind: "CROSS", direction: "UP", detail: "The bullish body crossed the line by 7.00 points." });
+    expect(bodyShareCross(at(25_010, 24_999), 25_000, 0)).toMatchObject({ kind: "CROSS", direction: "DOWN" });
+    // Still below the line (24,990 → 24,997), or closing exactly on it: no crossing.
+    expect(bodyShareCross(at(24_990, 24_997), 25_000, 0).direction).toBeNull();
+    expect(bodyShareCross(at(24_990, 25_000), 25_000, 0).direction).toBeNull();
+    // A wick through the line with the body below it.
+    expect(bodyShareCross({ open: 24_990, close: 24_995, high: 25_010, low: 24_985 }, 25_000, 0).direction).toBeNull();
+    // The 3% target is on the premium per unit: ₹100 → ₹103; with a 65-unit lot the gross gain is ₹195.
+    const { protectiveLevels } = await import("../src/lib/algo/options");
+    const levels = protectiveLevels(100, { mode: "percent", value: 3 }, { mode: "percent", value: 3 });
+    expect(levels.ok && levels.target).toBe(103);
+    expect(((levels.ok ? levels.target : 0) - 100) * 65).toBeCloseTo(195, 6);
+  });
+
+  it("the 50% rule (when set): your examples, below 50%, a wick and the wrong colour", async () => {
+    const { bodyShareCross } = await import("../src/lib/algo/signals");
+    const at = (open: number, close: number) => ({ open, close, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5 });
+    expect(bodyShareCross(at(24_980, 25_020), 25_000, 0.5)).toMatchObject({ kind: "CROSS", direction: "UP" });
+    expect(bodyShareCross(at(24_990, 25_015), 25_000, 0.5)).toMatchObject({ kind: "CROSS", direction: "UP" });
+    expect(bodyShareCross(at(25_012, 24_985), 25_000, 0.5)).toMatchObject({ kind: "CROSS", direction: "DOWN" });
+    // Closing exactly on the line: 0% below it — no PUT yet.
+    expect(bodyShareCross(at(25_040, 25_000), 25_000, 0.5).direction).toBeNull();
+    // 10 of 30 points above (33%): not enough.
+    expect(bodyShareCross(at(24_980, 25_010), 25_000, 0.5)).toMatchObject({ kind: "WICK", direction: null });
+    // Only the wick crosses; and a bearish candle closing above the line is not a CALL.
+    expect(bodyShareCross({ open: 24_990, close: 24_995, high: 25_010, low: 24_985 }, 25_000, 0.5).direction).toBeNull();
+    expect(bodyShareCross(at(25_020, 25_010), 25_000, 0.5).direction).toBeNull();
+  });
+
+  it("ATM CE on the upward crossing, ATM PE on the downward one; each exits at +3% on its own entry premium and the ledger agrees", async () => {
+    // The premium trades up through +3% two minutes after each entry.
+    feed.premiums = premiums((index) => ([8, 13, 18].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
+    const result = await run(path(moves, level), { cursor: m(30), config: mathi });
+    const entries = result.events.filter((event) => event.kind === "ENTRY");
+    expect(entries.map((event) => event.side)).toEqual(["CALL", "PUT", "CALL"]);
+    expect(String(db.state.instruments[0].symbol)).toContain("|CE|");
+    const exits = result.events.filter((event) => event.kind === "EXIT");
+    expect(exits).toHaveLength(3);
+    // Each exit is at its own entry premium × 1.03 (to the 0.05 tick).
+    exits.forEach((exit, index) => {
+      expect(exit.message).toMatch(/^Exit \(TARGET\) \d+ @ /);
+      // The target premium is the entry × 1.03; the sell fills one 0.05 tick lower (the paper slippage).
+      expect(exit.target!).toBeCloseTo(Math.round((entries[index].order!.price! * 1.03) / 0.05) * 0.05, 2);
+      expect(exit.order!.price!).toBeCloseTo(exit.target! - 0.05, 2);
+    });
+    // Realized P&L (after charges on both legs) is exactly what came back to the cash.
+    const realized = exits.reduce((sum, exit) => sum + exit.pnl!, 0);
+    expect(Number(cash() - START)).toBeCloseTo(Math.round(realized * 100), -1);
+    expect(exits.every((exit) => exit.pnl! > 0)).toBe(true);
+    // Gross (premium gain × quantity) and net (after both legs' charges) are recorded separately.
+    exits.forEach((exit, index) => {
+      expect(exit.gross!).toBeCloseTo((exit.order!.price! - entries[index].order!.price!) * exit.order!.quantity!, 2);
+      expect(exit.gross!).toBeGreaterThan(exit.pnl!);
+      expect(exit.message).toMatch(/Realized ₹[\d.]+ \(gross ₹[\d.]+, charges ₹[\d.]+\)/);
+    });
+    // Full capital in whole lots: each entry's quantity is a multiple of the lot, and one more lot would not have fitted.
+    for (const order of buys()) {
+      expect(Number(order.quantity) % 75).toBe(0);
+      expect(Number(order.quantity) / 75).toBeGreaterThanOrEqual(12);
+    }
+  });
+
+  it("three entries per session, then DAILY TRADE LIMIT REACHED — 3/3; closing a trade does not give one back; the replay keeps playing", async () => {
+    feed.premiums = premiums((index) => ([8, 13, 18].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
+    const result = await run(path(moves, level), { cursor: m(30), config: mathi });
+    expect(buys()).toHaveLength(3);
+    const blocked = result.events.find((event) => event.kind === "REJECTED" && event.time === m(20));
+    expect(blocked?.message).toContain("DAILY TRADE LIMIT REACHED — 3/3");
+    // Not paused at the limit: every minute up to the cursor was processed.
+    expect(result.completed).toBe(false);
+    expect(result.processedThrough).toBe(m(30));
+    expect(result.state.tradesToday).toBe(3);
+  });
+
+  it("with the daily target on (₹3,000), full-capital winners stop new entries with that reason", async () => {
+    feed.premiums = premiums((index) => ([8, 13, 18].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
+    const result = await run(path(moves, level), { cursor: m(30), config: { ...mathi, risk: { ...ALGO_DEFAULTS.risk } } });
+    expect(buys().length).toBeLessThan(3);
+    expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Daily target ₹3000 reached"))).toBe(true);
+  });
+
+  it("no entry cutoff: a valid breakout at 12:30 enters (the session is open until 15:30)", async () => {
+    const at = 195; // 09:15 + 195 min = 12:30
+    const result = await run(path({ [at]: [LINE - 10, LINE + 12] }, (index) => (index < at ? LINE - 10 : LINE + 12)), { cursor: m(at + 3), config: mathi });
+    expect(buys()).toHaveLength(1);
+    expect(result.events.find((event) => event.kind === "ENTRY")?.time).toBe(m(at));
+    // A saved 12:00 cutoff from an older version moves to none once; a chosen cutoff after that is kept.
+    expect(readAlgoConfig({ settingsVersion: 7, entryCutoff: "12:00" }).entryCutoff).toBe("15:30");
+    expect(readAlgoConfig({ settingsVersion: 8, entryCutoff: "14:00" }).entryCutoff).toBe("14:00");
+  });
+
+  it("no automatic stop-loss: a collapsing premium does not close the position", async () => {
+    feed.premiums = premiums((index) => (index >= 7 ? { low: 40, high: 55, close: 50 } : null));
+    const result = await run(path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12)), { cursor: m(30), config: mathi });
+    expect(buys()).toHaveLength(1);
+    expect(sells()).toHaveLength(0);
+    expect(result.state.position?.stop).toBe(0);
+  });
+
+  it("staying on one side never re-enters; a wick-only touch never enters; second-candle confirmation only when switched on", async () => {
+    // A wick through the line at 7 while above it, and a bearish candle that closes back above.
+    const candles = path({ 5: moves[5], 7: [LINE + 12, LINE + 4] }, (index) => (index < 5 ? LINE - 10 : LINE + 12)).map((candle, index) => (index === 7 ? { ...candle, low: LINE - 6 } : candle));
+    const result = await run(candles, { cursor: m(30), config: mathi });
+    expect(buys()).toHaveLength(1);
+    expect(result.events.filter((event) => event.kind === "ENTRY")[0].time).toBe(m(5));
+    // With second-candle confirmation the entry waits for the next candle to stay beyond the line.
+    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
+    db.state.accounts[0].cashAvailable = START;
+    clearReplayTapes();
+    const confirmed = await run(path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12)), { cursor: m(30), config: { ...mathi, filters: { ...mathi.filters, secondCandle: true } } });
+    expect(confirmed.events.filter((event) => event.kind === "ENTRY")[0].time).toBe(m(6));
+  });
+
+  it("W / M, bounce, rejection, trendline and ORB signals can never be switched on for Mathi Strategy", () => {
+    const saved = readAlgoConfig({ settingsVersion: 7, strategies: { w: true, m: true, bounce: true, rejection: true, trendline: true, orb: true } });
+    expect(saved.strategies).toEqual({ line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false });
   });
 });

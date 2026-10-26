@@ -36,18 +36,27 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Only values still at the version 4 / 5 defaults move; anything chosen since is kept.
   const v6 = num(row.settingsVersion) >= 6;
   const kept = (value: number, old: number, next: number) => (!v6 && value === old ? next : value);
+  // Version 7 makes Mathi Strategy a line-breakout strategy: enabled strategy lines only, 50% of the body across
+  // the line, a fixed lot count, +3% on the premium, no stop-loss, three entries a session. Applied once to
+  // saved Mathi settings (never to Algo - Primary Strategy's).
+  const mathi = row.engine !== "primary";
+  const v7 = num(row.settingsVersion) >= 7 || !mathi;
+  // Version 8: Mathi Strategy has no entry cutoff (entries until the session's close); a saved cutoff moves once.
+  const v8 = num(row.settingsVersion) >= 8 || !mathi;
+  // Version 9: Mathi Strategy enters on any genuine body crossing; a saved 50% share moves to "any" once.
+  const v9 = num(row.settingsVersion) >= 9 || !mathi;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
     mode: row.mode === "REPLAY" || row.mode === "LIVE" || row.mode === "PAPER" ? row.mode : ALGO_DEFAULTS.mode,
     expiry: typeof row.expiry === "string" && (row.expiry === "nearest" || /^\d{4}-\d{2}-\d{2}$/.test(row.expiry)) ? row.expiry : "nearest",
-    lots: early && Number.isFinite(num(row.lots)) ? num(row.lots) : ALGO_DEFAULTS.lots,
+    lots: early && v7 && Number.isFinite(num(row.lots)) ? num(row.lots) : ALGO_DEFAULTS.lots,
     // Settings from before version 3 with a premium stop under 20% / target under 40% (too tight for 1-minute
     // ATM options) move to 20% / 40% once, with the structure stop; later choices are kept.
-    stop: upgrade(protective(row.stop, ALGO_DEFAULTS.stop), row, 20),
-    target: upgrade(protective(row.target, ALGO_DEFAULTS.target), row, 40),
+    stop: v7 ? upgrade(protective(row.stop, ALGO_DEFAULTS.stop), row, 20) : ALGO_DEFAULTS.stop,
+    target: v7 ? upgrade(protective(row.target, ALGO_DEFAULTS.target), row, 40) : ALGO_DEFAULTS.target,
     maxDailyLoss: early && Number.isFinite(num(row.maxDailyLoss)) ? kept(num(row.maxDailyLoss), 1_500, ALGO_DEFAULTS.maxDailyLoss) : ALGO_DEFAULTS.maxDailyLoss,
-    maxTrades: Number.isFinite(num(row.maxTrades)) ? num(row.maxTrades) : ALGO_DEFAULTS.maxTrades,
+    maxTrades: v7 && Number.isFinite(num(row.maxTrades)) ? num(row.maxTrades) : ALGO_DEFAULTS.maxTrades,
     cooldownMinutes: Number.isFinite(num(row.cooldownMinutes)) ? num(row.cooldownMinutes) : ALGO_DEFAULTS.cooldownMinutes,
     disabledLines: Array.isArray(row.disabledLines) ? row.disabledLines.filter((type): type is LineType => typeof type === "string" && (lineTypes.has(type as LineType) || type === "custom")) : [],
     custom: custom
@@ -61,20 +70,26 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     maxSpreadPercent: Number.isFinite(num(row.maxSpreadPercent)) ? num(row.maxSpreadPercent) : ALGO_DEFAULTS.maxSpreadPercent,
     slippageTicks: Number.isFinite(num(row.slippageTicks)) ? num(row.slippageTicks) : ALGO_DEFAULTS.slippageTicks,
     entryStart: time(row.entryStart, ALGO_DEFAULTS.entryStart),
-    entryCutoff: early ? cutoff : ALGO_DEFAULTS.entryCutoff,
+    entryCutoff: !v8 ? ALGO_DEFAULTS.entryCutoff : early ? cutoff : mathi ? ALGO_DEFAULTS.entryCutoff : "12:00",
     windowExit: row.windowExit === "close" ? "close" : "hold",
-    sizing: !early ? "risk" : row.sizing === "fixed" ? "fixed" : row.sizing === "capital" ? "capital" : "risk",
+    sizing: !v7 ? "capital" : !early ? "risk" : row.sizing === "fixed" ? "fixed" : row.sizing === "capital" ? "capital" : "risk",
     allocation: allocationOf(row.allocation),
     risk: ((risk) => ({ ...risk, perTradePercent: kept(risk.perTradePercent, 0.5, RISK_DEFAULTS.perTradePercent), dailyTarget: kept(risk.dailyTarget, 5_000, RISK_DEFAULTS.dailyTarget) }))(riskOf(row.risk)),
     minScore: Number.isFinite(num(row.minScore)) ? num(row.minScore) : ALGO_DEFAULTS.minScore,
-    strategies: strategiesOf(row.strategies),
+    // Mathi Strategy trades strategy-line crossings only; the other setups cannot be switched on for it.
+    strategies: mathi ? { ...ALGO_DEFAULTS.strategies } : strategiesOf(row.strategies),
     engine: row.engine === "primary" ? "primary" : "existing",
     primary: primaryOf(row.primary),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
-    filters: filtersOf(row.filters),
-    structureStop: typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    filters: v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters },
+    structureStop: v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
+    crossPercent: v9 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
+    stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
+    intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : mathi,
+    stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : !mathi,
     patterns: ((patterns) => (v6 ? patterns : { ...patterns, trendStop: PATTERN_DEFAULTS.trendStop }))(patternsOf(row.patterns)),
   };
 }
@@ -168,13 +183,14 @@ function patternsOf(value: unknown): PatternSettings {
 export function algoConfigProblems(config: AlgoConfig): string[] {
   const problems: string[] = [];
   const risky = config.sizing === "risk";
+  if (!Number.isInteger(config.crossPercent) || config.crossPercent < 0 || config.crossPercent > 100) problems.push("The share of the body past the line must be 0 (any crossing) to 100%.");
   if (config.sizing === "capital") {
-    if (config.engine !== "primary") problems.push("Capital-allocation sizing is part of Algo - Primary Strategy; Mathi Strategy uses risk-based or fixed sizing.");
     if (!(config.allocation.percent > 0 && config.allocation.percent <= 100)) problems.push("Capital allocation must be above 0% and at most 100%.");
     if (!(config.allocation.maxCapital >= 1_000 && config.allocation.maxCapital <= 100_000_000)) problems.push("Maximum capital must be ₹1,000 to ₹10,00,00,000.");
   }
   if (!Number.isInteger(config.lots) || config.lots < 1 || config.lots > 50) problems.push(risky ? "Maximum lots must be 1 to 50." : "Quantity must be 1 to 50 lots.");
-  if (!risky) {
+  if (!risky && config.stopLoss === false && !(config.target.value > 0)) problems.push("The profit target must be above 0.");
+  if (!risky && config.stopLoss !== false) {
     const protect = protectiveProblem(config.stop, config.target);
     if (protect) problems.push(protect);
     if (config.stop.mode === "percent" && config.stop.value > 90) problems.push("A stop-loss above 90% of the premium is not allowed.");

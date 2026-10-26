@@ -225,10 +225,10 @@ describe("whole-lot capital allocation", () => {
 describe("separate settings for each feature", () => {
   it("the Primary Strategy's defaults are its own: capital sizing, 3% premium target and stop, chart replay", () => {
     expect(PRIMARY_DEFAULTS).toMatchObject({ engine: "primary", mode: "REPLAY", sizing: "capital", allocation: { percent: 100, maxCapital: 100_000, policy: "reduce" }, target: { mode: "percent", value: 3 }, stop: { mode: "percent", value: 3 }, maxDailyLoss: 3_000 });
-    expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", sizing: "risk" });
+    expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", sizing: "capital", stopLoss: false, crossRule: "body", crossPercent: 0 });
+    expect(PRIMARY_DEFAULTS).toMatchObject({ stopLoss: true, stopAtLimit: true, crossPercent: 0 });
     expect(algoConfigProblems(readAlgoConfig(PRIMARY_DEFAULTS))).toEqual([]);
-    // Capital sizing is not offered to Algo Trade; the Primary Strategy is chart replay only.
-    expect(algoConfigProblems(readAlgoConfig({ ...ALGO_DEFAULTS, sizing: "capital" }))).toContain("Capital-allocation sizing is part of Algo - Primary Strategy; Mathi Strategy uses risk-based or fixed sizing.");
+    // The Primary Strategy is chart replay only.
     expect(algoConfigProblems({ ...PRIMARY_DEFAULTS, mode: "PAPER" })).toContain("Algo - Primary Strategy runs in chart replay (demo trading) only.");
     expect(algoConfigProblems({ ...PRIMARY_DEFAULTS, allocation: { ...PRIMARY_DEFAULTS.allocation, percent: 120 } })).toContain("Capital allocation must be above 0% and at most 100%.");
   });

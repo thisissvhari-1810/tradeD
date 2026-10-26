@@ -63,14 +63,30 @@ export function MarketAnalysisSection({ analysis, symbol, time }: { analysis: Ma
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
             <Row label="Session" value={analysis.observationComplete ? "Observation complete" : `Observing until ${ist(analysis.observationEnd)} IST`} tone={analysis.observationComplete ? "text-text" : "text-warning"} />
             <Row label="Last update" value={`${ist(analysis.asOf)} IST`} />
-            <Row label="Opening range high" value={analysis.openingRange ? price(analysis.openingRange.high) : `from ${ist(analysis.observationEnd)} IST`} />
-            <Row label="Opening range low" value={analysis.openingRange ? price(analysis.openingRange.low) : `from ${ist(analysis.observationEnd)} IST`} />
-            <Row label="Resistance trendline" value={!analysis.observationComplete ? `Drawn at ${ist(analysis.observationEnd)} IST` : analysis.resistance ? price(analysis.resistance.now) : "No valid trendline"} />
-            <Row label="Support trendline" value={!analysis.observationComplete ? `Drawn at ${ist(analysis.observationEnd)} IST` : analysis.support ? price(analysis.support.now) : "No valid trendline"} />
-            <Row label="W pattern" value={patternText(analysis.w)} />
-            <Row label="W neckline" value={analysis.w ? price(analysis.w.neckline) : "—"} />
-            <Row label="M pattern" value={patternText(analysis.m)} />
-            <Row label="M neckline" value={analysis.m ? price(analysis.m.neckline) : "—"} />
+            {analysis.strategies.orb?.enabled ? (
+              <>
+                <Row label="Opening range high" value={analysis.openingRange ? price(analysis.openingRange.high) : `from ${ist(analysis.observationEnd)} IST`} />
+                <Row label="Opening range low" value={analysis.openingRange ? price(analysis.openingRange.low) : `from ${ist(analysis.observationEnd)} IST`} />
+              </>
+            ) : null}
+            {analysis.strategies.trendline?.enabled ? (
+              <>
+                <Row label="Resistance trendline" value={!analysis.observationComplete ? `Drawn at ${ist(analysis.observationEnd)} IST` : analysis.resistance ? price(analysis.resistance.now) : "No valid trendline"} />
+                <Row label="Support trendline" value={!analysis.observationComplete ? `Drawn at ${ist(analysis.observationEnd)} IST` : analysis.support ? price(analysis.support.now) : "No valid trendline"} />
+              </>
+            ) : null}
+            {analysis.strategies.w?.enabled ? (
+              <>
+                <Row label="W pattern" value={patternText(analysis.w)} />
+                <Row label="W neckline" value={analysis.w ? price(analysis.w.neckline) : "—"} />
+              </>
+            ) : null}
+            {analysis.strategies.m?.enabled ? (
+              <>
+                <Row label="M pattern" value={patternText(analysis.m)} />
+                <Row label="M neckline" value={analysis.m ? price(analysis.m.neckline) : "—"} />
+              </>
+            ) : null}
             <Row label="Nearest level above" value={price(analysis.levels.above)} />
             <Row label="Nearest level below" value={price(analysis.levels.below)} />
           </dl>
@@ -86,7 +102,8 @@ export function StrategyRows({ analysis }: { analysis: MarketAnalysis | null | u
     <section className="rounded-lg border border-border-soft" aria-label="Strategy status">
       <p className="px-3 pt-2 text-xs font-medium uppercase tracking-wide text-muted">Strategies</p>
       <ul className="divide-y divide-border-soft px-3 pb-1">
-        {STRATEGY_IDS.map((id) => {
+        {!analysis ? <li className="py-1.5 text-xs text-muted">Waiting for the first completed candle.</li> : null}
+        {STRATEGY_IDS.filter((id) => analysis?.strategies[id]?.enabled).map((id) => {
           const item = analysis?.strategies[id];
           const status = item ? (item.enabled ? item.status : "DISABLED") : "WAITING";
           return (

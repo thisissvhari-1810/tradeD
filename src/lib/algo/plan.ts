@@ -77,12 +77,10 @@ export function buildPlan(input: {
 
   const bullish: Scenario[] = [
     { title: "Breakout above the previous-day high", trigger: `A 1-minute candle whose body closes above ${fmt(previous.high)}`, level: previous.high, invalidation: `A close back below ${fmt(previous.high)}`, entryZone: `${fmt(previous.high)}–${fmt(previous.high * 1.001)}; ${room(previous.high, above(previous.high))}` },
-    { title: "Bounce at the previous-day low", trigger: `Price reaches ${fmt(previous.low)} and a candle closes back above it with a long lower wick or an engulfing`, level: previous.low, invalidation: "A close below the rejection candle's low", entryZone: `${fmt(previous.low)}–${fmt(previous.low * 1.001)}; ${room(previous.low, above(previous.low))}` },
     { title: `Opening-range breakout (first ${input.orbMinutes} min)`, trigger: `After 09:${String(15 + input.orbMinutes).padStart(2, "0")}, the first body close above the opening-range high`, level: NaN, invalidation: "A close back inside the range", entryZone: "Just above the opening-range high" },
   ];
   const bearish: Scenario[] = [
     { title: "Breakdown below the previous-day low", trigger: `A 1-minute candle whose body closes below ${fmt(previous.low)}`, level: previous.low, invalidation: `A close back above ${fmt(previous.low)}`, entryZone: `${fmt(previous.low * 0.999)}–${fmt(previous.low)}; ${room(previous.low, below(previous.low))}` },
-    { title: "Rejection at the previous-day high", trigger: `Price reaches ${fmt(previous.high)} and a candle closes back below it with a long upper wick or an engulfing`, level: previous.high, invalidation: "A close above the rejection candle's high", entryZone: `${fmt(previous.high * 0.999)}–${fmt(previous.high)}; ${room(previous.high, below(previous.high))}` },
     { title: `Opening-range breakdown (first ${input.orbMinutes} min)`, trigger: `After 09:${String(15 + input.orbMinutes).padStart(2, "0")}, the first body close below the opening-range low`, level: NaN, invalidation: "A close back inside the range", entryZone: "Just below the opening-range low" },
   ];
 

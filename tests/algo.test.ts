@@ -94,7 +94,7 @@ function fakeAdapter(options: { cash?: number; bid?: number | null; candle?: Mar
 
 const running = (patch: Partial<AlgoState> = {}): AlgoState => ({ ...initialState(DATE), running: true, entries: true, lastCandle: at(29), ...patch });
 // The core engine's tests run with the entry filters and the structure stop off (they have their own tests).
-const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false, ...patch });
+const config = (patch: Partial<AlgoConfig> = {}): AlgoConfig => ({ ...ALGO_DEFAULTS, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false }, stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false, ...patch });
 
 async function step(state: AlgoState, candles: Candle[], adapter: ReturnType<typeof fakeAdapter>, now = candles.at(-1)!.time + 60, cfg = config(), useLines = lines) {
   adapter.tick(now);
@@ -234,8 +234,8 @@ describe("ATM option selection", () => {
     expect(adapter.calls.enter).toBe(0);
     expect(state.position).toBeNull();
     expect(events.find((event) => event.kind === "REJECTED")?.message).toMatch(/Insufficient buying power/);
-    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 4, sizing: "fixed" }))).toContain("Quantity must be 1 to 50 lots.");
-    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 4 }))).toContain("Maximum lots must be 1 to 50.");
+    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 7, sizing: "fixed" }))).toContain("Quantity must be 1 to 50 lots.");
+    expect(algoConfigProblems(readAlgoConfig({ lots: 1.5, settingsVersion: 7, sizing: "risk" }))).toContain("Maximum lots must be 1 to 50.");
   });
 });
 
@@ -346,7 +346,7 @@ describe("the algo over time", () => {
     const adapter = fakeAdapter();
     const candles = crossing(lineOf("or-low").price, "DOWN");
     const limited = await step(running({ tradesToday: 3 }), candles, adapter, undefined, config({ maxTrades: 3 }));
-    expect(limited.events.find((event) => event.kind === "REJECTED")?.message).toMatch(/Daily trade limit/);
+    expect(limited.events.find((event) => event.kind === "REJECTED")?.message).toMatch(/DAILY TRADE LIMIT REACHED — \d+\/\d+/);
     const locked = await step(running({ realizedToday: -6_000 }), candles, adapter, undefined, config({ maxDailyLoss: 5_000 }));
     expect(locked.state.riskLocked).toBe(true);
     expect(locked.state.status).toBe("RISK_LOCKED");
