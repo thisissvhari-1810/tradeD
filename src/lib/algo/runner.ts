@@ -8,6 +8,7 @@ import { ema } from "@/lib/market/indicators";
 import { allocateLots, ALLOCATION_DEFAULTS, planTrade, RISK_DEFAULTS, type AllocationSettings, type CapitalPlan, type RiskSettings, type TradePlan } from "./sizing";
 import { volumeCheck } from "./patterns";
 import type { Activation } from "./live-session";
+import { EXIT_MANAGEMENT_DEFAULTS, trendExitDecision, trendVerdict, type ExitManagement } from "./trend-exit";
 
 /**
  * The Algo state machine. One execution interface (paper, replay or live adapters) does the trading;
@@ -98,8 +99,11 @@ export type AlgoConfig = {
   intrabar: boolean;
   /** Pause the replay once the session's entries are used up (otherwise it keeps playing; new entries stay blocked). */
   stopAtLimit: boolean;
-  /** Time limit: a trade still open this many minutes after its entry exits at the premium (0 = off). */
+  /** Time limit: a trade still open this many minutes after its entry exits at the premium (0 = off). With trend exit
+   * management it is the checkpoint instead, where the trade is kept only while the index trend still agrees. */
   maxHoldMinutes: number;
+  /** Optional trend-aware exit management at the time checkpoint (off by default: "fixed"). */
+  exitManagement?: ExitManagement;
   /**
    * Breakout confirmation before an entry: "single" — enter on the crossing candle; "hold" — the next completed
    * candle must close beyond the line; "retest" — a retest of the line must hold and price move on.
@@ -156,7 +160,7 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   observationMinutes: 0,
   engine: "existing",
   primary: PRIMARY_SETTINGS_DEFAULTS,
-  settingsVersion: 13,
+  settingsVersion: 16,
   filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
   structureStop: false,
   patterns: PATTERN_DEFAULTS,
@@ -166,9 +170,12 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   stopLoss: false,
   intrabar: true,
   stopAtLimit: false,
-  maxHoldMinutes: 30,
-  // A crossing is only a detected signal: the next completed candle must hold beyond the line before an entry.
-  confirmation: { mode: "hold", retestTolerancePercent: 0.02, retestWindowMinutes: 15, holdMustAgree: true },
+  maxHoldMinutes: 45,
+  // At the 45-minute checkpoint a trade is kept only while 4 of 5 NIFTY trend checks agree, for at most 90 minutes.
+  exitManagement: { ...EXIT_MANAGEMENT_DEFAULTS, mode: "trend" },
+  // A crossing is only a detected signal: price must come back to the line within 15 minutes, hold it without
+  // closing back through, and move on before an entry (retest) — a break that falls straight back is never traded.
+  confirmation: { mode: "retest", retestTolerancePercent: 0.02, retestWindowMinutes: 15, holdMustAgree: true },
 };
 
 /**
@@ -190,6 +197,7 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
   stopLoss: true,
   stopAtLimit: true,
   maxHoldMinutes: 0,
+  exitManagement: EXIT_MANAGEMENT_DEFAULTS,
   crossRule: "classic",
   crossPercent: 0,
   intrabar: false,
@@ -234,6 +242,10 @@ export type OpenPosition = {
   lowest?: number;
   /** The highest option premium seen while open: the maximum favourable move. */
   highest?: number;
+  /** Trend exit management: the highest premium since the time checkpoint (for the trailing stop). */
+  checkpointHigh?: number | null;
+  /** Trend exit management: the latest hold reason logged (logged again only when it changes). */
+  holdNote?: string;
 };
 
 export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean; wallet?: "ALGO"; setup?: TradeSetup; plan?: TradePlan | null };
@@ -700,9 +712,32 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
     await startExit(state, input, trigger.reason, trigger, log);
     return;
   }
-  // Time limit: still short of the target this long after the entry, the trade exits at the premium.
+  // Time limit: still short of the target this long after the entry, the trade exits at the premium. With trend exit
+  // management the limit is a checkpoint: the trade is kept only while the index trend still agrees, within the
+  // maximum holding time and the loss cap; a confirmed reversal closes it. The stop-loss and target above come first.
   const hold = input.config.maxHoldMinutes ?? 0;
-  if (hold > 0 && input.now - position.openedAt >= hold * 60 && mark.bid != null) {
+  const manage = { ...EXIT_MANAGEMENT_DEFAULTS, ...input.config.exitManagement };
+  const elapsed = (input.now - position.openedAt) / 60;
+  if (manage.mode === "trend" && hold > 0 && mark.bid != null && (elapsed >= hold || manage.reversalBeforeCheckpoint)) {
+    const open = dayStart(input.sessionDate);
+    const completed = input.candles.filter((candle) => candle.time + 60 <= input.now && sameSession(candle.time, open));
+    if (elapsed >= hold) position.checkpointHigh = Math.max(position.checkpointHigh ?? mark.bid, mark.candle?.high ?? mark.bid);
+    const unrealized = (mark.bid - position.avg) * position.quantity - position.entryCharges;
+    const decision = trendExitDecision({
+      settings: manage, side: position.side, elapsedMinutes: elapsed, checkpointMinutes: hold, verdict: trendVerdict(completed, position.side, open),
+      premium: mark.bid, entry: position.avg, chargesPerUnit: position.quantity ? (position.entryCharges * 2) / position.quantity : 0,
+      highestSinceCheckpoint: position.checkpointHigh ?? null, dailyLossExceeded: manage.maxLossRupees > 0 && state.realizedToday + unrealized < -manage.maxLossRupees,
+    });
+    if (decision.action === "exit") {
+      await startExit(state, input, decision.reason!, { price: mark.bid, note: decision.note }, log);
+      return;
+    }
+    // The hold is logged at the checkpoint and again only when the trend checks change (not every minute).
+    if (elapsed >= hold && decision.note !== position.holdNote) {
+      position.holdNote = decision.note;
+      log({ key: `extend:${position.entryKey}:${Math.floor(input.now / 60)}`, kind: "INFO", message: decision.note });
+    }
+  } else if (hold > 0 && elapsed >= hold && mark.bid != null) {
     await startExit(state, input, "TIME", { price: mark.bid, note: `No target ${hold} minutes after the entry` }, log);
     return;
   }

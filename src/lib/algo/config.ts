@@ -1,6 +1,7 @@
 import { ALL_LINE_TYPES, type CustomLevel, type LineType } from "./lines";
 import { protectiveProblem, type Protective } from "./options";
 import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "./runner";
+import { EXIT_MANAGEMENT_DEFAULTS, type ExitManagement } from "./trend-exit";
 import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
 import { ALLOCATION_DEFAULTS, RISK_DEFAULTS, type AllocationSettings, type RiskSettings } from "./sizing";
 import { PRIMARY_SETTINGS_DEFAULTS, type PrimarySettings } from "./primary";
@@ -51,6 +52,15 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Version 13: Mathi Strategy's only change from version 11 is a 30-minute time limit on an open trade; the line
   // exit and the 9 / 21 EMA filter (on by default in version 12) move back off once. Later choices are kept.
   const v13 = num(row.settingsVersion) >= 13 || !mathi;
+  // Version 14: Mathi Strategy confirms a breakout by its retest (3-month backtest: most losses were breaks that held
+  // one candle and then fell straight back); saved Mathi settings move to retest once, a later choice is kept.
+  const v14 = num(row.settingsVersion) >= 14;
+  // Version 15: Mathi Strategy keeps a trade past the time checkpoint while the NIFTY trend still agrees (3-month backtest,
+  // both halves better); saved Mathi settings move to it once, a later choice is kept.
+  const v15 = num(row.settingsVersion) >= 15;
+  // Version 16: the time checkpoint moves from 30 to 45 minutes (3-month backtest: both halves better); a saved 30 (the old
+  // default) moves once, any other choice is kept.
+  const v16 = num(row.settingsVersion) >= 16;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -91,13 +101,14 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
     filters: ((filters) => (v13 ? filters : { ...filters, momentum: false }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
     structureStop: !v13 ? false : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
-    maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? num(row.maxHoldMinutes) : ALGO_DEFAULTS.maxHoldMinutes,
+    maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? (!v16 && num(row.maxHoldMinutes) === 30 ? ALGO_DEFAULTS.maxHoldMinutes : num(row.maxHoldMinutes)) : ALGO_DEFAULTS.maxHoldMinutes,
+    exitManagement: !mathi ? { ...EXIT_MANAGEMENT_DEFAULTS } : v15 ? exitManagementOf(row.exitManagement) : { ...exitManagementOf(row.exitManagement), mode: "trend" },
     crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
     crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
     stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
     intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : mathi,
     stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : !mathi,
-    confirmation: !mathi ? { ...ALGO_DEFAULTS.confirmation, mode: "single" } : v11 ? confirmationOf(row.confirmation) : { ...ALGO_DEFAULTS.confirmation },
+    confirmation: !mathi ? { ...ALGO_DEFAULTS.confirmation, mode: "single" } : v14 ? confirmationOf(row.confirmation) : v11 ? { ...confirmationOf(row.confirmation), mode: "retest" } : { ...ALGO_DEFAULTS.confirmation },
     patterns: ((patterns) => (v6 ? patterns : { ...patterns, trendStop: PATTERN_DEFAULTS.trendStop }))(patternsOf(row.patterns)),
   };
 }
@@ -127,6 +138,22 @@ function riskOf(value: unknown): RiskSettings {
     minRewardRisk: pick("minRewardRisk"),
     minStopPercent: pick("minStopPercent"),
     targetMode: row.targetMode === "level" || row.targetMode === "trail" ? row.targetMode : "multiple",
+  };
+}
+
+/** Trend exit management (off unless chosen); unknown values fall back to the defaults. */
+function exitManagementOf(value: unknown): ExitManagement {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const fallback = EXIT_MANAGEMENT_DEFAULTS;
+  const pick = (key: "maxHoldMinutes" | "minScore" | "trailPercent" | "maxLossRupees") => (Number.isFinite(num(row[key])) ? num(row[key]) : fallback[key]);
+  return {
+    mode: row.mode === "trend" || row.mode === "fixed" ? row.mode : ALGO_DEFAULTS.exitManagement?.mode ?? fallback.mode,
+    maxHoldMinutes: pick("maxHoldMinutes"),
+    minScore: pick("minScore"),
+    trailPercent: pick("trailPercent"),
+    maxLossRupees: pick("maxLossRupees"),
+    recoveryExit: typeof row.recoveryExit === "boolean" ? row.recoveryExit : fallback.recoveryExit,
+    reversalBeforeCheckpoint: typeof row.reversalBeforeCheckpoint === "boolean" ? row.reversalBeforeCheckpoint : fallback.reversalBeforeCheckpoint,
   };
 }
 
@@ -231,6 +258,14 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(config.maxDailyLoss > 0)) problems.push("The maximum daily loss must be more than ₹0.");
   if (!Number.isInteger(config.maxTrades) || config.maxTrades < 1 || config.maxTrades > 50) problems.push("The trades-per-session limit must be 1 to 50.");
   if (!Number.isInteger(config.maxHoldMinutes ?? 0) || (config.maxHoldMinutes ?? 0) < 0 || (config.maxHoldMinutes ?? 0) > 375) problems.push("The trade time limit must be 0 (off) to 375 minutes.");
+  const manage = config.exitManagement;
+  if (manage?.mode === "trend") {
+    if (!((config.maxHoldMinutes ?? 0) > 0)) problems.push("Trend exit management needs a time checkpoint (time limit above 0).");
+    if (!Number.isInteger(manage.maxHoldMinutes) || manage.maxHoldMinutes <= (config.maxHoldMinutes ?? 0) || manage.maxHoldMinutes > 375) problems.push("The maximum holding time must be after the checkpoint and at most 375 minutes.");
+    if (!Number.isInteger(manage.minScore) || manage.minScore < 1 || manage.minScore > 5) problems.push("The trend checks needed to hold must be 1 to 5.");
+    if (!(manage.trailPercent >= 0 && manage.trailPercent < 100)) problems.push("The trailing stop must be 0 (off) to below 100%.");
+    if (!(manage.maxLossRupees >= 0)) problems.push("The loss cap for holding on must be 0 (off) or more.");
+  }
   if (!Number.isInteger(config.cooldownMinutes) || config.cooldownMinutes < 0 || config.cooldownMinutes > 120) problems.push("The cooldown must be 0 to 120 minutes.");
   if (!(config.maxSpreadPercent > 0 && config.maxSpreadPercent <= 50)) problems.push("The maximum spread must be above 0% and at most 50%.");
   if (!(config.maxQuoteAgeSeconds >= 5 && config.maxQuoteAgeSeconds <= 600)) problems.push("The quote freshness limit must be 5 to 600 seconds.");

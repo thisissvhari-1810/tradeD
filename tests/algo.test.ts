@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { readAlgoConfig, algoConfigProblems } from "@/lib/algo/config";
 import { ALL_LINE_TYPES, strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { atmStrike, candleExit, protectiveLevels, quoteExit, resolveAtm, strikeInterval, type ChainInput } from "@/lib/algo/options";
-import { advance, ALGO_DEFAULTS, initialState, startExit, type AlgoConfig, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, ALGO_DEFAULTS, initialState, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import { bodyCross, consolidate, evaluateCandle } from "@/lib/algo/signals";
 import type { S1Data } from "@/lib/trading/s1";
 
@@ -446,5 +446,101 @@ describe("execution modes", () => {
     await startExit(state, { sessionId: "s1", sessionDate: DATE, config: config(), candles: [], lines: [], now: NOW, adapter }, "EMERGENCY", null, (event) => events.push(event));
     expect(state.position).toBeNull();
     expect(adapter.calls.exit).toBe(1);
+  });
+});
+
+/* ---------------- trend-aware exit management (optional; fixed time limit by default) ---------------- */
+
+describe("trend exit management at the time checkpoint", async () => {
+  const { EXIT_MANAGEMENT_DEFAULTS, fiveMinute, trendExitDecision, trendVerdict } = await import("@/lib/algo/trend-exit");
+  const trend = { ...EXIT_MANAGEMENT_DEFAULTS, mode: "trend" as const, maxHoldMinutes: 90, minScore: 4 };
+  /** Minute candles from `from` for `count` minutes, moving `step` points a minute from `start`, with volume. */
+  const series = (from: number, count: number, start: number, step: number): Candle[] =>
+    Array.from({ length: count }, (_, i) => {
+      const open = start + step * i;
+      const close = open + step;
+      return { time: at(from + i), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 };
+    });
+
+  it("scores the five checks from completed candles only; a falling market agrees with a PUT and is against a CALL", () => {
+    const down = series(0, 40, 24_000, -3);
+    const put = trendVerdict(down, "PUT", OPEN);
+    expect(put.score).toBe(5);
+    expect(put.checks.map((check) => check.name)).toEqual(["1-min EMA", "5-min EMA", "VWAP", "Momentum", "Swing structure"]);
+    expect(trendVerdict(down, "CALL", OPEN)).toMatchObject({ score: 0, against: 5 });
+    // Too few candles: the checks are unknown, never assumed.
+    expect(trendVerdict(down.slice(0, 5), "PUT", OPEN).checks.filter((check) => check.agrees === null).length).toBeGreaterThanOrEqual(3);
+    // Only whole 5-minute candles count; without volume the session average replaces VWAP.
+    expect(fiveMinute(down.slice(0, 12), OPEN)).toHaveLength(2);
+    expect(trendVerdict(down.map((candle) => ({ ...candle, volume: 0 })), "PUT", OPEN).checks[2].detail).toMatch(/session average \(no volume\)/);
+  });
+
+  it("decides: hold before the checkpoint, then exit at the maximum holding time, on a reversal, a trailing stop, a recovery, or an unconfirmed trend", () => {
+    const valid = trendVerdict(series(0, 40, 24_000, -3), "PUT", OPEN);
+    const reversed = trendVerdict(series(0, 40, 24_000, 3), "PUT", OPEN);
+    const common = { settings: trend, side: "PUT" as const, checkpointMinutes: 30, premium: 90, entry: 100, chargesPerUnit: 0.5, highestSinceCheckpoint: 92, dailyLossExceeded: false };
+    expect(trendExitDecision({ ...common, elapsedMinutes: 20, verdict: reversed }).action).toBe("hold");
+    expect(trendExitDecision({ ...common, elapsedMinutes: 20, verdict: reversed, settings: { ...trend, reversalBeforeCheckpoint: true } })).toMatchObject({ action: "exit", reason: "REVERSAL" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 30, verdict: valid })).toMatchObject({ action: "hold" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 90, verdict: valid })).toMatchObject({ action: "exit", reason: "MAX_HOLD" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 30, verdict: valid, dailyLossExceeded: true })).toMatchObject({ action: "exit", reason: "RISK" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 30, verdict: reversed })).toMatchObject({ action: "exit", reason: "REVERSAL" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 40, verdict: valid, premium: 82, settings: { ...trend, trailPercent: 10 } })).toMatchObject({ action: "exit", reason: "TRAIL" });
+    expect(trendExitDecision({ ...common, elapsedMinutes: 40, verdict: valid, premium: 100.6, settings: { ...trend, recoveryExit: true } })).toMatchObject({ action: "exit", reason: "RECOVERY" });
+    const weak = { ...valid, score: 3, against: 2 };
+    expect(trendExitDecision({ ...common, elapsedMinutes: 30, verdict: weak })).toMatchObject({ action: "exit", reason: "TIME" });
+  });
+
+  it("in the engine: the fixed limit exits at 30 minutes; trend mode holds while the trend agrees and exits when it turns; the stop-loss always comes first", async () => {
+    // A PUT entered at minute 32 (after the 9:15-low crossing at 30–31), then NIFTY keeps falling to minute 61.
+    const [previous, candle] = crossing(lineOf("or-low").price, "DOWN");
+    const falling = series(32, 30, candle.close, -3);
+    const rising = series(62, 30, falling.at(-1)!.close, 6);
+    const candles = [previous, candle, ...falling, ...rising];
+    const open = async (cfg: AlgoConfig) => {
+      const adapter = fakeAdapter({ bid: 100 });
+      const first = await step({ ...initialState(DATE), running: true, entries: true, lastCandle: at(29) }, [previous, candle], adapter, at(32), cfg);
+      // New entries off, so only the exit logic acts from here.
+      return { adapter, state: { ...first.state, running: false } };
+    };
+    const fixed = config({ maxHoldMinutes: 30, exitManagement: { ...trend, mode: "fixed" } });
+    const a = await open(fixed);
+    expect((await step(a.state, candles, a.adapter, at(62), fixed)).events.find((event) => event.kind === "EXIT")?.message).toMatch(/^Exit \(TIME\)/);
+
+    const managed = config({ maxHoldMinutes: 30, exitManagement: trend });
+    const b = await open(managed);
+    const at30 = await step(b.state, candles, b.adapter, at(62), managed);
+    expect(at30.state.position).not.toBeNull();
+    expect(at30.events.find((event) => event.key.startsWith("extend:"))?.message).toMatch(/^Held past the 30-min checkpoint: trend confirmed \(5\/5/);
+    let state = at30.state;
+    let exit: AlgoEvent | undefined;
+    for (let minute = 63; minute <= 92 && !exit; minute += 1) {
+      const next = await step(state, candles, b.adapter, at(minute), managed);
+      state = next.state;
+      exit = next.events.find((event) => event.kind === "EXIT");
+    }
+    expect(exit?.message).toMatch(/^Exit \((TIME|REVERSAL)\)/);
+    expect(exit!.time).toBeLessThan(at(92));
+
+    // Past the checkpoint with the trend still valid, the stop-loss is hit: the stop wins over the extension.
+    const c = await open(managed);
+    c.adapter.set({ bid: 70 });
+    expect((await step(c.state, candles, c.adapter, at(62), managed)).events.find((event) => event.kind === "EXIT")?.message).toMatch(/^Exit \(STOP\)/);
+  });
+
+  it("settings: Mathi holds while the trend agrees by default (version 15; saved settings move once), saved values read back, invalid ones reported", () => {
+    expect(ALGO_DEFAULTS.exitManagement).toMatchObject({ mode: "trend", maxHoldMinutes: 90, minScore: 4, trailPercent: 0, recoveryExit: false, reversalBeforeCheckpoint: false });
+    expect(readAlgoConfig({ settingsVersion: 14 }).exitManagement?.mode).toBe("trend");
+    expect(readAlgoConfig({ settingsVersion: 14, exitManagement: { mode: "fixed", maxHoldMinutes: 60 } }).exitManagement).toMatchObject({ mode: "trend", maxHoldMinutes: 60 });
+    expect(readAlgoConfig({ settingsVersion: 15, exitManagement: { mode: "fixed" } }).exitManagement?.mode).toBe("fixed");
+    // Version 16: the checkpoint moves from the old default 30 to 45 minutes once; another saved value, or 30 chosen since, is kept.
+    expect(ALGO_DEFAULTS.maxHoldMinutes).toBe(45);
+    expect(readAlgoConfig({ settingsVersion: 15, maxHoldMinutes: 30 }).maxHoldMinutes).toBe(45);
+    expect(readAlgoConfig({ settingsVersion: 15, maxHoldMinutes: 20 }).maxHoldMinutes).toBe(20);
+    expect(readAlgoConfig({ settingsVersion: 16, maxHoldMinutes: 30 }).maxHoldMinutes).toBe(30);
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 14 }).exitManagement?.mode).toBe("fixed");
+    expect(readAlgoConfig({ settingsVersion: 14, exitManagement: { mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true } }).exitManagement).toMatchObject({ mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true, reversalBeforeCheckpoint: false });
+    expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, maxHoldMinutes: 20 } })).toContain("The maximum holding time must be after the checkpoint and at most 375 minutes.");
+    expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, minScore: 6 } })).toContain("The trend checks needed to hold must be 1 to 5.");
   });
 });

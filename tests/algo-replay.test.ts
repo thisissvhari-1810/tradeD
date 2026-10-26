@@ -1409,7 +1409,7 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
     expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 50, 3]);
     // Version 13: the line exit and the 9 / 21 EMA filter (version 12) move back off once, with a 30-minute time limit; later choices are kept.
     const v12 = readAlgoConfig({ settingsVersion: 12, structureStop: true, filters: { momentum: true } });
-    expect([v12.structureStop, v12.filters.momentum, v12.maxHoldMinutes]).toEqual([false, false, 30]);
+    expect([v12.structureStop, v12.filters.momentum, v12.maxHoldMinutes]).toEqual([false, false, 45]);
     const v13 = readAlgoConfig({ settingsVersion: 13, structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
     expect([v13.structureStop, v13.filters.momentum, v13.maxHoldMinutes]).toEqual([true, true, 0]);
     expect(readAlgoConfig({ engine: "primary", settingsVersion: 11, structureStop: true, filters: { momentum: true } })).toMatchObject({ structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
@@ -1844,13 +1844,16 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       return candles;
     }
     const oct22Candles = () => session(oct22, 22_584.2 + shift, 22_585 + shift, 9);
-    const hold: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation } };
+    const hold: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "hold" } };
     const retest: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "retest" } };
 
-    it("Mathi Strategy confirms by default (breakout hold); saved settings move to it once; Algo - Primary Strategy is unaffected", () => {
-      expect(ALGO_DEFAULTS.confirmation.mode).toBe("hold");
-      expect(readAlgoConfig({ settingsVersion: 10 }).confirmation.mode).toBe("hold");
-      expect(readAlgoConfig({ settingsVersion: 11, confirmation: { mode: "single" } }).confirmation.mode).toBe("single");
+    it("Mathi Strategy confirms by default (retest since version 14); saved settings move to it once; Algo - Primary Strategy is unaffected", () => {
+      expect(ALGO_DEFAULTS.confirmation.mode).toBe("retest");
+      expect(readAlgoConfig({ settingsVersion: 10 }).confirmation.mode).toBe("retest");
+      // Version 14 moves a saved hold (or single) to retest once, keeping its retest settings; a choice saved since is kept.
+      expect(readAlgoConfig({ settingsVersion: 13, confirmation: { mode: "hold", retestWindowMinutes: 20 } }).confirmation).toMatchObject({ mode: "retest", retestWindowMinutes: 20 });
+      expect(readAlgoConfig({ settingsVersion: 14, confirmation: { mode: "hold" } }).confirmation.mode).toBe("hold");
+      expect(readAlgoConfig({ settingsVersion: 14, confirmation: { mode: "single" } }).confirmation.mode).toBe("single");
       expect(readAlgoConfig({ settingsVersion: 11, confirmation: { mode: "retest", retestWindowMinutes: 20 } }).confirmation).toMatchObject({ mode: "retest", retestWindowMinutes: 20 });
       expect(readAlgoConfig({ engine: "primary", settingsVersion: 10 }).confirmation.mode).toBe("single");
       expect(algoConfigProblems({ ...retest, confirmation: { ...retest.confirmation, retestWindowMinutes: 1 } })).toContain("The retest window must be 2 to 120 minutes.");
@@ -1966,7 +1969,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     });
 
     it("with the line exit switched on, a trade whose setup is invalidated exits on that close", async () => {
-      expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.filters.momentum, ALGO_DEFAULTS.maxHoldMinutes]).toEqual([false, false, 30]);
+      expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.filters.momentum, ALGO_DEFAULTS.maxHoldMinutes]).toEqual([false, false, 45]);
       feed.premiums = premiums((index) => (index === 10 ? { low: 95, high: 100.5, close: 97 } : index === 12 ? { low: 99.5, high: 104, close: 100 } : null));
       const result = await run(oct22Candles(), { cursor: m(12), config: { ...mathi, structureStop: true } });
       const exit = result.events.find((event) => event.kind === "EXIT")!;
@@ -1974,9 +1977,9 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(algoTrades(result.events, null)[0].exitReason).toBe("Setup invalidated");
     });
 
-    it("time limit: a trade short of its target 30 minutes after its entry exits at the premium", async () => {
+    it("time limit (fixed exit): a trade short of its target 30 minutes after its entry exits at the premium", async () => {
       feed.premiums = premiums((index) => (index >= 10 ? { low: 80, high: 90, close: 85 } : null));
-      const result = await run(oct22Candles(), { cursor: m(60), config: mathi });
+      const result = await run(oct22Candles(), { cursor: m(60), config: { ...mathi, maxHoldMinutes: 30, exitManagement: { ...mathi.exitManagement!, mode: "fixed" } } });
       const entry = result.events.find((event) => event.kind === "ENTRY")!;
       const exit = result.events.find((event) => event.kind === "EXIT")!;
       expect(exit.message).toMatch(/^Exit \(TIME\)/);

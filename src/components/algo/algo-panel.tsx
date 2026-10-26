@@ -13,6 +13,7 @@ import { LiveMathiSession } from "@/components/algo/algo-live-session";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
+import { EXIT_MANAGEMENT_DEFAULTS } from "@/lib/algo/trend-exit";
 import { confirmationMode, type AlgoConfig, type AlgoStatus, type ConfirmationMode } from "@/lib/algo/runner";
 import type { algoView } from "@/server/algo";
 
@@ -112,6 +113,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const { state } = data;
   const status = STATUS[state.status] ?? STATUS.DISABLED;
   const set = (patch: Partial<AlgoConfig>) => setDraft({ ...draft, ...patch });
+  const exit = { ...EXIT_MANAGEMENT_DEFAULTS, ...draft.exitManagement };
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
   const position = data.position;
   const paper = draft.mode === "PAPER";
@@ -308,8 +310,31 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <Field label="Target (% of premium)"><NumberInput value={draft.target.value} step={0.5} min={0.5} onChange={(value) => set({ target: { mode: "percent", value } })} /></Field>
           <p className="text-micro text-muted">Exit when the option&apos;s own premium reaches its entry price + {Number.isFinite(draft.target.value) ? draft.target.value : "—"}% (₹100 → ₹{Number.isFinite(draft.target.value) ? (100 * (1 + draft.target.value / 100)).toFixed(2) : "—"}). Net P&amp;L is lower after charges and slippage.</p>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Exit if NIFTY closes back through the line</span><input type="checkbox" className="oc-check" aria-label="Exit when the index closes back through the broken line" checked={draft.structureStop} onChange={(event) => set({ structureStop: event.target.checked })} /></label>
+          <Field label="Hard stop-loss (% of premium)"><NumberInput value={draft.stopLoss === false ? 0 : draft.stop.value} step={1} min={0} onChange={(value) => set(value > 0 ? { stopLoss: true, stop: { mode: "percent", value } } : { stopLoss: false })} /></Field>
           <Field label="Time limit (min)"><NumberInput value={draft.maxHoldMinutes} step={5} min={0} onChange={(maxHoldMinutes) => set({ maxHoldMinutes })} /></Field>
-          <p className="text-micro text-muted"><strong className="text-text-2">No stop-loss.</strong> A Mathi trade exits at its target{draft.maxHoldMinutes > 0 ? `, at the premium if the target is not reached ${draft.maxHoldMinutes} minutes after the entry` : ""}{draft.structureStop ? ", when a completed candle closes back through the line it broke" : ""}, when you exit it, or at the session end. Time limit 0 = off.</p>
+          <p className="text-micro text-muted"><strong className="text-text-2">{draft.stopLoss === false ? "No stop-loss." : `Stop-loss ${draft.stop.value}% of the premium.`}</strong> A Mathi trade exits at its target{draft.stopLoss === false ? "" : ", at its stop-loss (always first)"}{draft.maxHoldMinutes > 0 ? (exit.mode === "trend" ? `, at the ${draft.maxHoldMinutes}-minute checkpoint unless the trend still agrees (then by ${exit.maxHoldMinutes} minutes at most)` : `, at the premium if the target is not reached ${draft.maxHoldMinutes} minutes after the entry`) : ""}{draft.structureStop ? ", when a completed candle closes back through the line it broke" : ""}, when you exit it, or at the session end. Stop-loss and time limit 0 = off.</p>
+          {draft.maxHoldMinutes > 0 ? (
+            <>
+              <Field label="At the time limit">
+                <select className="compact-field w-[9.5rem]" aria-label="Exit at the time limit" value={exit.mode} onChange={(event) => set({ exitManagement: { ...exit, mode: event.target.value === "trend" ? "trend" : "fixed" } })}>
+                  <option value="fixed">Always exit</option>
+                  <option value="trend">Hold if trend agrees</option>
+                </select>
+              </Field>
+              {exit.mode === "trend" ? (
+                <>
+                  <p className="text-micro text-muted">At the checkpoint five checks on completed NIFTY candles are scored: 1-min 9/21 EMA, 5-min 3/6 EMA, VWAP side, 5-minute momentum and the last 10 minutes&apos; swing structure. The trade is kept only while enough agree, and closed at once if all five turn against it.</p>
+                  <Field label="Checks needed to hold"><NumberInput value={exit.minScore} step={1} min={1} onChange={(minScore) => set({ exitManagement: { ...exit, minScore } })} /></Field>
+                  <Field label="Maximum holding (min)"><NumberInput value={exit.maxHoldMinutes} step={5} min={1} onChange={(maxHoldMinutes) => set({ exitManagement: { ...exit, maxHoldMinutes } })} /></Field>
+                  <Field label="Trailing stop after checkpoint (%)"><NumberInput value={exit.trailPercent} step={1} min={0} onChange={(trailPercent) => set({ exitManagement: { ...exit, trailPercent } })} /></Field>
+                  <Field label="Loss cap to keep holding (₹)"><NumberInput value={exit.maxLossRupees} step={500} min={0} onChange={(maxLossRupees) => set({ exitManagement: { ...exit, maxLossRupees } })} /></Field>
+                  <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Exit once the premium is back at entry</span><input type="checkbox" className="oc-check" aria-label="Recovery exit" checked={exit.recoveryExit} onChange={(event) => set({ exitManagement: { ...exit, recoveryExit: event.target.checked } })} /></label>
+                  <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Exit on a full reversal before the checkpoint</span><input type="checkbox" className="oc-check" aria-label="Exit on a reversal before the checkpoint" checked={exit.reversalBeforeCheckpoint} onChange={(event) => set({ exitManagement: { ...exit, reversalBeforeCheckpoint: event.target.checked } })} /></label>
+                  <p className="text-micro text-muted">0 = off for the trailing stop and the loss cap. The position size never changes and nothing is added to a losing trade.</p>
+                </>
+              ) : null}
+            </>
+          ) : null}
           <Field label="Max trades / session"><NumberInput value={draft.maxTrades} step={1} min={1} onChange={(maxTrades) => set({ maxTrades })} /></Field>
           <p className="text-micro text-muted">Successful entries count (a closed trade still counts; a rejected order does not). At the limit new entries stop until the next session; an open trade is still managed to its target.</p>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Pause the replay at the limit</span><input type="checkbox" className="oc-check" aria-label="Pause the replay at the trade limit" checked={draft.stopAtLimit} onChange={(event) => set({ stopAtLimit: event.target.checked })} /></label>
