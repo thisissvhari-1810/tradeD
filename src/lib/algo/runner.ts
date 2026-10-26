@@ -7,6 +7,7 @@ import { changedConfirmations, tradeConfirmations, type Confirmation, type Trade
 import { ema } from "@/lib/market/indicators";
 import { allocateLots, ALLOCATION_DEFAULTS, planTrade, RISK_DEFAULTS, type AllocationSettings, type CapitalPlan, type RiskSettings, type TradePlan } from "./sizing";
 import { volumeCheck } from "./patterns";
+import type { Activation } from "./live-session";
 
 /**
  * The Algo state machine. One execution interface (paper, replay or live adapters) does the trading;
@@ -281,6 +282,9 @@ export type AlgoState = {
   engine?: EngineState | null;
   /** A candle already entered on while it was forming (live paper), so its completed evaluation does not enter again. */
   formingEntry?: number | null;
+  /** Live demo: the current Mathi Strategy activation session (switched ON) and the earlier ones, newest first. */
+  activation?: Activation | null;
+  activations?: Activation[];
 };
 
 export function initialState(sessionDate: string): AlgoState {

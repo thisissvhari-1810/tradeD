@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { History, OctagonX, Play, Plus, Square, Trash2 } from "lucide-react";
+import { History, OctagonX, Plus, Trash2 } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
@@ -9,6 +9,7 @@ import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
+import { LiveMathiSession } from "@/components/algo/algo-live-session";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
@@ -161,26 +162,21 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
         </details>
         {paper ? (
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {!state.running ? (
-              <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-3 font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50" disabled={Boolean(busy) || dirty || data.problems.length > 0} onClick={() => void run("start", { action: "start" })}><Play className="h-3.5 w-3.5" aria-hidden />Start session</button>
-            ) : (
-              <>
-                <button type="button" className="h-8 rounded-md border border-border px-2.5 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(busy)} onClick={() => void run("entries", { action: "entries", enabled: !state.entries })}>{state.entries ? "Disable new entries" : "Enable new entries"}</button>
-                <button type="button" className="inline-flex h-8 items-center gap-1 rounded-md border border-border px-2.5 font-medium hover:bg-hover disabled:opacity-50" disabled={Boolean(busy) || Boolean(position)} title={position ? "Exit the open position first" : undefined} onClick={() => void run("stop", { action: "stop" })}><Square className="h-3.5 w-3.5" aria-hidden />Stop session</button>
-              </>
-            )}
             {position ? <Confirm label="Exit position" confirm="Confirm exit" disabled={Boolean(busy) || Boolean(position.exit)} onConfirm={() => void run("exit", { action: "exit" })} /> : null}
             {state.running || position ? <Confirm label={<><OctagonX className="h-3.5 w-3.5" aria-hidden />Emergency stop</>} confirm="Confirm emergency stop" danger disabled={Boolean(busy)} onConfirm={() => void run("emergency", { action: "emergency" })} /> : null}
           </div>
         ) : null}
-        {dirty && paper && !state.running ? <p className="text-micro text-warning">Save the settings before starting.</p> : null}
+        {dirty && paper && !state.running ? <p className="text-micro text-warning">Save the settings before turning the strategy on.</p> : null}
         {paper ? <p className="text-micro leading-snug text-muted">{data.monitoring}</p> : null}
       </div>
+
+      {/* Live demo: Mathi Strategy ON / OFF, its activation session, the open trade and the completed trades. */}
+      {paper ? <LiveMathiSession data={data} busy={Boolean(busy)} disabled={dirty || data.problems.length > 0} now={checkedAt} onStart={() => void run("start", { action: "start" })} onStop={() => void run("stop", { action: "stop" })} /> : null}
 
       {/* Live readouts */}
       <div className="rounded-md border border-border-soft bg-sunken/50 p-2">
         <p className="eyebrow mb-1">Algo account</p>
-        <AlgoAccountFigures account={data.account} compact extra={[["Entries today", `${state.tradesToday} / ${data.config.maxTrades}`]]} />
+        <AlgoAccountFigures account={data.account} compact extra={[[paper ? "Entries this session" : "Entries today", `${state.tradesToday} / ${data.config.maxTrades}`]]} />
         {data.account.legacyPosition ? <p className="mt-1 text-micro text-warning">An earlier algo position is still on the options paper account. It is protected and closed there; new entries start on this account once it is flat.</p> : null}
       </div>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
@@ -209,7 +205,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
         </>
       ) : null}
 
-      {position ? (
+      {position && !paper ? (
         <div className="rounded-md border border-profit/30 bg-profit-soft/40 p-2">
           <p className="font-semibold">ATM {position.side} {position.contract.strike} · {position.contract.expiry} <span className="text-micro font-normal text-muted">(simulated)</span></p>
           <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">

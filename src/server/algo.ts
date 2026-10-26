@@ -24,6 +24,8 @@ import { checkReplayClock, sessionTape } from "@/server/option-replay";
 import { ensurePracticeAccount } from "@/server/practice-account";
 import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
+import { activationSummary, activationTrades, afterLiveTick, beforeLiveTick, endActivation, feedIsStale, liveStatus, startActivation } from "@/lib/algo/live-session";
+import { randomBytes } from "node:crypto";
 import { algoTrades, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
 import { startAlgoPeriod } from "@/server/trading";
@@ -45,6 +47,8 @@ const paise = (rupees: number) => BigInt(Math.round(rupees * 100));
 const rupees = (value: bigint) => Number(value) / 100;
 const contractKeyOf = (contract: Pick<ContractRef, "underlying" | "expiry" | "strike" | "right">) => `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}`;
 const todayIst = () => kolkataParts(new Date()).dateKey;
+/** A readable activation session id: MS-<date>-<IST time>-<random>. */
+const activationId = (now: number) => `MS-${new Date((now + 19_800) * 1000).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-")}-${randomBytes(2).toString("hex").toUpperCase()}`;
 const LEASE_MS = 45_000;
 
 function assertAllowed(user: SessionUser) {
@@ -160,7 +164,7 @@ async function stopStrategy(user: SessionUser, sessionId: string, strategy: Algo
     const config = readAlgoConfig(session.config);
     const events: AlgoEvent[] = [];
     if (paper.position && !paper.position.exit) await startExit(paper, { sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
-    Object.assign(paper, { running: false, entries: false });
+    events.push(...endActivation(paper, now, "STOPPED"));
     paper.status = paper.recovery ? "RECOVERY_REQUIRED" : paper.position ? "POSITION_OPEN" : "DISABLED";
     events.push({ key: `switch-stop:${now}`, time: now, kind: "INFO", message: "Session stopped to switch strategies." });
     await saveRun(sessionId, paper, events, "PAPER");
@@ -405,6 +409,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   ]);
   const latestRun = replays[0]?.runId ?? null;
   const primaryConfig = primaryConfigOf(session);
+  const liveSession = await liveSessionView(session.id, config, state, unrealized);
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
@@ -421,10 +426,47 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     position: state.position ? { ...state.position, bid: mark?.bid ?? null, ask: mark?.ask ?? null, unrealized, markedAt: mark?.asOf ?? null } : null,
     events: events.map((event) => event.payload as unknown as AlgoEvent),
     replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
+    /** Live demo: the Mathi Strategy activation session, its trades and status, and the earlier sessions. */
+    liveSession,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
     monitoring: "The algo checks completed candles and its open position each time TradeD runs a check: while this page is open (every 15 seconds), or from the server scheduler when one is configured. Stop-loss and target are watched by TradeD, not held at a broker, so they are not guaranteed protection; exits fill at the quote available when checked.",
+  };
+}
+
+/**
+ * The live demo monitor: the current (or latest) activation session with its status, entries used, the trades
+ * entered in it (from the stored order events — the source of truth) and its P&L, plus the earlier sessions.
+ */
+async function liveSessionView(sessionId: string, config: AlgoConfig, state: AlgoState, unrealized: number | null) {
+  const now = Math.floor(Date.now() / 1000);
+  const current = state.activation ?? null;
+  const earlier = (state.activations ?? []).filter((item) => item.id !== current?.id).slice(0, 5);
+  const shown = [...(current ? [current] : []), ...earlier];
+  const since = shown.length ? Math.min(...shown.map((item) => item.startedAt)) : null;
+  const rows = since == null ? [] : await prisma.algoEvent.findMany({ where: { sessionId, mode: "PAPER", time: { gte: since - 300 } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 5_000 });
+  const events = rows.map((event) => event.payload as unknown as AlgoEvent);
+  // When each entry was recorded (stored), which places it in the activation that made it.
+  const recordedAt = new Map(rows.flatMap((row, index) => (events[index].kind === "ENTRY" && events[index].order ? [[events[index].order!.key, Math.floor(row.createdAt.getTime() / 1000)] as const] : [])));
+  const open = state.position ? { entryKey: state.position.entryKey, exitPending: Boolean(state.position.exit) } : null;
+  const all = algoTrades(events, open);
+  const running = Boolean(current && current.endedAt == null && state.running);
+  const feedStale = running && feedIsStale(state.lastCandle, current?.startedAt ?? null, now);
+  const tradesOf = (item: NonNullable<typeof current>) => activationTrades(all, item, recordedAt);
+  const currentTrades = current ? tradesOf(current) : [];
+  const openHere = currentTrades.some((trade) => trade.status !== "COMPLETED");
+  return {
+    status: liveStatus(state, config, feedStale),
+    feedStale,
+    lastCandle: state.lastCandle,
+    lastSignal: state.lastSignal ? { time: state.lastSignal.time, decision: state.lastSignal.decision } : null,
+    activation: current,
+    trades: currentTrades,
+    summary: activationSummary(currentTrades, config.maxTrades, openHere ? unrealized : null),
+    /** An open position entered before the current activation (it is still managed; it blocks new entries). */
+    carriedPosition: Boolean(state.position && !openHere),
+    previous: earlier.map((item) => ({ activation: item, summary: activationSummary(tradesOf(item), config.maxTrades, null) })),
   };
 }
 
@@ -494,17 +536,21 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
         const problems = algoConfigProblems(config);
         if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
         if (config.mode !== "PAPER") throw new AppError(config.mode === "LIVE" ? "Live algo trading is unavailable." : "Historical replay runs from the Replay button, not as a session.", 409);
+        // Switching ON again while it runs (a double click, a retried request) never starts a second activation.
+        if (state.running && state.activation && state.activation.endedAt == null) break;
         // Only one algo feature may place orders: the lock is taken before any candle is evaluated.
         await takeLock(session.id, "EXISTING_ALGO");
-        // Starting mid-session never trades history: evaluation begins from the next completed candle.
-        Object.assign(state, { running: true, entries: true, sessionDate: todayIst(), lastCandle: null });
-        note("start", "Session started (paper trading). Monitoring completed 1-minute candles.");
+        // A new activation session with a fresh entry allowance. Starting mid-session never trades history:
+        // evaluation begins from the latest completed candle. An open position from an earlier activation stays
+        // managed, and blocks a new entry until it is flat (one position at a time).
+        events.push(...startActivation(state, now, activationId(now), todayIst(), config.maxTrades));
         break;
       }
       case "stop":
-        if (state.position) throw new AppError("Exit the open position first, or keep the session running to protect it. Use Disable new entries to stop new trades.", 409, "POSITION_OPEN");
-        Object.assign(state, { running: false, entries: false });
-        note("stop", "Session stopped.");
+        // Stop Strategy: no new entries from now. An open position is not closed: it stays managed by its exit
+        // rules (target, time limit, session end) and visible until it closes, or until it is exited by hand.
+        events.push(...endActivation(state, now, "STOPPED"));
+        note("stop", state.position ? "Mathi Strategy stopped — POSITION OPEN: no new entries; the open position stays managed until it exits." : state.pending ? "Mathi Strategy stopped: no new entries. An order sent before the stop is still being reconciled." : "Mathi Strategy stopped: no new entries.");
         break;
       case "entries":
         state.entries = command.enabled && state.running;
@@ -557,6 +603,10 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
 async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState) {
   if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
   const today = todayIst();
+  const now = Math.floor(Date.now() / 1000);
+  // An activation from an earlier day ends before anything is evaluated (its allowance was for that session).
+  const before = beforeLiveTick(state, today, now);
+  if (!state.running && !state.position && !state.pending) return { state, events: before };
   const data = await getS1Data(config.underlying);
   // Before today's session (or on a closed day) the levels belong to an earlier day: nothing is evaluated.
   const candles = data.date === today ? await sessionMinuteTape(config.underlying, today) : [];
@@ -576,10 +626,12 @@ async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig,
   // A legacy position is only protected and closed on its old account: no new entry is ever made there,
   // so candles are evaluated (and entries made on the Algo wallet) from the tick after it is flat.
   const input = legacy ? { ...state, running: false } : state;
-  const result = await advance(input, { sessionId, sessionDate: today, config, candles, lines, now: Math.floor(Date.now() / 1000), adapter });
+  const result = await advance(input, { sessionId, sessionDate: today, config, candles, lines, now, adapter });
   if (legacy) result.state.running = state.running;
   tagWallet(result.state, legacy);
-  return { state: result.state, events: [...lockEvents, ...result.events] };
+  // The activation's entry count and its limit (entries stop at the limit; it ends once nothing is open).
+  const after = afterLiveTick(result.state, config, now);
+  return { state: result.state, events: [...before, ...lockEvents, ...result.events, ...after] };
 }
 
 /** Keeps a legacy paper position's stored stop and target equal to the runner's. */
