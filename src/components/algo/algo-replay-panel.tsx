@@ -156,13 +156,13 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
         {data && data.config.underlying !== chartSymbol ? <p className="text-xs text-warning">The algo trades {data.config.underlying}; this chart shows {chartSymbol}. Its markers appear on the {data.config.underlying} chart.</p> : null}
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
-        {run && run.strategy !== "PRIMARY_STRATEGY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} /> : null}
+        {run && run.strategy !== "PRIMARY_STRATEGY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} signal={latestSignal(run.events)} /> : null}
         {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
         {run ? <ReportDownload runId={run.id} /> : null}
         {run?.strategy === "PRIMARY_STRATEGY" ? <SignalAudit events={run.events} /> : null}
         {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
         {run ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
-        {run ? <StrategyRows analysis={state?.analysis} /> : null}
+        {run ? <StrategyRows analysis={state?.analysis} positionOpen={Boolean(position)} /> : null}
 
         {/* 2. Strategy and replay status */}
         {run && diagnostics ? (
@@ -194,7 +194,8 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
           <ol className="grid grid-cols-3 gap-2" aria-label="Trade slots">
             {slots.map((slot) => {
               const trade = slot.trade;
-              const live = trade && position && trade.entryKey === position.entryKey ? position.unrealized : null;
+              const open = trade && position && trade.entryKey === position.entryKey ? position : null;
+              const live = open ? open.unrealized : null;
               const value = trade ? (trade.realized ?? live) : null;
               return (
                 <li key={slot.number}>
@@ -208,8 +209,13 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
                   >
                     <span className="flex items-baseline justify-between text-xs text-muted"><span>Trade {slot.number}/{max}</span>{slot.time ? <span className="num">{ist(slot.time)}</span> : null}</span>
                     <span className={cx("block text-sm font-semibold", trade ? (trade.side === "CALL" ? "text-profit" : "text-loss") : "text-muted")}>{trade ? `BUY ${trade.side}` : "—"}</span>
-                    <span className={cx("block text-xs font-medium", SLOT_TONE[slot.state])}>{slot.state}</span>
-                    {trade ? <span className="block text-sm font-semibold"><LiveMoney value={value} signed tone missing="—" /></span> : slot.reason ? <span className="line-clamp-2 block text-xs text-loss">{slot.reason}</span> : null}
+                    <span className={cx("block text-xs font-medium", SLOT_TONE[slot.state])}>{slot.state === "Waiting" ? "WAITING FOR SIGNAL" : slot.state === "Open" && open?.premium != null && open.premium >= open.target ? "TARGET REACHED" : slot.state.toUpperCase()}</span>
+                    {trade ? <span className="block text-sm font-semibold"><LiveMoney value={value} signed tone missing={slot.state === "Open" ? "OPTION PRICE UNAVAILABLE" : "—"} /></span> : slot.reason ? <span className="line-clamp-2 block text-xs text-loss">{slot.reason}</span> : null}
+                    {trade && trade.status === "COMPLETED" ? (
+                      <span className="num block text-[0.6875rem] leading-snug text-muted">{inr(trade.entryPremium)} → {inr(trade.exitPremium)}<br />Gross {trade.gross == null ? "—" : money(trade.gross)} · Net {trade.realized == null ? "—" : money(trade.realized)}{trade.exitTime ? ` · ${ist(trade.exitTime)}` : ""}</span>
+                    ) : trade ? (
+                      <span className="num block text-[0.6875rem] leading-snug text-muted">{inr(trade.entryPremium)} → {open?.premium == null ? "—" : inr(open.premium)} · TGT {inr(trade.target)}</span>
+                    ) : null}
                   </button>
                 </li>
               );
@@ -301,6 +307,24 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   );
 }
 
+/** The latest line signal of the run: the crossed line, its candle, the contract once bought, and what happened. */
+function latestSignal(events: Array<{ key: string; time: number; kind: string; message: string; evaluation?: { decision: string; time: number; events: Array<{ label: string; price: number }> }; contract?: { underlying: string; strike: number; right: string; expiry: string }; reasons?: string[] }>) {
+  const evaluation = [...events].reverse().find((event) => event.key.startsWith("eval") && (event.evaluation?.decision === "CALL" || event.evaluation?.decision === "PUT"));
+  if (!evaluation?.evaluation) return null;
+  const time = evaluation.evaluation.time;
+  const entry = events.find((event) => event.kind === "ENTRY" && event.time === time && event.contract);
+  const cross = evaluation.evaluation.events[0];
+  const rejected = evaluation.kind === "REJECTED" ? (evaluation.reasons?.join(" ") || evaluation.message) : null;
+  return {
+    side: evaluation.evaluation.decision as "CALL" | "PUT",
+    line: cross?.label ?? "Strategy line",
+    price: cross?.price ?? null,
+    time,
+    contract: entry?.contract ? `${entry.contract.underlying} ${entry.contract.strike} ${entry.contract.right} · ${entry.contract.expiry}` : null,
+    result: entry ? "ORDER PLACED" : rejected ? `REJECTED — ${rejected}` : "SIGNAL DETECTED",
+  };
+}
+
 /** One open trade, with its live premium and P&L (from the replay-time mark) and its detail view. */
 function TradeCard({ trade, max, position, confirmations, stale, selected, onOpen, onExit, exiting }: { trade: AlgoTrade; max: number; position: LivePosition | null; confirmations: Confirmation[] | null; stale: boolean; selected: boolean; onOpen: () => void; onExit: () => void; exiting: boolean }) {
   const call = trade.side === "CALL";
@@ -317,12 +341,25 @@ function TradeCard({ trade, max, position, confirmations, stale, selected, onOpe
         <span className="text-[1.875rem] font-semibold leading-tight"><LiveMoney value={position?.unrealized} signed tone missing="Price unavailable" /></span>
         <span className={cx("num text-base font-semibold", tone(position?.unrealizedPercent))}>{position?.unrealizedPercent == null ? "" : `${position.unrealizedPercent > 0 ? "+" : ""}${position.unrealizedPercent.toFixed(2)}%`}</span>
       </div>
+      {position && position.premium == null ? <p className="mt-1 rounded-md bg-warning-soft px-2 py-1 text-xs font-semibold text-warning">OPTION PRICE UNAVAILABLE at this replay time</p> : null}
       <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+        <Metric label="Status">{position?.premium != null && position.premium >= position.target ? <span className="font-semibold text-profit">TARGET REACHED</span> : <span className="font-semibold text-profit">OPEN</span>}</Metric>
+        <Metric label="Target premium (+3%)">{inr(trade.target)}</Metric>
         <Metric label="Entry">{inr(trade.entryPremium)}</Metric>
         <Metric label={`${stale ? "Last valid" : "Live"}${position?.premiumAt ? ` · ${ist(position.premiumAt)}` : ""}`}><LiveMoney value={position?.premium} className="text-lg font-semibold" />{stale ? <span className="ml-1 rounded-pill bg-warning-soft px-1.5 text-xs font-semibold text-warning">STALE</span> : null}</Metric>
-        <Metric label="Qty">{trade.quantity}</Metric>
-        <Metric label="Value"><LiveMoney value={position?.value} /></Metric>
+        <Metric label="Qty · lot">{trade.quantity}{trade.lotSize ? ` · ${trade.quantity / trade.lotSize} × ${trade.lotSize}` : ""}</Metric>
+        <Metric label="Entry value">{inr(trade.entryPremium * trade.quantity)}</Metric>
+        <Metric label="Unrealized gross">{position?.premium == null ? "—" : <LiveMoney value={Math.round((position.premium - trade.entryPremium) * trade.quantity * 100) / 100} signed tone />}</Metric>
+        <Metric label="Est. charges (entry + exit)">{inr(trade.entryCharges * 2)}</Metric>
+        <Metric label="Est. net">{position?.premium == null ? "—" : <LiveMoney value={Math.round(((position.premium - trade.entryPremium) * trade.quantity - trade.entryCharges * 2) * 100) / 100} signed tone />}</Metric>
+        <Metric label="Entered">{ist(trade.entryTime)}</Metric>
       </dl>
+      {position?.premium != null && trade.target ? (
+        <div className="mt-2" aria-label="Progress to the target">
+          <div className="flex justify-between text-xs text-muted"><span>Progress to +{Math.round(((trade.target / trade.entryPremium) - 1) * 100)}%</span><span className="num">{Math.round(Math.max(-100, Math.min(100, ((position.premium - trade.entryPremium) / (trade.target - trade.entryPremium)) * 100)))}%</span></div>
+          <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-sunken"><div className={cx("h-full", position.premium >= trade.entryPremium ? "bg-profit" : "bg-loss")} style={{ width: `${Math.max(0, Math.min(100, ((position.premium - trade.entryPremium) / (trade.target - trade.entryPremium)) * 100))}%` }} /></div>
+        </div>
+      ) : null}
       {position ? <PremiumBar stop={position.stop} entry={position.avg} target={position.target} current={position.premium} /> : null}
       <details open className="mt-2 rounded-md border border-border-soft px-2 py-1.5">
         <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide text-muted">Intratrade confirmations</summary>

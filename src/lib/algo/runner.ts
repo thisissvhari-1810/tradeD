@@ -443,7 +443,8 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (evaluation.time + 60 < observationEnd) reasons.push(`Observation period: the first ${config.observationMinutes} minutes (to ${istClock(observationEnd)} IST) are analysis only; no new entries.`);
   else if (clock < (config.entryStart ?? "09:15")) reasons.push(`Before the entry window (${config.entryStart}–${config.entryCutoff} IST).`);
   else if (clock > config.entryCutoff) reasons.push(`Trading window closed at ${config.entryCutoff} IST: no new entries.`);
-  if (risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  // A daily profit target that stops entries is Algo - Primary Strategy's rule only; Mathi Strategy's target is per trade.
+  if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (sizing !== "risk") {
     const problem = protectiveProblem(config.stop, config.target);
     if (problem) reasons.push(problem);
@@ -704,7 +705,7 @@ function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, e
   const risk = { ...RISK_DEFAULTS, ...config.risk };
   const at = (status: EngineStatus, reason: string, plan: TradePlan | null = null): EngineState => ({ status, reason, time, plan });
   if (state.riskLocked || state.realizedToday <= -config.maxDailyLoss) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${config.maxDailyLoss}: no new entries today.`);
-  if (risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
+  if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (clock > config.entryCutoff) return at("TRADING_WINDOW_CLOSED", `Entries closed at ${config.entryCutoff} IST.${state.position ? " The open position stays protected by its stop and target." : ""}`);
   if (result.entered && (evaluation.decision === "CALL" || evaluation.decision === "PUT")) return at(evaluation.decision === "CALL" ? "BUY_CANDIDATE" : "SELL_CANDIDATE", evaluation.explanation, result.plan);
   if (state.awaiting) return at("WAIT_FOR_CONFIRMATION", evaluation.explanation);

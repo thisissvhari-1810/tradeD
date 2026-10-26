@@ -105,7 +105,7 @@ export function chartReplayAdapter(input: ChartRunInput): ExecutionAdapter & { s
  * candle (entries only while the algo is on). At the session close an open position is squared off at
  * the last completed premium. Never reads a candle that completes after the minute being processed.
  */
-export async function stepChartRun(input: ChartRunInput & { state: AlgoState; processedThrough: number; cursor: number }) {
+export async function stepChartRun(input: ChartRunInput & { state: AlgoState; processedThrough: number; cursor: number; liveSteps?: boolean }) {
   const adapter = chartReplayAdapter(input);
   let state = input.state;
   const events: AlgoEvent[] = [];
@@ -123,6 +123,10 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
       completed = true;
       break;
     }
+    // Live steps (the chart's replay): with a position open, return after each minute so the panel shows the
+    // entry at once and its premium and P&L every replay minute; the next step continues from here (nothing
+    // is skipped, and the decisions are the same as processing the minutes in one go).
+    if (input.liveSteps && state.position) break;
   }
   let ended = false;
   if (!completed && processedThrough >= input.sessionClose) {

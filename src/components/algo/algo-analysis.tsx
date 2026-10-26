@@ -97,7 +97,7 @@ export function MarketAnalysisSection({ analysis, symbol, time }: { analysis: Ma
 }
 
 /** The four strategies: on / off, status, CALL / PUT and the trigger level. */
-export function StrategyRows({ analysis }: { analysis: MarketAnalysis | null | undefined }) {
+export function StrategyRows({ analysis, positionOpen = false }: { analysis: MarketAnalysis | null | undefined; positionOpen?: boolean }) {
   return (
     <section className="rounded-lg border border-border-soft" aria-label="Strategy status">
       <p className="px-3 pt-2 text-xs font-medium uppercase tracking-wide text-muted">Strategies</p>
@@ -105,14 +105,15 @@ export function StrategyRows({ analysis }: { analysis: MarketAnalysis | null | u
         {!analysis ? <li className="py-1.5 text-xs text-muted">Waiting for the first completed candle.</li> : null}
         {STRATEGY_IDS.filter((id) => analysis?.strategies[id]?.enabled).map((id) => {
           const item = analysis?.strategies[id];
-          const status = item ? (item.enabled ? item.status : "DISABLED") : "WAITING";
+          // With a position open the line is not "waiting" or "no signal": the trade is being managed.
+          const status = positionOpen && item?.enabled ? "POSITION OPEN" : item ? (item.enabled ? item.status : "DISABLED") : "WAITING";
           return (
             <li key={id} className="flex items-center gap-2 py-1.5 text-xs">
               <span className={cx("h-2 w-2 shrink-0 rounded-full", !item?.enabled ? "bg-border" : item.direction === "CALL" ? "bg-profit" : item.direction === "PUT" ? "bg-loss" : "bg-warning")} aria-hidden />
               <span className="w-[6.5rem] shrink-0 font-medium">{STRATEGY_LABEL[id]}</span>
               <span className={cx("min-w-0 flex-1 truncate font-medium", statusTone(status))} title={status}>{status}</span>
               <span className="shrink-0 text-right">
-                <span className={cx("block font-semibold", item?.direction === "CALL" ? "text-profit" : item?.direction === "PUT" ? "text-loss" : "text-muted")}>{item?.direction ?? "NO SIGNAL"}</span>
+                <span className={cx("block font-semibold", item?.direction === "CALL" ? "text-profit" : item?.direction === "PUT" ? "text-loss" : "text-muted")}>{positionOpen && item?.enabled ? "" : item?.direction ?? "NO SIGNAL"}</span>
                 <span className="num block text-muted">{item?.trigger != null ? price(item.trigger) : ""}</span>
               </span>
             </li>

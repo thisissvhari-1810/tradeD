@@ -1467,10 +1467,13 @@ describe("session strategy: 09:15–12:00, risk-based sizing", () => {
     expect(result.events.find((event) => event.kind === "EXIT")?.message).toMatch(/Exit \(STOP\).*through the stop 23156/);
   });
 
-  it("no new entries once the daily target is reached, or after the daily loss limit", async () => {
+  it("a daily profit target never blocks Mathi Strategy; the daily loss limit still does", async () => {
     const target = await run(crossing(1, 3), { cursor: m(3), config: early, state: { ...initialState(DATE), running: true, entries: true, realizedToday: 5_000 } });
-    expect(buys()).toHaveLength(0);
-    expect(target.events.some((event) => event.message.includes("Daily target ₹5000 reached"))).toBe(true);
+    expect(buys()).toHaveLength(1);
+    expect(target.events.some((event) => event.message.includes("Daily target"))).toBe(false);
+    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
+    db.state.accounts[0].cashAvailable = START;
+    clearReplayTapes();
     const lost = await run(crossing(1, 3), { cursor: m(3), config: early, state: { ...initialState(DATE), running: true, entries: true, realizedToday: -1_500 } });
     expect(buys()).toHaveLength(0);
     expect(lost.state.engine).toMatchObject({ status: "DAILY_RISK_LIMIT_REACHED" });
@@ -1742,11 +1745,44 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     expect(algoReportCsv(report)).toMatch(/Body past the line %,Option,Expiry,Lot size,Lots,Quantity/);
   });
 
-  it("with the daily target on (₹3,000), full-capital winners stop new entries with that reason", async () => {
-    feed.premiums = premiums((index) => ([8, 13, 18].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
-    const result = await run(path(moves, level), { cursor: m(30), config: { ...mathi, risk: { ...ALGO_DEFAULTS.risk } } });
-    expect(buys().length).toBeLessThan(3);
-    expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Daily target ₹3000 reached"))).toBe(true);
+  it("your session: two winners realized ₹5,171.56 — the third valid signal still enters, with its own +3% target", async () => {
+    // Trade 1 (CALL) +₹2,466.55 and trade 2 (PUT) +₹2,705.01 are done; the daily-target setting as it was saved (on, ₹3,000).
+    const state = { ...initialState(DATE), running: true, entries: true, tradesToday: 2, realizedToday: 5_171.56 };
+    feed.premiums = premiums((index) => (index === 7 ? { low: 99.5, high: 104, close: 100 } : null));
+    const result = await run(path({ 5: moves[5], 10: moves[10] }, (index) => (index < 5 ? LINE - 10 : index < 10 ? LINE + 12 : LINE - 15)), { cursor: m(15), config: { ...mathi, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: true, dailyTarget: 3_000 } }, state });
+    const entry = result.events.find((event) => event.kind === "ENTRY")!;
+    expect(entry).toBeTruthy();
+    expect(result.events.some((event) => event.message.includes("Daily target"))).toBe(false);
+    // Its target is its own entry premium × 1.03, and it exits there.
+    expect(entry.target!).toBeCloseTo(Math.round(entry.order!.price! * 1.03 * 100) / 100, 2);
+    expect(result.events.find((event) => event.kind === "EXIT")?.message).toMatch(/^Exit \(TARGET\)/);
+    expect(result.state.tradesToday).toBe(3);
+    // The next crossing (at 10) is the fourth: blocked at 3/3.
+    expect(result.events.find((event) => event.kind === "REJECTED" && event.time === m(10))?.message).toContain("DAILY TRADE LIMIT REACHED — 3/3");
+  });
+
+  it("live steps: with a position open, each step returns after one replay minute (entry shown at once, P&L every minute); the outcome is the same", async () => {
+    feed.premiums = premiums((index) => (index === 9 ? { low: 99.5, high: 104, close: 100 } : null));
+    const candles = path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12));
+    const chain = await loadOptionChain("NIFTY", null);
+    const go = (state: AlgoState, processedThrough: number) => stepChartRun({ user: student, wallet: "ALGO", runId: "live", session: SESSION, date: DATE, config: mathi, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor: m(20), liveSteps: true });
+    // The first step stops at the entry minute with the position open.
+    let result = await go({ ...initialState(DATE), running: true, entries: true }, OPEN);
+    expect(result.state.position).not.toBeNull();
+    expect(result.processedThrough).toBe(m(6));
+    const marks: number[] = [];
+    while (result.state.position && result.processedThrough < m(20)) {
+      result = await go(result.state, result.processedThrough);
+      marks.push(result.processedThrough);
+    }
+    // One minute per step while open, then the target exit; then the rest of the minutes in one step.
+    expect(marks.slice(0, 3)).toEqual([m(7), m(8), m(9)]);
+    expect(result.state.position).toBeNull();
+    expect(buys()).toHaveLength(1);
+    expect(sells()).toHaveLength(1);
+    const after = await go(result.state, result.processedThrough);
+    expect(after.processedThrough).toBe(m(20));
+    expect(buys()).toHaveLength(1);
   });
 
   it("no entry cutoff: a valid breakout at 12:30 enters (the session is open until 15:30)", async () => {

@@ -942,7 +942,7 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
         lockNotes.push(note("lock-lost", existing.processedThrough, `New entries stopped: ${got.reason}`, "REJECTED"));
       }
     }
-    const ran = await stepChartRun({ ...(await context()), state, processedThrough: existing.processedThrough, cursor: command.cursor });
+    const ran = await stepChartRun({ ...(await context()), state, processedThrough: existing.processedThrough, cursor: command.cursor, liveSteps: true });
     ran.events.unshift(...lockNotes);
     if (!armed && existing.armed) await prisma.algoRun.update({ where: { id: existing.id }, data: { armed: false } });
     if (ran.ended) ran.state.status = ran.state.recovery ? "RECOVERY_REQUIRED" : ran.state.position ? "EXIT_PENDING" : "COMPLETED";

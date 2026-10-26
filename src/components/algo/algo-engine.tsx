@@ -80,12 +80,16 @@ export function EngineCard({ state, config, date, now, unrealized, available = n
         {config.sizing === "capital" ? <CapitalBlock capital={engine?.capital ?? null} available={available} position={position} config={config} /> : null}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <Cell label="Net P&L today" value={inr(net)} tone={net > 0 ? "text-profit" : net < 0 ? "text-loss" : undefined} />
-          <Cell label={`Target ${inr(risk.dailyTarget)} (goal)`} value={net >= risk.dailyTarget ? "Reached" : `${inr(risk.dailyTarget - net)} to go`} />
+          {config.engine === "primary" ? <Cell label={`Target ${inr(risk.dailyTarget)} (goal)`} value={net >= risk.dailyTarget ? "Reached" : `${inr(risk.dailyTarget - net)} to go`} /> : <Cell label="Profit target" value={`+${config.target.value}% per trade (premium)`} />}
           <Cell label="Loss allowance left" value={`${inr(allowance)} of ${inr(config.maxDailyLoss)}`} tone={allowance <= 0 ? "text-loss" : undefined} />
           <Cell label="Entry window" value={windowText} />
         </dl>
-        <div className="h-1.5 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-label="Progress to the daily target" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}><div className="h-full bg-profit" style={{ width: `${progress * 100}%` }} /></div>
-        <p className="text-muted">The target is a goal, not an expected result. No setup means no trade; risk is never raised to reach it.</p>
+        {config.engine === "primary" ? (
+          <>
+            <div className="h-1.5 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-label="Progress to the daily target" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}><div className="h-full bg-profit" style={{ width: `${progress * 100}%` }} /></div>
+            <p className="text-muted">The target is a goal, not an expected result. No setup means no trade; risk is never raised to reach it.</p>
+          </>
+        ) : null}
       </div>
     </section>
   );
@@ -128,14 +132,19 @@ function CapitalBlock({ capital, available, position, config }: { capital: NonNu
  * Mathi Strategy at a glance: the mode, the latest signal, entries used of the session's limit, the
  * position, the target rule, that there is no stop-loss, and whether a new entry may be taken (and if not, why).
  */
-export function MathiStatus({ state, config, mode, now }: { state: AlgoState | null | undefined; config: AlgoConfig; mode: string; now: number | null }) {
+export function MathiStatus({ state, config, mode, now, signal: latest = null }: {
+  state: AlgoState | null | undefined;
+  config: AlgoConfig;
+  mode: string;
+  now: number | null;
+  /** The latest signal: its line, candle time, contract (once bought) and what happened to it. */
+  signal?: { side: "CALL" | "PUT"; line: string; price: number | null; time: number; contract: string | null; result: string } | null;
+}) {
   const trades = state?.tradesToday ?? 0;
-  const risk = { ...RISK_DEFAULTS, ...config.risk };
   const clock = now == null ? null : ist(now);
   const blocked = !state ? "No session yet"
     : trades >= config.maxTrades ? `DAILY TRADE LIMIT REACHED — ${trades}/${config.maxTrades}`
     : state.riskLocked || (state.realizedToday ?? 0) <= -config.maxDailyLoss ? `Daily loss limit ₹${config.maxDailyLoss} reached`
-    : risk.stopAtTarget && (state.realizedToday ?? 0) >= risk.dailyTarget ? `Daily target ₹${risk.dailyTarget} reached`
     : clock && clock > config.entryCutoff ? `Entry window closed at ${config.entryCutoff} IST`
     : state.position ? "A position is open (one at a time)"
     : !state.entries ? "New entries are switched off"
@@ -153,6 +162,13 @@ export function MathiStatus({ state, config, mode, now }: { state: AlgoState | n
         <Cell label="Stop-loss" value={config.stopLoss === false ? "None" : "On"} />
         <Cell label="Entry" value={blocked ? `Blocked — ${blocked}` : "Enabled"} tone={blocked ? "text-warning" : "text-profit"} />
       </dl>
+      {latest ? (
+        <div className="border-t border-border-soft px-3 py-2 text-xs">
+          <p className="flex items-center gap-2"><span className={cx("rounded-pill px-2 py-0.5 font-semibold", latest.result.startsWith("REJECTED") ? "bg-loss-soft text-loss" : latest.result.startsWith("ORDER") ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{latest.result.split(" — ")[0]}</span><span className={cx("font-semibold", latest.side === "CALL" ? "text-profit" : "text-loss")}>{latest.side === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"}</span><span className="num ml-auto text-muted">{ist(latest.time)}–{ist(latest.time + 60)}</span></p>
+          <p className="mt-0.5 text-text-2">{latest.line}{latest.price != null ? ` ${latest.price.toFixed(2)}` : ""}{latest.contract ? ` · ${latest.contract}` : ""}</p>
+          {latest.result.includes(" — ") ? <p className="mt-0.5 text-muted">{latest.result.split(" — ").slice(1).join(" — ")}</p> : null}
+        </div>
+      ) : null}
     </section>
   );
 }

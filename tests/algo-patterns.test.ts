@@ -262,7 +262,7 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     const { readFileSync } = await import("node:fs");
     const panel = readFileSync("src/components/algo/algo-replay-panel.tsx", "utf8");
     expect(panel).toMatch(/<MarketAnalysisSection analysis=\{state\?\.analysis\}/);
-    expect(panel).toMatch(/<StrategyRows analysis=\{state\?\.analysis\} \/>/);
+    expect(panel).toMatch(/<StrategyRows analysis=\{state\?\.analysis\} positionOpen=\{Boolean\(position\)\} \/>/);
     expect(panel).toMatch(/confirmations=\{position && position\.entryKey === trade\.entryKey \? state\?\.confirmations \?\? null : null\}/);
     expect(panel).toMatch(/waitingMessage\(state\?\.analysis, trades\.length, max\)/);
     expect(readFileSync("src/components/algo/algo-trade-drawer.tsx", "utf8")).toMatch(/<ConfirmationList confirmations=\{run\.state\.confirmations \?\? null\} \/>/);

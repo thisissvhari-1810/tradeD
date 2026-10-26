@@ -283,6 +283,8 @@ export type AlgoTrade = {
   exitPremium: number | null;
   exitReason: string | null;
   realized: number | null;
+  /** (exit premium − entry premium) × quantity, before charges. */
+  gross: number | null;
   returnPercent: number | null;
   durationMinutes: number | null;
   /** Simulated charges of the entry fill and of the exit fills (₹). */
@@ -337,6 +339,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       exitPremium: null,
       exitReason: null,
       realized: null,
+      gross: null,
       returnPercent: null,
       durationMinutes: null,
     });
@@ -350,6 +353,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       trade.exitPremium = sold ? Math.round((exits.reduce((sum, event) => sum + (event.order?.price ?? 0) * (event.order?.quantity ?? 0), 0) / sold) * 100) / 100 : last.order?.price ?? null;
       trade.exitReason = EXIT_LABEL[exitReasonOf(last.message)] ?? "Exit";
       trade.realized = Math.round(exits.reduce((sum, event) => sum + (event.pnl ?? 0), 0) * 100) / 100;
+      trade.gross = Math.round(exits.reduce((sum, event) => sum + (event.gross ?? ((event.order?.price ?? 0) - trade.entryPremium) * (event.order?.quantity ?? 0)), 0) * 100) / 100;
       const cost = trade.entryPremium * trade.quantity;
       trade.returnPercent = cost ? Math.round((trade.realized / cost) * 10_000) / 100 : null;
       trade.durationMinutes = Math.round((last.time - trade.entryTime) / MINUTE);
