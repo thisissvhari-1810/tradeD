@@ -111,6 +111,8 @@ export type ConfirmationSettings = {
   retestTolerancePercent: number;
   /** Retest mode: minutes after the break within which the retest must hold and move on, or the setup expires. */
   retestWindowMinutes: number;
+  /** Hold mode: the confirming candle must also move with the breakout (bullish for a CALL, bearish for a PUT). */
+  holdMustAgree: boolean;
 };
 
 export const ALGO_DEFAULTS: AlgoConfig = {
@@ -161,7 +163,7 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   intrabar: true,
   stopAtLimit: false,
   // A crossing is only a detected signal: the next completed candle must hold beyond the line before an entry.
-  confirmation: { mode: "hold", retestTolerancePercent: 0.02, retestWindowMinutes: 15 },
+  confirmation: { mode: "hold", retestTolerancePercent: 0.02, retestWindowMinutes: 15, holdMustAgree: true },
 };
 
 /**
@@ -981,11 +983,18 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
         ended = cancel("EXPIRED", `SIGNAL EXPIRED — the ${name} was not confirmed: the next candle was not evaluated in time.`);
       } else {
         const beyond = put ? close < level * (1 - filters.breakoutBufferPercent / 100) : close > level * (1 + filters.breakoutBufferPercent / 100);
-        if (beyond && !opposite(waiting.direction)) {
+        // The confirming candle must not move against the breakout (no bearish candle after a CALL break, no
+        // bullish one after a PUT break): a candle falling back toward the line, even closing just beyond it, is a rejection.
+        const withBreak = settings.holdMustAgree === false || (put ? close <= open : close >= open);
+        if (beyond && withBreak && !opposite(waiting.direction)) {
           const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
-          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — breakout held: the next candle closed at ${close.toFixed(2)}, still ${put ? "below" : "above"} ${level.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — breakout held: the next candle (${open.toFixed(2)} → ${close.toFixed(2)}) closed ${put ? "below" : "above"} ${level.toFixed(2)} without moving back toward it. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
         }
-        ended = cancel("FALSE_BREAKOUT", `FALSE BREAKOUT — ENTRY CANCELLED: the ${name} did not hold; the next candle closed at ${close.toFixed(2)}${back ? `, back ${put ? "above" : "below"} the line` : opposite(waiting.direction) ? " with an opposite signal" : `, not beyond it${filters.breakoutBufferPercent ? ` by the ${filters.breakoutBufferPercent}% buffer` : ""}`}. No order was sent.`);
+        const why = back ? `closed at ${close.toFixed(2)}, back ${put ? "above" : "below"} the line`
+          : opposite(waiting.direction) ? `closed at ${close.toFixed(2)} with an opposite signal`
+          : !beyond ? `closed at ${close.toFixed(2)}, not beyond it${filters.breakoutBufferPercent ? ` by the ${filters.breakoutBufferPercent}% buffer` : ""}`
+          : `was ${put ? "bullish" : "bearish"} (${open.toFixed(2)} → ${close.toFixed(2)}), moving back toward the line: the breakout was rejected`;
+        ended = cancel("FALSE_BREAKOUT", `FALSE BREAKOUT — ENTRY CANCELLED: the ${name} did not hold; the next candle ${why}. No order was sent.`);
       }
     } else if (back) {
       ended = cancel("FALSE_BREAKOUT", `FALSE BREAKOUT — ENTRY CANCELLED: the ${name} was reclaimed; this candle closed at ${close.toFixed(2)}, back ${put ? "above" : "below"} the line${waiting.retest ? " after the retest" : " before any retest"}. No order was sent.`);

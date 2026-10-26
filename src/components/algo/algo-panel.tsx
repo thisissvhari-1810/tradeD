@@ -34,7 +34,7 @@ const STATUS: Record<AlgoStatus, { label: string; tone: string }> = {
 
 const CONFIRMATION_TEXT: Record<ConfirmationMode, string> = { single: "Single candle", hold: "Breakout hold (next candle)", retest: "Retest of the line" };
 const CONFIRMATION_HELP: Record<ConfirmationMode, string> = {
-  hold: "The crossing candle is only a detected signal. The next completed candle must close beyond the line (below it for a PUT, above it for a CALL); if it closes back, the setup is cancelled as FALSE BREAKOUT — ENTRY CANCELLED and no order is sent.",
+  hold: "The crossing candle is only a detected signal. The next completed candle must close beyond the line and move with the break (a bearish candle closing below it for a PUT, a bullish one closing above it for a CALL). A candle that closes back, or falls back toward the line, cancels it as FALSE BREAKOUT — ENTRY CANCELLED; no order is sent.",
   retest: "After the break, price must come back to the line without closing back across it, then a candle must move on (a bearish close below the retest candle's low for a PUT, a bullish close above its high for a CALL). A close back across the line cancels it; no retest in the window lets it expire. Fewer, later entries.",
   single: "Enters on the crossing candle itself (no confirmation): fastest, but a break that reverses the next minute is still traded.",
 };
@@ -269,6 +269,9 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             </select>
           </Field>
           <p className="text-micro text-muted">{CONFIRMATION_HELP[confirmationMode(draft)]}</p>
+          {confirmationMode(draft) === "hold" ? (
+            <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Confirming candle must move with the break</span><input type="checkbox" className="oc-check" aria-label="Confirming candle must move with the break" checked={draft.confirmation.holdMustAgree !== false} onChange={(event) => set({ confirmation: { ...draft.confirmation, holdMustAgree: event.target.checked } })} /></label>
+          ) : null}
           {confirmationMode(draft) === "retest" ? (
             <>
               <Field label="Retest window (min)"><NumberInput value={draft.confirmation.retestWindowMinutes} step={1} min={2} onChange={(retestWindowMinutes) => set({ confirmation: { ...draft.confirmation, retestWindowMinutes } })} /></Field>

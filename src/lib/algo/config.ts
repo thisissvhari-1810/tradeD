@@ -144,6 +144,7 @@ function confirmationOf(value: unknown): AlgoConfig["confirmation"] {
     mode: row.mode === "single" || row.mode === "hold" || row.mode === "retest" ? row.mode : fallback.mode,
     retestTolerancePercent: Number.isFinite(num(row.retestTolerancePercent)) ? num(row.retestTolerancePercent) : fallback.retestTolerancePercent,
     retestWindowMinutes: Number.isFinite(num(row.retestWindowMinutes)) ? num(row.retestWindowMinutes) : fallback.retestWindowMinutes,
+    holdMustAgree: typeof row.holdMustAgree === "boolean" ? row.holdMustAgree : fallback.holdMustAgree,
   };
 }
 
