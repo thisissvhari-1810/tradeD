@@ -225,7 +225,7 @@ describe("whole-lot capital allocation", () => {
 describe("separate settings for each feature", () => {
   it("the Primary Strategy's defaults are its own: capital sizing, 3% premium target and stop, chart replay", () => {
     expect(PRIMARY_DEFAULTS).toMatchObject({ engine: "primary", mode: "REPLAY", sizing: "capital", allocation: { percent: 100, maxCapital: 100_000, policy: "reduce" }, target: { mode: "percent", value: 3 }, stop: { mode: "percent", value: 3 }, maxDailyLoss: 3_000 });
-    expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", sizing: "capital", stopLoss: false, crossRule: "body", crossPercent: 0 });
+    expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", sizing: "capital", stopLoss: false, crossRule: "body", crossPercent: 50 });
     expect(PRIMARY_DEFAULTS).toMatchObject({ stopLoss: true, stopAtLimit: true, crossPercent: 0 });
     expect(algoConfigProblems(readAlgoConfig(PRIMARY_DEFAULTS))).toEqual([]);
     // The Primary Strategy is chart replay only.

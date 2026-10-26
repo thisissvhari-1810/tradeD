@@ -43,8 +43,8 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   const v7 = num(row.settingsVersion) >= 7 || !mathi;
   // Version 8: Mathi Strategy has no entry cutoff (entries until the session's close); a saved cutoff moves once.
   const v8 = num(row.settingsVersion) >= 8 || !mathi;
-  // Version 9: Mathi Strategy enters on any genuine body crossing; a saved 50% share moves to "any" once.
-  const v9 = num(row.settingsVersion) >= 9 || !mathi;
+  // Version 10: Mathi Strategy enters once 50% of the body is past the line; a saved share moves to 50% once.
+  const v10 = num(row.settingsVersion) >= 10 || !mathi;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -86,7 +86,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     filters: v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters },
     structureStop: v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
     crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
-    crossPercent: v9 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
+    crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
     stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
     intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : mathi,
     stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : !mathi,

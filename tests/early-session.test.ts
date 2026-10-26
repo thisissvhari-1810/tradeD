@@ -13,13 +13,13 @@ const candle = (index: number, open: number, high: number, low: number, close: n
 const flat = (count: number, price: number) => Array.from({ length: count }, (_, index) => candle(index, price, price + 2, price - 2, price));
 
 describe("defaults: the early session replaces the old all-day settings", () => {
-  it("Mathi Strategy defaults: lines only, any genuine body crossing, full ₹1,00,000 in whole lots, +3% on the premium, no stop-loss, 3 entries, no entry cutoff", () => {
-    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "15:30", observationMinutes: 0, sizing: "capital", allocation: { percent: 100, maxCapital: 100_000 }, lots: 50, target: { mode: "percent", value: 3 }, stopLoss: false, crossRule: "body", crossPercent: 0, maxTrades: 3, stopAtLimit: false, maxDailyLoss: 2_000, risk: { dailyTarget: 3_000, stopAtTarget: true } });
+  it("Mathi Strategy defaults: lines only, 50% of the body past the line, full ₹1,00,000 in whole lots, +3% on the premium, no stop-loss, 3 entries, no entry cutoff", () => {
+    expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "15:30", observationMinutes: 0, sizing: "capital", allocation: { percent: 100, maxCapital: 100_000 }, lots: 50, target: { mode: "percent", value: 3 }, stopLoss: false, crossRule: "body", crossPercent: 50, maxTrades: 3, stopAtLimit: false, maxDailyLoss: 2_000, risk: { dailyTarget: 3_000, stopAtTarget: true } });
     expect(ALGO_DEFAULTS.strategies).toEqual({ line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false });
     expect(ALGO_DEFAULTS.filters).toEqual({ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false });
     // Old saved settings (any version) move once; the other setups can never be switched on for Mathi.
     const migrated = readAlgoConfig({ settingsVersion: 6, sizing: "risk", lots: 10, strategies: { w: true, m: true, bounce: true }, filters: { secondCandle: true, momentum: true } });
-    expect(migrated).toMatchObject({ sizing: "capital", lots: 50, stopLoss: false, crossPercent: 0, maxTrades: 3, filters: ALGO_DEFAULTS.filters, strategies: ALGO_DEFAULTS.strategies });
+    expect(migrated).toMatchObject({ sizing: "capital", lots: 50, stopLoss: false, crossPercent: 50, maxTrades: 3, filters: ALGO_DEFAULTS.filters, strategies: ALGO_DEFAULTS.strategies });
     const kept = readAlgoConfig({ ...migrated, lots: 2, maxTrades: 3, filters: { ...migrated.filters, secondCandle: true }, strategies: { w: true } });
     expect([kept.lots, kept.filters.secondCandle, kept.strategies.w]).toEqual([2, true, false]);
     expect(Object.values(ENGINE_LABEL)).toEqual(["BUY / LONG CANDIDATE", "SELL / SHORT CANDIDATE", "WAIT FOR CONFIRMATION", "NO TRADE", "DAILY RISK LIMIT REACHED", "TRADING WINDOW CLOSED"]);

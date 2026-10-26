@@ -1,4 +1,4 @@
-import { algoTrades, confirmationEntryKey, entryFillTime, EXIT_LABEL, type RunStats } from "./chart-replay";
+import { algoTrades, confirmationEntryKey, entryFillTime, EXIT_LABEL, type AlgoTrade, type RunStats } from "./chart-replay";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "./patterns";
 import type { AlgoConfig, AlgoEvent } from "./runner";
 
@@ -49,6 +49,111 @@ function flowKind(event: AlgoEvent) {
   return "Info";
 }
 
+/** How a trade was bought: its signal candle, the line crossed and how much of the body went past it. */
+function signalOf(trade: AlgoTrade, events: AlgoEvent[]) {
+  const evaluation = events.find((event) => event.evaluation && event.evaluation.time === trade.signalTime && (event.key.startsWith("eval:") || event.key.startsWith("eval-forming:")))?.evaluation ?? null;
+  const candle = evaluation?.candle ?? null;
+  const line = trade.linePrices[0] ?? null;
+  const body = candle ? Math.abs(candle.close - candle.open) : 0;
+  const past = candle && line != null ? (trade.side === "CALL" ? candle.close - line : line - candle.close) : null;
+  return {
+    evaluation,
+    candle,
+    line,
+    pastPoints: past,
+    bodyShare: past != null && body > 0 ? Math.round((past / body) * 1000) / 10 : null,
+    reason: evaluation?.explanation ?? "",
+  };
+}
+
+/** Gross P&L (premium gain × quantity, before charges) from the trade's exit fills. */
+function grossOf(trade: AlgoTrade, events: AlgoEvent[]) {
+  const exits = events.filter((event) => event.kind === "EXIT" && event.order?.key.startsWith(`${trade.entryKey}:exit`) && event.pnl != null);
+  if (!exits.length) return null;
+  return Math.round(exits.reduce((sum, event) => sum + (event.gross ?? ((event.order?.price ?? 0) - trade.entryPremium) * (event.order?.quantity ?? 0)), 0) * 100) / 100;
+}
+
+/** Everything about one trade, as label / value rows (where and how it was bought, and how it ended). */
+export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: AlgoConfig): Array<[string, string]> {
+  const signal = signalOf(trade, events);
+  const gross = grossOf(trade, events);
+  const lots = trade.lotSize ? trade.quantity / trade.lotSize : null;
+  const committed = trade.entryPremium * trade.quantity + trade.entryCharges;
+  return [
+    ["Trade", String(trade.number)],
+    ["Direction", trade.side === "CALL" ? "BUY ATM CALL (CE) — line breakout" : "BUY ATM PUT (PE) — line breakdown"],
+    ["Strategy", STRATEGY_LABEL[trade.strategy]],
+    ["Line crossed", trade.lines.join("; ")],
+    ["Line price", num(signal.line)],
+    ["Signal candle (IST)", `${ist(trade.signalTime)}–${ist(trade.signalTime + 60)}`],
+    ["Signal candle open", num(signal.candle?.open)],
+    ["Signal candle high", num(signal.candle?.high)],
+    ["Signal candle low", num(signal.candle?.low)],
+    ["Signal candle close", num(signal.candle?.close)],
+    ["Points past the line", num(signal.pastPoints)],
+    ["Share of the body past the line (%)", signal.bodyShare == null ? "" : signal.bodyShare.toFixed(1)],
+    ["Required share (%)", settings.crossRule === "body" ? String(settings.crossPercent || "any crossing") : "classic body crossing"],
+    ["Why it entered", signal.reason],
+    ["Underlying at signal", num(trade.underlyingAtSignal)],
+    ["Option contract", `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`],
+    ["Expiry", trade.expiry],
+    ["Lot size", trade.lotSize == null ? "" : String(trade.lotSize)],
+    ["Lots", lots == null ? "" : String(lots)],
+    ["Quantity (units)", String(trade.quantity)],
+    ["Entry time (IST)", ist(trade.entryTime)],
+    ["Entry premium per unit", num(trade.entryPremium)],
+    ["Entry value (premium × quantity)", num(trade.entryPremium * trade.quantity)],
+    ["Entry charges", num(trade.entryCharges)],
+    ["Capital committed (value + charges)", num(committed)],
+    ["Target premium per unit", num(trade.target)],
+    ["Target rule", `${settings.target.value}${settings.target.mode === "percent" ? "% of the entry premium" : " Rs above the entry premium"}`],
+    ["Stop-loss premium", trade.stop ? num(trade.stop) : "None (no stop-loss)"],
+    ["Exit time (IST)", trade.exitTime ? ist(trade.exitTime) : ""],
+    ["Exit premium per unit", num(trade.exitPremium)],
+    ["Exit reason", trade.exitReason ?? (trade.status === "COMPLETED" ? "" : "Still open")],
+    ["Exit charges", num(trade.exitCharges)],
+    ["Gross P&L (before charges)", num(gross)],
+    ["Total charges", num(trade.entryCharges + trade.exitCharges)],
+    ["Net realized P&L (after charges)", num(trade.realized)],
+    ["Return on the premium paid (%)", trade.returnPercent == null ? "" : trade.returnPercent.toFixed(2)],
+    ["Duration (minutes)", trade.durationMinutes == null ? "" : String(trade.durationMinutes)],
+    ["Status", trade.status === "COMPLETED" ? "Completed" : trade.status === "EXIT_PENDING" ? "Exit pending" : "Open"],
+  ];
+}
+
+/** One trade's own download: the session, the full trade record, then every event of that trade. */
+export function algoTradeCsv(report: AlgoReportInput, entryKey: string): string {
+  const trades = algoTrades(report.events, null);
+  const trade = trades.find((item) => item.entryKey === entryKey);
+  if (!trade) return `﻿${row(["Trade not found in this session."])}\r\n`;
+  const lines: string[] = [];
+  lines.push(row(["TradeD Algo trade", "Simulated replay trading (no broker orders)"]));
+  lines.push(row(["Session", report.sessionId]));
+  lines.push(row(["Underlying", report.underlying]));
+  lines.push(row(["Replay date", report.date]));
+  lines.push("");
+  lines.push(row(["TRADE DETAILS"]));
+  for (const [label, value] of tradeRecord(trade, report.events, report.settings)) lines.push(row([label, value]));
+  lines.push("");
+  lines.push(row(["TRADE EVENTS"]));
+  lines.push(row(["Time (IST)", "Event", "Option", "Order", "Quantity", "Premium", "Charges", "P&L", "Details"]));
+  const mine = report.events.filter((event) => event.order?.key === entryKey || event.order?.key?.startsWith(`${entryKey}:exit`) || confirmationEntryKey(event.key) === entryKey || (event.key.startsWith("eval") && event.evaluation?.time === trade.signalTime));
+  for (const event of mine.sort((a, b) => a.time - b.time)) {
+    lines.push(row([
+      ist(event.kind === "ENTRY" ? entryFillTime(event) : event.key.startsWith("eval") ? event.time + 60 : event.time), flowKind(event),
+      event.contract ? `${event.contract.underlying} ${event.contract.strike} ${event.contract.right} ${event.contract.expiry}` : "",
+      event.order ? `${event.kind === "EXIT" ? "SELL" : event.kind === "ENTRY" ? "BUY" : ""} ${event.order.status}`.trim() : "",
+      event.order?.quantity ?? "", num(event.order?.price), num(event.order?.charges), num(event.pnl), event.message,
+    ]));
+  }
+  return `﻿${lines.join("\r\n")}\r\n`;
+}
+
+/** A safe file name for one trade's download. */
+export function algoTradeName(report: Pick<AlgoReportInput, "underlying" | "date" | "sessionId">, number: number) {
+  return algoReportName(report).replace(/\.csv$/, `-trade-${number}.csv`);
+}
+
 export function algoReportCsv(report: AlgoReportInput): string {
   const trades = algoTrades(report.events, null);
   const numberOf = (key: string | null | undefined) => (key ? trades.find((trade) => key === trade.entryKey || key.startsWith(`${trade.entryKey}:exit`))?.number ?? "" : "");
@@ -75,12 +180,14 @@ export function algoReportCsv(report: AlgoReportInput): string {
   lines.push("");
 
   lines.push(row(["TRADES"]));
-  lines.push(row(["Trade", "Side", "Strategy", "Trigger", "Option", "Expiry", "Lot size", "Quantity", "Signal time", "Underlying at signal", "Entry time", "Entry premium", "Stop-loss", "Target", "Exit time", "Exit premium", "Exit reason", "Charges", "Realized P&L", "Return %", "Duration (min)", "Status"]));
+  lines.push(row(["Trade", "Side", "Strategy", "Trigger", "Line price", "Signal candle open", "Signal candle high", "Signal candle low", "Signal candle close", "Points past the line", "Body past the line %", "Option", "Expiry", "Lot size", "Lots", "Quantity", "Signal time", "Underlying at signal", "Entry time", "Entry premium", "Entry value", "Entry charges", "Capital committed", "Stop-loss", "Target", "Exit time", "Exit premium", "Exit reason", "Exit charges", "Gross P&L", "Total charges", "Net realized P&L", "Return %", "Duration (min)", "Status"]));
   for (const trade of trades) {
+    const signal = signalOf(trade, report.events);
     lines.push(row([
-      trade.number, `BUY ${trade.side}`, STRATEGY_LABEL[trade.strategy], trade.lines.join("; "), `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`, trade.expiry, trade.lotSize ?? "", trade.quantity,
-      ist(trade.signalTime + 60), num(trade.underlyingAtSignal), ist(trade.entryTime), num(trade.entryPremium), num(trade.stop), num(trade.target),
-      trade.exitTime ? ist(trade.exitTime) : "", num(trade.exitPremium), trade.exitReason ?? "", num(trade.entryCharges + trade.exitCharges), num(trade.realized),
+      trade.number, `BUY ${trade.side}`, STRATEGY_LABEL[trade.strategy], trade.lines.join("; "), num(signal.line), num(signal.candle?.open), num(signal.candle?.high), num(signal.candle?.low), num(signal.candle?.close), num(signal.pastPoints), signal.bodyShare == null ? "" : signal.bodyShare.toFixed(1),
+      `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`, trade.expiry, trade.lotSize ?? "", trade.lotSize ? trade.quantity / trade.lotSize : "", trade.quantity,
+      ist(trade.signalTime + 60), num(trade.underlyingAtSignal), ist(trade.entryTime), num(trade.entryPremium), num(trade.entryPremium * trade.quantity), num(trade.entryCharges), num(trade.entryPremium * trade.quantity + trade.entryCharges), trade.stop ? num(trade.stop) : "None", num(trade.target),
+      trade.exitTime ? ist(trade.exitTime) : "", num(trade.exitPremium), trade.exitReason ?? "", num(trade.exitCharges), num(grossOf(trade, report.events)), num(trade.entryCharges + trade.exitCharges), num(trade.realized),
       trade.returnPercent == null ? "" : trade.returnPercent.toFixed(2), trade.durationMinutes ?? "", trade.status === "COMPLETED" ? "Completed" : "Open",
     ]));
   }

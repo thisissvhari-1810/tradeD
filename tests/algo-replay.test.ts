@@ -1406,10 +1406,10 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
 
   it("old saved Mathi settings move once to the line-breakout version (3% target, no stop-loss); later choices are kept", () => {
     const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2, filters: { secondCandle: true, momentum: true } });
-    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 0, 3]);
-    // A saved 50% share (version 7 / 8) moves once to any genuine crossing; a share chosen later is kept.
-    expect(readAlgoConfig({ settingsVersion: 8, crossPercent: 50 }).crossPercent).toBe(0);
-    expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 30 }).crossPercent).toBe(30);
+    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 50, 3]);
+    // A saved "any crossing" (version 9) moves once to 50% of the body; a share chosen later is kept.
+    expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 0 }).crossPercent).toBe(50);
+    expect(readAlgoConfig({ settingsVersion: 10, crossPercent: 30 }).crossPercent).toBe(30);
     expect(old.filters).toEqual(ALGO_DEFAULTS.filters);
     const chosen = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 7, stopLoss: true });
     expect([chosen.stop.value, chosen.target.value, chosen.stopLoss]).toEqual([5, 10, true]);
@@ -1642,7 +1642,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
   const level = (index: number) => (index < 5 ? LINE - 10 : index < 10 ? LINE + 12 : index < 15 ? LINE - 15 : index < 20 ? LINE + 15 : LINE - 15);
   const moves: Record<number, [number, number]> = { 5: [LINE - 10, LINE + 12], 10: [LINE + 12, LINE - 15], 15: [LINE - 15, LINE + 15], 20: [LINE + 15, LINE - 15] };
 
-  it("any genuine body crossing: a 7-point crossing enters; touching the line or a wick does not", async () => {
+  it("with the share set to 0, any genuine body crossing enters; touching the line or a wick does not", async () => {
     const { bodyShareCross } = await import("../src/lib/algo/signals");
     const at = (open: number, close: number) => ({ open, close, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5 });
     // Line 25,000: open 24,990, close 25,007 — 7 points past the line (41% of the body) is enough.
@@ -1660,7 +1660,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     expect(((levels.ok ? levels.target : 0) - 100) * 65).toBeCloseTo(195, 6);
   });
 
-  it("the 50% rule (when set): your examples, below 50%, a wick and the wrong colour", async () => {
+  it("the 50% rule (the default): your examples, below 50%, a wick and the wrong colour", async () => {
     const { bodyShareCross } = await import("../src/lib/algo/signals");
     const at = (open: number, close: number) => ({ open, close, high: Math.max(open, close) + 5, low: Math.min(open, close) - 5 });
     expect(bodyShareCross(at(24_980, 25_020), 25_000, 0.5)).toMatchObject({ kind: "CROSS", direction: "UP" });
@@ -1718,6 +1718,28 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     expect(result.completed).toBe(false);
     expect(result.processedThrough).toBe(m(30));
     expect(result.state.tradesToday).toBe(3);
+  });
+
+  it("each trade downloads with where and how it was bought, its exit, charges and gross / net P&L", async () => {
+    feed.premiums = premiums((index) => ([8, 13, 18].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
+    const result = await run(path(moves, level), { cursor: m(30), config: mathi });
+    const { algoTradeCsv, algoReportCsv, tradeRecord } = await import("../src/lib/algo/report");
+    const report = { sessionId: SESSION, underlying: "NIFTY", date: DATE, status: "ACTIVE", endReason: "", startedAt: new Date().toISOString(), endedAt: null, startCapital: 100_000, endCash: null, summary: null, settings: mathi, stats: runStats(result.events), events: result.events };
+    const trade = algoTrades(result.events, null)[0];
+    const record = Object.fromEntries(tradeRecord(trade, result.events, mathi));
+    expect(record).toMatchObject({
+      Direction: "BUY ATM CALL (CE) — line breakout", "Line crossed": "Test line", "Line price": "23150.00",
+      "Signal candle open": "23140.00", "Signal candle close": "23162.00", "Points past the line": "12.00", "Share of the body past the line (%)": "54.5",
+      "Required share (%)": "50", "Option contract": "NIFTY 23150 CE", "Lot size": "75", "Exit reason": "Target", "Stop-loss premium": "None (no stop-loss)",
+    });
+    expect(Number(record.Lots)).toBeGreaterThanOrEqual(12);
+    expect(Number(record["Gross P&L (before charges)"]) - Number(record["Total charges"])).toBeCloseTo(Number(record["Net realized P&L (after charges)"]), 1);
+    const csv = algoTradeCsv(report, trade.entryKey);
+    expect(csv).toContain("TRADE DETAILS");
+    expect(csv).toContain("Why it entered");
+    expect(csv).toMatch(/Entry \(BUY\)[\s\S]*Exit \(SELL\)/);
+    // The session report's trade table carries the same columns for every trade.
+    expect(algoReportCsv(report)).toMatch(/Body past the line %,Option,Expiry,Lot size,Lots,Quantity/);
   });
 
   it("with the daily target on (₹3,000), full-capital winners stop new entries with that reason", async () => {

@@ -136,13 +136,13 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   observationMinutes: 0,
   engine: "existing",
   primary: PRIMARY_SETTINGS_DEFAULTS,
-  settingsVersion: 9,
+  settingsVersion: 10,
   filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
   structureStop: false,
   patterns: PATTERN_DEFAULTS,
-  // Any genuine body crossing of an enabled line (no minimum points, no share of the body).
+  // Enter once 50% of the candle's body is past an enabled line.
   crossRule: "body",
-  crossPercent: 0,
+  crossPercent: 50,
   stopLoss: false,
   intrabar: true,
   stopAtLimit: false,

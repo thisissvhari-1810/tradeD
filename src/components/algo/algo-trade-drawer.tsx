@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, Copy, Crosshair, LogIn, LogOut, Ruler } from "lucide-react";
+import { Check, Copy, Crosshair, Download, LogIn, LogOut, Ruler } from "lucide-react";
+import { downloadAlgoTrade } from "@/components/algo/algo-report";
 import { cx } from "@/components/ui";
 import { Drawer } from "@/components/ui/drawer";
 import { algoTrades, tradeTimeline, type AlgoTrade, type TimelineEvent } from "@/lib/algo/chart-replay";
@@ -57,6 +58,7 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
 }) {
   const [exitOpen, setExitOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1_800);
@@ -120,6 +122,7 @@ export function AlgoTradeDrawer({ algo, entryKey, cursor, onClose, onFocus, onSh
           {completed && trade.exitTime ? <Action icon={<LogOut className="h-4 w-4" aria-hidden />} label="Show exit" onClick={() => onFocus(trade.exitTime! - 300, trade.exitTime! + 300)} /> : null}
           {trade.linePrices.length ? <Action icon={<Ruler className="h-4 w-4" aria-hidden />} label={lineShown ? "Hide strategy line" : "View strategy line"} pressed={lineShown} onClick={() => onShowLine(lineShown ? null : trade.linePrices, trade.lines.join(", "))} /> : null}
           <Action icon={copied ? <Check className="h-4 w-4" aria-hidden /> : <Copy className="h-4 w-4" aria-hidden />} label={copied ? "Copied" : "Copy details"} onClick={() => void copy()} />
+          {algo.run ? <Action icon={<Download className="h-4 w-4" aria-hidden />} label={downloading ? "Preparing…" : "Download trade"} onClick={() => { setDownloading(true); downloadAlgoTrade(algo.run!.id, entryKey).catch(() => undefined).finally(() => setDownloading(false)); }} /> : null}
           {!completed && live ? <button type="button" className="ml-auto h-9 rounded-md bg-loss px-4 font-semibold text-on-signal hover:brightness-110 disabled:opacity-50" disabled={Boolean(live.exit) || Boolean(algo.busy) || cursor == null} onClick={() => setExitOpen(true)}>{live.exit ? "Exit pending…" : "Exit position"}</button> : null}
         </div>
       )}

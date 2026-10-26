@@ -16,7 +16,7 @@ export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
   PRIMARY_STRATEGY: "Algo - Primary Strategy",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
-  EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE when a candle's body crosses an enabled line; +3% premium target, no stop-loss, 3 trades a session.",
+  EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE once 50% of a candle's body crosses an enabled line; +3% premium target, no stop-loss, 3 trades a session.",
   PRIMARY_STRATEGY: "NIFTY 50 options: opening-range breakout confirmed by session VWAP and the trend (9 / 21 EMA).",
 };
 
