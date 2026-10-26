@@ -121,7 +121,7 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
 function primaryOf(value: unknown): PrimarySettings {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
   const d = PRIMARY_SETTINGS_DEFAULTS;
-  const pick = (key: "orMinutes" | "trendFast" | "trendSlow" | "retestBars" | "breakBufferPercent") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
+  const pick = (key: "orMinutes" | "trendFast" | "trendSlow" | "retestBars" | "breakBufferPercent" | "confirmBars") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
   return {
     orMinutes: pick("orMinutes"),
     vwap: typeof row.vwap === "boolean" ? row.vwap : d.vwap,
@@ -133,6 +133,9 @@ function primaryOf(value: unknown): PrimarySettings {
     retestBars: pick("retestBars"),
     breakBufferPercent: pick("breakBufferPercent"),
     stopBasis: row.stopBasis === "mid" || row.stopBasis === "range" ? row.stopBasis : "candle",
+    confirmBars: pick("confirmBars"),
+    continuation: typeof row.continuation === "boolean" ? row.continuation : d.continuation,
+    supportBreak: typeof row.supportBreak === "boolean" ? row.supportBreak : d.supportBreak,
   };
 }
 
@@ -166,7 +169,7 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   const problems: string[] = [];
   const risky = config.sizing === "risk";
   if (config.sizing === "capital") {
-    if (config.engine !== "primary") problems.push("Capital-allocation sizing is part of Algo - Primary Strategy; Algo Trade uses risk-based or fixed sizing.");
+    if (config.engine !== "primary") problems.push("Capital-allocation sizing is part of Algo - Primary Strategy; Mathi Strategy uses risk-based or fixed sizing.");
     if (!(config.allocation.percent > 0 && config.allocation.percent <= 100)) problems.push("Capital allocation must be above 0% and at most 100%.");
     if (!(config.allocation.maxCapital >= 1_000 && config.allocation.maxCapital <= 100_000_000)) problems.push("Maximum capital must be ₹1,000 to ₹10,00,00,000.");
   }
@@ -200,6 +203,7 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
     if (!Number.isInteger(primary.trendFast) || !Number.isInteger(primary.trendSlow) || primary.trendFast < 2 || primary.trendSlow <= primary.trendFast || primary.trendSlow > 100) problems.push("The trend EMAs must be whole numbers with the fast one shorter than the slow one (at most 100).");
     if (!Number.isInteger(primary.retestBars) || primary.retestBars < 1 || primary.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
     if (!(primary.breakBufferPercent >= 0 && primary.breakBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
+    if (!Number.isInteger(primary.confirmBars) || primary.confirmBars < 0 || primary.confirmBars > 60) problems.push("The confirmation window must be 0 to 60 candles.");
   }
   if (!Number.isInteger(config.observationMinutes) || config.observationMinutes < 0 || config.observationMinutes > 120) problems.push("The observation period must be 0 to 120 minutes.");
   const pattern = config.patterns;

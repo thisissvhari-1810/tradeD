@@ -330,6 +330,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
         if (!isLatest) {
           reasons = ["Signal evaluated late (its candle closed more than two minutes ago); not traded."];
+          if (evaluation.audit) evaluation.audit = { ...evaluation.audit, decision: "REJECT", reason: `REJECTED — ${reasons[0]}` };
           outcome = `${evaluation.explanation} Not traded: evaluated late.`;
         } else {
           const result = await tryEntry(state, input, evaluation, log);
@@ -339,6 +340,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
           capital = result.capital ?? null;
           entered = result.ok;
           if (!result.ok) kind = "REJECTED";
+          if (evaluation.audit) evaluation.audit = { ...evaluation.audit, decision: result.ok ? "ENTER" : "REJECT", reason: result.ok ? `ORDER PLACED — ${evaluation.decision}` : `REJECTED — ${(result.reasons ?? [result.message]).join(" ")}` };
         }
       } else if (evaluation.decision === "CONFLICTING_SIGNAL") {
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
@@ -809,8 +811,9 @@ function primaryCoordinate(line: CandleEvaluation, candles: Candle[], input: Adv
   state.analysis = analysis;
   state.awaiting = null;
   const base = { ...line, events: [], notes: [] };
-  if (!result.signal) return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: [result.state.status, ...result.state.checks].filter(Boolean).join(". ").replace(/\.\./g, ".") };
-  return { ...base, strategies: [result.signal], decision: result.signal.direction, explanation: result.signal.reason };
+  const audit = result.state.audit ?? null;
+  if (!result.signal) return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: [result.state.status, ...result.state.checks].join(" "), audit };
+  return { ...base, strategies: [result.signal], decision: result.signal.direction, explanation: result.signal.reason, audit };
 }
 
 /** The setup an entry is taken on: the first agreeing strategy's level and invalidation. */

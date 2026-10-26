@@ -51,7 +51,11 @@ export function EngineCard({ state, config, date, now, unrealized, available = n
     <section className="rounded-lg border border-border-soft" aria-label="Strategy engine">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Engine</span>
-        <span className={cx("rounded-pill px-2 py-0.5 text-xs font-semibold", engine ? TONE[engine.status] : "bg-sunken text-muted")} role="status">{engine ? ENGINE_LABEL[engine.status] : "WAITING FOR DATA"}</span>
+        {state?.position ? (
+          <span className="rounded-pill bg-profit-soft px-2 py-0.5 text-xs font-semibold text-profit" role="status">POSITION OPEN — Managing stop and target</span>
+        ) : (
+          <span className={cx("rounded-pill px-2 py-0.5 text-xs font-semibold", engine ? TONE[engine.status] : "bg-sunken text-muted")} role="status">{engine ? ENGINE_LABEL[engine.status] : "WAITING FOR DATA"}</span>
+        )}
         <span className="num ml-auto text-xs text-muted">{engine ? `${ist(engine.time)} IST` : ""}</span>
       </div>
       <div className="space-y-2 border-t border-border-soft px-3 py-2 text-xs">

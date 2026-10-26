@@ -30,8 +30,30 @@ export function featureStatus(data: AlgoData, strategy: AlgoStrategy) {
  * starts; it never starts or stops anything. While the other feature holds the execution lock, a dialog
  * says what is running (and whether it has a position or order open) and how it is safely stopped.
  */
-export function StrategySelector({ data, selected, onSelect }: { data: AlgoData; selected: AlgoStrategy; onSelect: (next: AlgoStrategy) => void }) {
+export function StrategySelector({ data, selected, onSelect, onData }: { data: AlgoData; selected: AlgoStrategy; onSelect: (next: AlgoStrategy) => void; onData: (next: AlgoData) => void }) {
   const [confirm, setConfirm] = useState<AlgoStrategy | null>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  /** Stops the running feature (exiting its position first when asked), then selects the other one. */
+  async function stopAndSwitch(next: AlgoStrategy, exit: boolean) {
+    const owner = data.lock.owner;
+    if (owner === "NONE") return;
+    setBusy(exit ? "exit" : "stop");
+    setError("");
+    try {
+      const view = await api<AlgoData>("/api/algo", { action: "stopStrategy", strategy: owner, exit });
+      onData(view);
+      announceSaved();
+      if (view.lock.owner === "NONE" || view.lock.owner === next) {
+        onSelect(next);
+        setConfirm(null);
+      } else setError(`${STRATEGY_NAME[owner]} still holds the lock.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "It could not be stopped.");
+    } finally {
+      setBusy("");
+    }
+  }
   const owner = data.lock.owner;
   const choose = (next: AlgoStrategy) => {
     if (next === selected) return;
@@ -60,16 +82,19 @@ export function StrategySelector({ data, selected, onSelect }: { data: AlgoData;
       {confirm && owner !== "NONE" ? (
         <div className="rounded-md border border-warning/40 bg-warning-soft/40 p-2 text-micro" role="alertdialog" aria-label="Switch algo strategy">
           <p className="font-semibold text-text">{STRATEGY_NAME[owner]} is running{activity?.pending ? " with a pending order" : activity?.position ? " with an open position" : ""}.</p>
-          <p className="mt-1 text-text-2">Selecting {STRATEGY_NAME[confirm]} does not stop it, and {STRATEGY_NAME[confirm]} cannot start until {STRATEGY_NAME[owner]} is stopped:</p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-text-2">
-            <li>In chart replay, switch <strong>Enable Algo</strong> off (no new entries). An open position stays protected by its stop-loss and target, or exit it yourself; it is never closed silently.</li>
-            <li>A live-price paper session: Stop it in its panel (after its position is closed).</li>
-            <li>The lock is released only when {STRATEGY_NAME[owner]} has no session running, no open position and no pending order.</li>
-          </ul>
-          <div className="mt-2 flex gap-1.5">
-            <button type="button" className="h-7 rounded-md border border-border px-2.5 hover:bg-hover" onClick={() => setConfirm(null)}>Cancel</button>
-            <button type="button" className="h-7 rounded-md bg-primary px-2.5 font-semibold text-on-primary" onClick={() => { onSelect(confirm); setConfirm(null); }}>Show {STRATEGY_NAME[confirm]} (settings only)</button>
+          <p className="mt-1 text-text-2">To use {STRATEGY_NAME[confirm]} for the next trade, {STRATEGY_NAME[owner]} must be stopped first{activity?.position ? " — and its open position exited" : ""}. Nothing is closed without your choice here.</p>
+          {activity?.pending ? <p className="mt-1 text-warning">A pending order is still being reconciled: wait for it to settle, then stop.</p> : null}
+          {error ? <p className="mt-1 text-loss" role="alert">{error}</p> : null}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <button type="button" className="h-7 rounded-md border border-border px-2.5 hover:bg-hover" onClick={() => { setConfirm(null); setError(""); }}>Cancel</button>
+            {activity?.position ? (
+              <button type="button" className="h-7 rounded-md bg-loss px-2.5 font-semibold text-white disabled:opacity-50" disabled={Boolean(busy) || Boolean(activity?.pending)} onClick={() => void stopAndSwitch(confirm, true)}>{busy === "exit" ? "Exiting…" : `Exit position, stop and switch`}</button>
+            ) : (
+              <button type="button" className="h-7 rounded-md bg-primary px-2.5 font-semibold text-on-primary disabled:opacity-50" disabled={Boolean(busy) || Boolean(activity?.pending)} onClick={() => void stopAndSwitch(confirm, false)}>{busy === "stop" ? "Stopping…" : `Stop ${STRATEGY_NAME[owner]} and switch`}</button>
+            )}
+            <button type="button" className="h-7 rounded-md border border-border px-2.5 hover:bg-hover" onClick={() => { onSelect(confirm); setConfirm(null); setError(""); }}>Only view {STRATEGY_NAME[confirm]} settings</button>
           </div>
+          {activity?.position ? <p className="mt-1 text-muted">The exit fills at the current replay premium (the last processed minute), with charges, on the Algo account.</p> : null}
         </div>
       ) : null}
     </div>
@@ -156,7 +181,12 @@ export function PrimaryPanel({ data, onData }: { data: AlgoData; onData: (next: 
               <Field label="Slow EMA"><NumberInput value={draft.primary.trendSlow} step={1} min={3} onChange={(trendSlow) => primary({ trendSlow })} /></Field>
             </>
           ) : null}
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Wait for a retest and reclaim</span><input type="checkbox" className="oc-check" aria-label="Retest confirmation" checked={draft.primary.retest} onChange={(event) => primary({ retest: event.target.checked })} /></label>
+          <Field label="Confirmation window (candles)"><NumberInput value={draft.primary.confirmBars} step={1} min={0} onChange={(confirmBars) => primary({ confirmBars })} /></Field>
+          <p className="text-micro text-muted">A break of the range waits this long for VWAP and the trend to agree (price must stay beyond the range); it enters once, on the first candle where they do.</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Pullback continuation (EMA re-cross)</span><input type="checkbox" className="oc-check" aria-label="Continuation entries" checked={draft.primary.continuation} onChange={(event) => primary({ continuation: event.target.checked })} /></label>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Support breakdown PUT (above the range low)</span><input type="checkbox" className="oc-check" aria-label="Support breakdown entries" checked={draft.primary.supportBreak} onChange={(event) => primary({ supportBreak: event.target.checked })} /></label>
+          {draft.primary.supportBreak ? <p className="text-micro text-warning">Labelled SUPPORT BREAKDOWN, never an opening-range breakdown. It fires more often (each broken swing low), so more false signals.</p> : null}
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Also enter on a retest and reclaim</span><input type="checkbox" className="oc-check" aria-label="Retest confirmation" checked={draft.primary.retest} onChange={(event) => primary({ retest: event.target.checked })} /></label>
           {draft.primary.retest ? <Field label="Retest window (candles)"><NumberInput value={draft.primary.retestBars} step={1} min={1} onChange={(retestBars) => primary({ retestBars })} /></Field> : null}
           <Field label="Stop beyond">
             <select className="compact-field w-[9.5rem]" aria-label="Stop basis" value={draft.primary.stopBasis} onChange={(event) => primary({ stopBasis: event.target.value === "mid" ? "mid" : event.target.value === "range" ? "range" : "candle" })}>

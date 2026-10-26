@@ -116,6 +116,56 @@ async function ownerActivity(sessionId: string, owner: AlgoStrategy): Promise<Ow
   return activity;
 }
 
+/**
+ * Stops a feature so the other can be started (the switch dialog's "Stop" / "Exit and stop"): its replay
+ * runs stop taking entries and its paper session stops. An open position is never closed silently: without
+ * `exit` the stop is refused while one is open; with `exit` it is closed first at the current price (the
+ * replay premium at the run's processed minute, or the live paper quote). A pending order is never touched —
+ * it must be reconciled first. The lock is released only when nothing is left open.
+ */
+async function stopStrategy(user: SessionUser, sessionId: string, strategy: AlgoStrategy, exit: boolean) {
+  const now = Math.floor(Date.now() / 1000);
+  const runs = await prisma.algoRun.findMany({ where: { sessionId, strategy, status: "ACTIVE" } });
+  const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
+  const paper = strategy === "EXISTING_ALGO" ? stateOf(session) : null;
+  const pending = runs.some((run) => runStateOf(run).pending) || Boolean(paper?.pending);
+  if (pending) throw new AppError(`${STRATEGY_NAME[strategy]} has a pending order that is still being reconciled. Wait for it to settle, then stop it.`, 409, "ORDER_PENDING");
+  const open = runs.some((run) => runStateOf(run).position) || Boolean(paper?.position);
+  if (open && !exit) throw new AppError(`${STRATEGY_NAME[strategy]} has an open position. Exit it (or let it reach its stop-loss / target) before switching.`, 409, "POSITION_OPEN");
+  for (const run of runs) {
+    let state = runStateOf(run);
+    const events: AlgoEvent[] = [];
+    if (state.position && !state.position.exit) {
+      const config = readAlgoConfig(run.config);
+      const { date, open: sessionOpen, close } = chartBounds(run.replaySession, null);
+      const exited = await exitChartRun({
+        user, wallet: run.wallet === "ALGO" ? "ALGO" : "DEMO", runId: run.id, session: run.replaySession, date, config, lines: (run.lines as unknown as AlgoLine[]) ?? [],
+        candles: await dayTape(run.underlying, date), chain: await runChain(config, date), sessionOpen, sessionClose: close,
+        state, at: Math.min(run.processedThrough, close), reason: "MANUAL",
+      });
+      state = exited.state;
+      events.push(...exited.events);
+    }
+    Object.assign(state, { running: false, entries: false });
+    state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position?.exit ? "EXIT_PENDING" : state.position ? "POSITION_OPEN" : "DISABLED";
+    events.push({ key: `switch-stop:${now}`, time: run.processedThrough, kind: "INFO", message: `${STRATEGY_NAME[strategy]} stopped to switch strategies${state.position ? " (its exit is not confirmed yet: the position stays protected)" : ""}.` });
+    await saveChartRun(run, { armed: false, state: state as unknown as Prisma.InputJsonValue }, events);
+  }
+  if (paper && (paper.running || paper.position)) {
+    const config = readAlgoConfig(session.config);
+    const events: AlgoEvent[] = [];
+    if (paper.position && !paper.position.exit) await startExit(paper, { sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
+    Object.assign(paper, { running: false, entries: false });
+    paper.status = paper.recovery ? "RECOVERY_REQUIRED" : paper.position ? "POSITION_OPEN" : "DISABLED";
+    events.push({ key: `switch-stop:${now}`, time: now, kind: "INFO", message: "Session stopped to switch strategies." });
+    await saveRun(sessionId, paper, events, "PAPER");
+  }
+  const released = await freeLock(sessionId, strategy);
+  if (!released && lockOwnerOf((await prisma.algoSession.findUnique({ where: { id: sessionId }, select: { activeStrategy: true } }))?.activeStrategy) === strategy) {
+    throw new AppError(`${STRATEGY_NAME[strategy]} is stopped, but its exit has not been confirmed yet, so it still holds the lock. Try again once the exit has filled.`, 409, "EXIT_PENDING");
+  }
+}
+
 /** Takes the lock for `strategy` or refuses with the reason (another feature is running). */
 async function takeLock(sessionId: string, strategy: AlgoStrategy) {
   const result = await acquireLock(lockStore(sessionId), strategy, (owner) => ownerActivity(sessionId, owner));
@@ -455,6 +505,7 @@ export type AlgoCommand =
   | { action: "acknowledge" }
   | { action: "tick" }
   | { action: "chartMode" }
+  | { action: "stopStrategy"; strategy: AlgoStrategy; exit: boolean }
   | { action: "replay"; date: string }
   | ChartCommand;
 
@@ -471,6 +522,10 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
   assertAllowed(user);
   const session = await loadSession(user.id);
   if (command.action === "replay") return withLease(session.id, () => runReplay(user, session.id, command.date)).then(() => algoView(user));
+  if (command.action === "stopStrategy") {
+    await withLease(session.id, () => stopStrategy(user, session.id, command.strategy, command.exit));
+    return algoView(user);
+  }
   if ("session" in command) {
     await withLease(session.id, () => chartCommandLocked(user, session, command));
     return algoView(user, command.session);

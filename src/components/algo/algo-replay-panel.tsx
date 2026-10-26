@@ -96,7 +96,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="text-base font-semibold">Algo</h2>
-        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : "Algo Trade"}</span>
+        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : "Mathi"}</span>
         <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
         <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
         {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
@@ -114,7 +114,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
           <section className="rounded-xl border border-border bg-gradient-to-br from-elevated to-panel p-3 shadow-e1" aria-label="Algo account overview">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium uppercase tracking-wide text-muted">Algo account · total P&amp;L</span>
-              <span className="num rounded-pill bg-sunken px-2 py-0.5 text-xs text-text-2">Entries {trades.length}/{max}</span>
+              <span className="num rounded-pill bg-sunken px-2 py-0.5 text-xs text-text-2" title="Entries taken this session (filled entry orders), out of the configured maximum per session">Entries {trades.length} of {max} max</span>
             </div>
             <p className="mt-1 text-[2rem] font-semibold leading-tight"><LiveMoney value={netPnl} signed tone missing="—" /></p>
             <div className="mt-1 flex items-baseline justify-between gap-2">
@@ -158,6 +158,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
         {run ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
         {run ? <ReportDownload runId={run.id} /> : null}
+        {run?.strategy === "PRIMARY_STRATEGY" ? <SignalAudit events={run.events} /> : null}
         {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
         {run ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
         {run ? <StrategyRows analysis={state?.analysis} /> : null}
@@ -525,7 +526,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];
   const strategies = strategy === "PRIMARY_STRATEGY"
-    ? `Opening range ${config.primary.orMinutes} min + ${config.primary.vwap ? "VWAP side" : "no VWAP filter"} + ${config.primary.trend === "ema" ? `${config.primary.trendFast}/${config.primary.trendSlow} EMA trend` : "no trend filter"}${config.primary.retest ? " + retest" : ""}`
+    ? `Opening range ${config.primary.orMinutes} min + ${config.primary.vwap ? "VWAP side" : "no VWAP filter"} + ${config.primary.trend === "ema" ? `${config.primary.trendFast}/${config.primary.trendSlow} EMA trend` : "no trend filter"}${config.primary.continuation ? " + continuation" : ""}${config.primary.retest ? " + retest" : ""}${config.primary.supportBreak ? " + support breakdown" : ""}; a break waits ${config.primary.confirmBars} candles for confirmation`
     : STRATEGY_IDS.filter((id) => config.strategies[id]).map((id) => STRATEGY_LABEL[id]).join(", ") || "None enabled";
   const lock = data.lock;
   const blocked = lock.owner !== "NONE" && lock.owner !== strategy && lock.activity && (lock.activity.running || lock.activity.position || lock.activity.pending) ? blockedMessage(lock.owner, strategy, lock.activity) : null;
@@ -637,6 +638,46 @@ function useReportDownload(runId: string) {
       .finally(() => setBusy(false));
   };
   return { busy, error, download };
+}
+
+/**
+ * Algo - Primary Strategy's signal audit: every candle on which a setup was armed, confirmed, waited or was
+ * rejected — with the values and conditions it was decided on and the order result — newest first. Plain
+ * "inside the range" candles are left out unless asked for. It tells an invalid setup from a software fault.
+ */
+function SignalAudit({ events }: { events: Array<{ key: string; time: number; kind: string; evaluation?: { audit?: import("@/lib/algo/primary").PrimaryAudit | null } }> }) {
+  const [all, setAll] = useState(false);
+  const rows = events
+    .filter((event) => event.evaluation?.audit && (all || event.evaluation.audit.setup || event.evaluation.audit.crossing || event.evaluation.audit.decision !== "WAIT"))
+    .map((event) => ({ key: event.key, audit: event.evaluation!.audit! }))
+    .reverse()
+    .slice(0, 60);
+  const tone = (decision: string) => (decision === "ENTER" ? "text-profit" : decision === "REJECT" ? "text-loss" : "text-warning");
+  return (
+    <details className="rounded-lg border border-border-soft" aria-label="Signal audit">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted">Signal audit</span>
+        <span className="num ml-auto text-xs text-muted">{rows.length} candle{rows.length === 1 ? "" : "s"}</span>
+      </summary>
+      <div className="space-y-1.5 border-t border-border-soft px-3 py-2 text-xs">
+        <label className="flex cursor-pointer items-center gap-1.5 text-muted"><input type="checkbox" className="oc-check" checked={all} onChange={(event) => setAll(event.target.checked)} />Show every evaluated candle</label>
+        {rows.length ? rows.map(({ key, audit }) => (
+          <div key={key} className="rounded-md bg-sunken/50 p-1.5">
+            <p className="flex flex-wrap items-center gap-x-2">
+              <span className="num font-semibold text-text">{ist(audit.time + 60)}</span>
+              {audit.setup ? <span className="font-medium text-text-2">{audit.setup.type} {audit.setup.direction}</span> : null}
+              <span className={cx("ml-auto font-semibold", tone(audit.decision))}>{audit.decision}</span>
+            </p>
+            <p className="num text-muted">O {audit.candle.open.toFixed(2)} H {audit.candle.high.toFixed(2)} L {audit.candle.low.toFixed(2)} C {audit.candle.close.toFixed(2)}{audit.range ? ` · range ${audit.range.low.toFixed(2)}–${audit.range.high.toFixed(2)}` : ""}{audit.vwap ? ` · ${audit.vwap.source} ${audit.vwap.value.toFixed(2)}` : ""}{audit.ema ? ` · EMA ${audit.ema.fast.toFixed(2)} / ${audit.ema.slow.toFixed(2)}` : ""}</p>
+            {audit.crossing ? <p className="text-text-2">{audit.crossing}</p> : null}
+            {audit.passed.map((item) => <p key={item} className="text-profit">✓ {item}</p>)}
+            {audit.failed.map((item) => <p key={item} className="text-loss">✗ {item}</p>)}
+            <p className="text-text-2">{audit.reason}</p>
+          </div>
+        )) : <p className="text-muted">No setups yet{all ? "" : " (switch on “every evaluated candle” to see each WAITING candle)"}.</p>}
+      </div>
+    </details>
+  );
 }
 
 /** The session's trades so far (and every signal with its reason), downloadable at any time. */

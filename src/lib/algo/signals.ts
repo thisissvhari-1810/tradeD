@@ -52,6 +52,8 @@ export type CandleEvaluation = {
   decision: Decision;
   /** Plain-language reason for the decision. */
   explanation: string;
+  /** Algo - Primary Strategy: every value and condition checked on this candle, and the order result. */
+  audit?: import("./primary").PrimaryAudit | null;
 };
 
 /** Same IST trading day (a session's first candle is never paired with the previous day's last). */

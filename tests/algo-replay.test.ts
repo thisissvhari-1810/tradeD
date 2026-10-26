@@ -1553,3 +1553,66 @@ describe("Algo - Primary Strategy in chart replay (capital sizing on the shared 
     expect(existing.events.some((event) => event.evaluation?.strategies?.some((item) => item.strategy === "primary"))).toBe(false);
   });
 });
+
+describe("Algo - Primary Strategy re-entries in chart replay", () => {
+  const primary: AlgoConfig = { ...PRIMARY_DEFAULTS, cooldownMinutes: 0, primary: { ...PRIMARY_DEFAULTS.primary, breakBufferPercent: 0 } };
+  // Range LINE−3..LINE+5 (closes −2 / +4), a rise inside it, a breakout, a pullback that stays above the range
+  // high but turns the 9 EMA below the 21 EMA, then a resumption (the EMA re-cross is the second setup).
+  const shape = [...Array.from({ length: 15 }, (_, index) => (index % 2 ? 4 : -2)), ...Array.from({ length: 10 }, (_, index) => index * 0.4), 10, 12, 14, 16, 18, 20, 18, 16, 14, 12, 10, 8, 7, 6.5, 6.2, 6, 8, 11, 14, 17, 20, 22, 23, 24, 25, 26];
+  function session(): Candle[] {
+    const candles: Candle[] = [];
+    for (let index = 0; index < 375; index += 1) {
+      const close = LINE + (shape[index] ?? 26);
+      const open = index > 0 ? candles[index - 1].close : close;
+      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
+    }
+    return candles;
+  }
+
+  it("a second CALL after the first trade closed at its target, on a fresh setup — and only once", async () => {
+    // The first trade's premium trades through +3% at minute 28 (filled at the target, ≈ ₹2,900 after charges,
+    // below the ₹3,000 daily target); later premiums stay flat.
+    feed.premiums = premiums((index) => (index === 28 ? { low: 101.5, high: 104, close: 102 } : null));
+    const result = await run(session(), { cursor: m(70), config: primary });
+    const entries = result.events.filter((event) => event.kind === "ENTRY");
+    expect(entries).toHaveLength(2);
+    expect(result.events.find((event) => event.kind === "EXIT")?.message).toContain("Exit (TARGET)");
+    const second = result.events.find((event) => event.time === entries[1].time && event.evaluation?.audit)!.evaluation!.audit!;
+    expect(second.setup?.type).toMatch(/^(CONTINUATION|BREAKOUT)$/);
+    expect(second.setup?.direction).toBe("CALL");
+    expect(buys()).toHaveLength(2);
+    // Every evaluated candle has an audit; entries say ORDER PLACED.
+    const audits = result.events.filter((event) => event.kind !== "ENTRY" && event.evaluation?.audit).map((event) => event.evaluation!.audit!);
+    expect(audits.filter((audit) => audit.decision === "ENTER").map((audit) => audit.reason)).toEqual(["ORDER PLACED — CALL", "ORDER PLACED — CALL"]);
+  });
+
+  it("once the daily target is reached, the next valid setup is rejected with that reason", async () => {
+    // A gap through the target realizes more than ₹3,000.
+    feed.premiums = premiums((index) => (index >= 28 && index <= 29 ? { low: 103.5, high: 104.5, close: 104 } : null));
+    const result = await run(session(), { cursor: m(70), config: primary });
+    expect(buys()).toHaveLength(1);
+    const rejected = result.events.find((event) => event.kind === "REJECTED" && event.evaluation?.audit);
+    expect(rejected?.evaluation?.audit?.reason).toMatch(/^REJECTED — Daily target ₹3000 reached/);
+  });
+
+  it("the entry limit rejects a later valid signal with the reason in its audit (never a silent miss)", async () => {
+    // Flat premiums: the first trade is still open when the second setup appears.
+    const result = await run(session(), { cursor: m(70), config: { ...primary, maxTrades: 1 } });
+    expect(buys()).toHaveLength(1);
+    const rejected = result.events.find((event) => event.kind === "REJECTED" && event.evaluation?.audit?.decision === "REJECT");
+    expect(rejected?.evaluation?.audit?.reason).toMatch(/^REJECTED — .*(Daily trade limit reached \(1\)|A position in this direction is already open)/);
+  });
+
+  it("replaying the same session again (a reset) makes the same decisions; repeating a step places nothing twice", async () => {
+    const first = await run(session(), { cursor: m(70), config: primary });
+    const decisions = first.events.filter((event) => event.evaluation?.audit).map((event) => [event.time, event.evaluation!.audit!.decision, event.evaluation!.audit!.setup?.type ?? null]);
+    const repeat = await run(session(), { cursor: m(70), config: primary, state: first.state, processedThrough: first.processedThrough });
+    expect(repeat.events.filter((event) => event.kind === "ENTRY")).toHaveLength(0);
+    // A reset: a fresh state and a fresh ledger replays the same candles to the same decisions.
+    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
+    db.state.accounts[0].cashAvailable = START;
+    clearReplayTapes();
+    const again = await run(session(), { cursor: m(70), config: primary });
+    expect(again.events.filter((event) => event.evaluation?.audit).map((event) => [event.time, event.evaluation!.audit!.decision, event.evaluation!.audit!.setup?.type ?? null])).toEqual(decisions);
+  });
+});

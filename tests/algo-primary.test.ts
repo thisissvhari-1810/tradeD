@@ -36,11 +36,11 @@ describe("the exclusive execution lock", () => {
   it("each feature is refused while the other one runs, with the reason", async () => {
     const existing = memoryStore("EXISTING_ALGO");
     const refused = await acquireLock(existing.store, "PRIMARY_STRATEGY", async () => running);
-    expect(refused).toEqual({ ok: false, owner: "EXISTING_ALGO", reason: "Algo Trade is running. Stop it before starting Algo - Primary Strategy." });
+    expect(refused).toEqual({ ok: false, owner: "EXISTING_ALGO", reason: "Mathi Strategy is running. Stop it before starting Algo - Primary Strategy." });
     const primary = memoryStore("PRIMARY_STRATEGY");
     const other = await acquireLock(primary.store, "EXISTING_ALGO", async () => ({ running: false, position: true, pending: false }));
     expect(other.ok).toBe(false);
-    expect(!other.ok && other.reason).toContain("Algo - Primary Strategy is running with an open position. Stop it before starting Algo Trade. Its open position must be closed");
+    expect(!other.ok && other.reason).toContain("Algo - Primary Strategy is running with an open position. Stop it before starting Mathi Strategy. Its open position must be closed");
     expect(primary.owner()).toBe("PRIMARY_STRATEGY");
   });
 
@@ -93,55 +93,99 @@ const rise = Array.from({ length: 10 }, (_, index) => 100 + index * 0.4);
 const settings: PrimarySettings = { ...PRIMARY_SETTINGS_DEFAULTS, breakBufferPercent: 0 };
 
 describe("Algo - Primary Strategy: NIFTY ORB + VWAP + trend", () => {
+  /** Every candle's decision in time order, as a replay would make them (each from its own prefix only). */
+  const walk = (candles: Candle[], extra: Partial<PrimarySettings> = {}) => candles.map((_, index) => primarySignal(candles.slice(0, index + 1), OPEN, { ...settings, ...extra }));
+  const fired = (candles: Candle[], extra: Partial<PrimarySettings> = {}) => walk(candles, extra).flatMap((result, index) => (result.signal ? [{ index, direction: result.signal.direction, type: result.signal.reason.split(":")[0] }] : []));
+
   it("the opening range is analysis only: nothing during it, and nothing carried out of it", () => {
     const inside = series([...range.slice(0, 10), 110]);
-    expect(primarySignal(inside, OPEN, settings)).toMatchObject({ signal: null, state: { status: "OBSERVING OPENING RANGE (to 09:30)" } });
+    expect(primarySignal(inside, OPEN, settings)).toMatchObject({ signal: null, state: { status: "WAITING — Observing the opening range (to 09:30)" } });
     // A break inside the window (candle 12) is not traded when the window ends: no new crossing after it.
     const early = series([...range.slice(0, 12), 110, 111, 112, 112, 112]);
-    expect(primarySignal(early, OPEN, settings).signal).toBeNull();
+    expect(fired(early)).toEqual([]);
   });
 
-  it("CALL on a completed close above the range high, above VWAP, with the 9 / 21 EMA bullish; stop beyond the candle", () => {
+  it("1. initial breakout: a completed close above the range high, above VWAP, with the 9 / 21 EMA bullish; stop beyond the candle", () => {
     const candles = series([...range, ...rise, 110]);
     const result = primarySignal(candles, OPEN, settings);
     expect(result.state.range).toMatchObject({ high: 105, low: 97 });
     expect(result.signal).toMatchObject({ strategy: "primary", direction: "CALL", level: 105, invalidation: candles.at(-1)!.low });
-    expect(result.state.vwap?.source).toBe("VWAP");
-    expect(result.signal!.reason).toContain("close is above it");
+    expect(result.signal!.reason).toMatch(/^Primary BREAKOUT CALL: /);
+    expect(result.state.audit).toMatchObject({ decision: "ENTER", setup: { type: "BREAKOUT", direction: "CALL" }, failed: [] });
+    expect(result.state.status).toBe("SIGNAL CONFIRMED — BREAKOUT CALL: checking the option contract");
   });
 
-  it("no trade below VWAP, or against the trend; each check says why", () => {
-    // A heavy-volume spike to 130 after the range pulls VWAP above 110; price falls back inside, then breaks out again.
+  it("6. a break without VWAP or trend confirmation waits (with the missing condition), and enters if confirmed in the window", () => {
+    // A long decline, then a close just above the range high: the 9 EMA is still below the 21 EMA.
+    const bearish = [...range, ...Array.from({ length: 20 }, (_, index) => 103 - index * 0.3), 105.5];
+    const waiting = primarySignal(series(bearish), OPEN, settings);
+    expect(waiting.signal).toBeNull();
+    expect(waiting.state.status).toMatch(/^WAITING — EMA trend confirmation missing \(BREAKOUT CALL armed at /);
+    expect(waiting.state.audit?.failed[0]).toMatch(/9 EMA .* 21 EMA .*trend bearish/);
+    // Price holds above the range high and the trend turns: the armed breakout enters once, on that candle.
+    const confirmed = series([...bearish, 107, 109, 111, 113, 115, 117]);
+    const hits = fired(confirmed);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].direction).toBe("CALL");
+    expect(primarySignal(confirmed.slice(0, hits[0].index + 1), OPEN, settings).signal!.reason).toMatch(/confirmed \d+ candles? later/);
+    // A heavy-volume spike pulls VWAP above the breakout: VWAP confirmation missing.
     const spiked = series([...range, 130, 130, 130, 100, 100, 100, 100, 100, 100, 100, 110]).map((candle, index) => (index >= 15 && index <= 17 ? { ...candle, volume: 100_000 } : candle));
-    expect(primarySignal(spiked, OPEN, settings)).toMatchObject({ signal: null, state: { status: "BREAKOUT BELOW VWAP: NO TRADE" } });
-    const falling = series([...range, ...Array.from({ length: 10 }, (_, index) => 103 - index * 0.5), 110]);
-    expect(primarySignal(falling, OPEN, settings).state.status).toMatch(/TREND|BREAKOUT CONFIRMED/);
-    // A long decline, then a close just above the range high: the 9 EMA stays below the 21 EMA.
-    const bearish = series([...range, ...Array.from({ length: 20 }, (_, index) => 103 - index * 0.3), 105.5]);
-    expect(primarySignal(bearish, OPEN, settings)).toMatchObject({ signal: null, state: { status: "TREND AGAINST: NO TRADE" } });
+    expect(primarySignal(spiked, OPEN, settings).state.status).toMatch(/^WAITING — VWAP confirmation missing/);
   });
 
   it("without index volume: a labelled TWAP, or no trade when set to refuse", () => {
     const candles = series([...range, ...rise, 110], 0);
     expect(sessionVwap(candles, "twap")?.source).toBe("TWAP");
     expect(sessionVwap(candles, "reject")).toBeNull();
-    expect(primarySignal(candles, OPEN, settings).signal?.reason).toContain("TWAP (no index volume, so not a true VWAP)");
-    expect(primarySignal(candles, OPEN, { ...settings, vwapFallback: "reject" }).state.status).toBe("VWAP UNAVAILABLE");
+    expect(primarySignal(candles, OPEN, settings).signal?.reason).toContain("TWAP");
+    expect(primarySignal(candles, OPEN, { ...settings, vwapFallback: "reject" }).state.audit?.failed).toContain("VWAP unavailable (no index volume; the fallback is set to refuse)");
   });
 
-  it("PUT is the mirror image; the stop can be the range midpoint or the opposite edge", () => {
+  it("4. a confirmed close below the range low is a PUT breakdown; the stop can be the candle, the midpoint or the opposite edge", () => {
     const down = series([...range, ...Array.from({ length: 10 }, (_, index) => 102 - index * 0.4), 90]);
     expect(primarySignal(down, OPEN, settings).signal).toMatchObject({ direction: "PUT", level: 97 });
+    expect(primarySignal(down, OPEN, settings).signal!.reason).toMatch(/^Primary BREAKDOWN PUT/);
     expect(primarySignal(down, OPEN, { ...settings, stopBasis: "mid" }).signal?.invalidation).toBe(101);
     expect(primarySignal(down, OPEN, { ...settings, stopBasis: "range" }).signal?.invalidation).toBe(105);
   });
 
-  it("retest mode: the break, then a touch of the range high and a close back above it", () => {
-    const base = [...range, ...rise, 110, 108];
-    const candles = series(base);
-    const retest: Candle = { time: T(base.length), open: 106, high: 108, low: 104.8, close: 107.5, volume: 1000 };
-    expect(primarySignal([...candles, retest], OPEN, { ...settings, retest: true }).signal?.reason).toContain("retest of the range high 105.00 held");
-    expect(primarySignal(series([...range, ...rise, 110]), OPEN, { ...settings, retest: true }).signal).toBeNull();
+  // The 22 Oct shape: breakout, a pullback that turns the EMAs down, then back up (a continuation), then a fall below the range high.
+  const breakout = [...range, ...rise, 110, 112, 114, 116, 118, 120];
+  const pullback = [118, 116, 114, 112, 110, 108, 107, 106.5, 106.2, 106];
+  const resume = [108, 111, 114, 117, 120, 122];
+
+  it("2 / 3. a second CALL needs a fresh setup: the EMA re-cross after a pullback (continuation), once — never every candle above the range", () => {
+    const candles = series([...breakout, ...pullback, ...resume, 123, 124, 125, 126]);
+    const hits = fired(candles);
+    expect(hits.map((hit) => [hit.direction, hit.type])).toEqual([["CALL", "Primary BREAKOUT CALL"], ["CALL", "Primary CONTINUATION CALL"]]);
+    // Without continuation entries only the breakout is taken.
+    expect(fired(candles, { continuation: false })).toHaveLength(1);
+    // Retest entries are an extra, once per break.
+    const retest = series([...range, ...rise, 110, 108, 106]).concat([{ time: T(29), open: 106, high: 108, low: 104.8, close: 107.5, volume: 1000 }]);
+    expect(fired(retest, { retest: true }).map((hit) => hit.type)).toEqual(["Primary BREAKOUT CALL", "Primary RETEST CALL"]);
+  });
+
+  it("5. a break of support that stays above the range low is a SUPPORT BREAKDOWN (only when enabled), never an ORB breakdown", () => {
+    const fall = [...breakout, 112, 108, 104, 101, 100, 99.5, 99];
+    const candles = series(fall);
+    expect(fired(candles).filter((hit) => hit.direction === "PUT")).toEqual([]);
+    const statuses = walk(candles).map((result) => result.state.status);
+    expect(statuses.every((status) => !status.includes("BREAKDOWN PUT"))).toBe(true);
+    const hits = fired(candles, { supportBreak: true }).filter((hit) => hit.direction === "PUT");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].type).toBe("Primary SUPPORT BREAKDOWN PUT");
+    // It is above the range low the whole time.
+    expect(Math.min(...candles.slice(15).map((candle) => candle.close))).toBeGreaterThan(97);
+  });
+
+  it("8 / 9. decisions use only completed candles (appending later candles never changes an earlier one) and are reproducible", () => {
+    const candles = series([...breakout, ...pullback, ...resume, 112, 104, 100, 99]);
+    const once = walk(candles, { supportBreak: true, retest: true }).map((result) => ({ signal: result.signal, status: result.state.status }));
+    const twice = walk(candles, { supportBreak: true, retest: true }).map((result) => ({ signal: result.signal, status: result.state.status }));
+    expect(twice).toEqual(once);
+    // Each decision equals the one made when only that much of the session existed (no look-ahead).
+    const longer = series([...breakout, ...pullback, ...resume, 112, 104, 100, 99, 95, 90, 120]);
+    walk(longer, { supportBreak: true, retest: true }).slice(0, candles.length).forEach((result, index) => expect({ signal: result.signal, status: result.state.status }).toEqual(once[index]));
   });
 });
 
@@ -184,7 +228,7 @@ describe("separate settings for each feature", () => {
     expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", sizing: "risk" });
     expect(algoConfigProblems(readAlgoConfig(PRIMARY_DEFAULTS))).toEqual([]);
     // Capital sizing is not offered to Algo Trade; the Primary Strategy is chart replay only.
-    expect(algoConfigProblems(readAlgoConfig({ ...ALGO_DEFAULTS, sizing: "capital" }))).toContain("Capital-allocation sizing is part of Algo - Primary Strategy; Algo Trade uses risk-based or fixed sizing.");
+    expect(algoConfigProblems(readAlgoConfig({ ...ALGO_DEFAULTS, sizing: "capital" }))).toContain("Capital-allocation sizing is part of Algo - Primary Strategy; Mathi Strategy uses risk-based or fixed sizing.");
     expect(algoConfigProblems({ ...PRIMARY_DEFAULTS, mode: "PAPER" })).toContain("Algo - Primary Strategy runs in chart replay (demo trading) only.");
     expect(algoConfigProblems({ ...PRIMARY_DEFAULTS, allocation: { ...PRIMARY_DEFAULTS.allocation, percent: 120 } })).toContain("Capital allocation must be above 0% and at most 100%.");
   });
@@ -193,6 +237,24 @@ describe("separate settings for each feature", () => {
     expect(algoRequest.parse({ action: "save", config: {}, strategy: "PRIMARY_STRATEGY" })).toMatchObject({ strategy: "PRIMARY_STRATEGY" });
     expect(algoRequest.parse({ action: "chartArm", session: "2026-10-16.abcd1234", cursor: 1, strategy: "PRIMARY_STRATEGY" })).toMatchObject({ strategy: "PRIMARY_STRATEGY" });
     expect(() => algoRequest.parse({ action: "chartArm", session: "2026-10-16.abcd1234", cursor: 1, strategy: "BOTH" })).toThrow();
+  });
+
+  it("switching: stop (or exit and stop) the running feature first — refused with an open position unless exiting, never touching a pending order", () => {
+    expect(algoRequest.parse({ action: "stopStrategy", strategy: "EXISTING_ALGO", exit: true })).toMatchObject({ exit: true });
+    expect(() => algoRequest.parse({ action: "stopStrategy", strategy: "EXISTING_ALGO" })).toThrow();
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    const stop = server.slice(server.indexOf("async function stopStrategy("), server.indexOf("/** Takes the lock for"));
+    // Pending orders first (refused), then an open position (refused without exit), then exit at the replay minute.
+    expect(stop.indexOf("ORDER_PENDING")).toBeLessThan(stop.indexOf("POSITION_OPEN"));
+    expect(stop).toMatch(/if \(open && !exit\) throw new AppError/);
+    expect(stop).toMatch(/exitChartRun\(\{[\s\S]*at: Math\.min\(run\.processedThrough, close\), reason: "MANUAL"/);
+    expect(stop).toMatch(/await saveChartRun\(run, \{ armed: false, state:/);
+    // The lock is released only when nothing is left open; an unconfirmed exit keeps it (and says so).
+    expect(stop).toMatch(/const released = await freeLock\(sessionId, strategy\);/);
+    expect(stop).toContain("EXIT_PENDING");
+    const ui = readFileSync("src/components/algo/algo-primary.tsx", "utf8");
+    expect(ui).toMatch(/action: "stopStrategy", strategy: owner, exit/);
+    expect(ui).toContain("Exit position, stop and switch");
   });
 
   it("the server takes the lock before a run processes a signal, checks it on every step and stores settings and runs separately", () => {

@@ -117,7 +117,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   if (selected === "PRIMARY_STRATEGY") {
     return (
       <div className="space-y-3">
-        <StrategySelector data={data} selected={selected} onSelect={select} />
+        <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
         <PrimaryPanel data={data} onData={apply} />
       </div>
     );
@@ -125,7 +125,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
 
   return (
     <div className="space-y-3">
-      <StrategySelector data={data} selected={selected} onSelect={select} />
+      <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
       <div className="flex items-center gap-2">
         <span className={cx("shrink-0 whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", status.tone)} role="status">{status.label}</span>
         <span className="min-w-0 truncate text-micro text-muted">{data.config.underlying} · 1m · {data.config.mode === "PAPER" ? "Paper" : data.config.mode === "REPLAY" ? "Chart replay" : "Live"}</span>

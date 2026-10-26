@@ -12,7 +12,7 @@ export type LockOwner = "NONE" | AlgoStrategy;
 export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "PRIMARY_STRATEGY"];
 
 export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
-  EXISTING_ALGO: "Algo Trade",
+  EXISTING_ALGO: "Mathi Strategy",
   PRIMARY_STRATEGY: "Algo - Primary Strategy",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
