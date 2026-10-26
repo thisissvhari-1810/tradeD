@@ -115,6 +115,7 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
   let completed = sessionComplete(state, limit);
   for (const end of completed ? [] : minuteEnds(processedThrough, input.cursor, input.sessionOpen, input.sessionClose)) {
     adapter.setClock(end);
+    const entries = state.tradesToday;
     const result = await advance(state, { sessionId: input.runId, sessionDate: input.date, config: input.config, candles: input.candles, lines: input.lines, now: end, adapter });
     state = result.state;
     events.push(...result.events);
@@ -123,10 +124,11 @@ export async function stepChartRun(input: ChartRunInput & { state: AlgoState; pr
       completed = true;
       break;
     }
-    // Live steps (the chart's replay): with a position open, return after each minute so the panel shows the
-    // entry at once and its premium and P&L every replay minute; the next step continues from here (nothing
-    // is skipped, and the decisions are the same as processing the minutes in one go).
-    if (input.liveSteps && state.position) break;
+    // Live steps (the chart's replay): return right after the minute a trade is entered, so the panel shows it
+    // open at once; every other minute up to the replay time is processed in this one step, so the algo never
+    // falls behind the replay (one round trip per minute would lag far behind a fast replay with a long trade).
+    // The next step continues from here: nothing is skipped and the decisions are the same.
+    if (input.liveSteps && state.tradesToday > entries && state.position) break;
   }
   let ended = false;
   if (!completed && processedThrough >= input.sessionClose) {

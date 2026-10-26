@@ -1761,28 +1761,32 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     expect(result.events.find((event) => event.kind === "REJECTED" && event.time === m(10))?.message).toContain("DAILY TRADE LIMIT REACHED — 3/3");
   });
 
-  it("live steps: with a position open, each step returns after one replay minute (entry shown at once, P&L every minute); the outcome is the same", async () => {
+  it("live steps: a step stops only at the minute a trade is entered (shown open at once), then catches up to the replay time in one step, even with the trade still open", async () => {
     feed.premiums = premiums((index) => (index === 9 ? { low: 99.5, high: 104, close: 100 } : null));
     const candles = path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12));
     const chain = await loadOptionChain("NIFTY", null);
-    const go = (state: AlgoState, processedThrough: number) => stepChartRun({ user: student, wallet: "ALGO", runId: "live", session: SESSION, date: DATE, config: mathi, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor: m(20), liveSteps: true });
+    const go = (state: AlgoState, processedThrough: number, cursor = m(20)) => stepChartRun({ user: student, wallet: "ALGO", runId: "live", session: SESSION, date: DATE, config: mathi, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor, liveSteps: true });
     // The first step stops at the entry minute with the position open.
-    let result = await go({ ...initialState(DATE), running: true, entries: true }, OPEN);
-    expect(result.state.position).not.toBeNull();
-    expect(result.processedThrough).toBe(m(6));
-    const marks: number[] = [];
-    while (result.state.position && result.processedThrough < m(20)) {
-      result = await go(result.state, result.processedThrough);
-      marks.push(result.processedThrough);
-    }
-    // One minute per step while open, then the target exit; then the rest of the minutes in one step.
-    expect(marks.slice(0, 3)).toEqual([m(7), m(8), m(9)]);
-    expect(result.state.position).toBeNull();
+    const first = await go({ ...initialState(DATE), running: true, entries: true }, OPEN);
+    expect(first.state.position).not.toBeNull();
+    expect(first.processedThrough).toBe(m(6));
+    // The next step runs every minute to the replay time: the target exit at 9 and the rest, in one go.
+    const second = await go(first.state, first.processedThrough);
+    expect(second.processedThrough).toBe(m(20));
+    expect(second.state.position).toBeNull();
     expect(buys()).toHaveLength(1);
     expect(sells()).toHaveLength(1);
-    const after = await go(result.state, result.processedThrough);
-    expect(after.processedThrough).toBe(m(20));
-    expect(buys()).toHaveLength(1);
+  });
+
+  it("live steps: a long open trade (no target reached) never makes the algo lag: a 6-hour catch-up is one step", async () => {
+    const candles = path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12));
+    const chain = await loadOptionChain("NIFTY", null);
+    const go = (state: AlgoState, processedThrough: number, cursor: number) => stepChartRun({ user: student, wallet: "ALGO", runId: "long", session: SESSION, date: DATE, config: mathi, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor, liveSteps: true });
+    const first = await go({ ...initialState(DATE), running: true, entries: true }, OPEN, m(370));
+    expect(first.processedThrough).toBe(m(6));
+    const second = await go(first.state, first.processedThrough, m(370));
+    expect(second.processedThrough).toBe(m(370));
+    expect(second.state.position).not.toBeNull();
   });
 
   it("your session: three trades early in a full session all stay in the panel (it once showed only the last 400 events)", async () => {
