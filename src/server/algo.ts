@@ -6,7 +6,12 @@ import { kolkataParts } from "@/lib/market/clock";
 import { optionCharges } from "@/lib/options/engine";
 import { algoConfigProblems, readAlgoConfig, switchToChartReplay } from "@/lib/algo/config";
 import { strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
-import { atmStrike, type ChainInput, type Right } from "@/lib/algo/options";
+import { createReplayAdapter, simulateSession } from "@/lib/algo/replay-adapter";
+import { expiredChain, expiredTape, weeklyExpiries } from "@/lib/algo/expired-options";
+import { backtestTotals, backtestTrades, missedSignals, type BacktestDay } from "@/lib/algo/backtest";
+import type { AlgoRequest } from "@/lib/algo/request";
+import { dhanExpiredOptions } from "@/server/dhan-market";
+import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity } from "@/lib/algo/exclusive";
 import { advance, initialState, startExit, ALGO_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
@@ -15,9 +20,9 @@ import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
 import { buildPlan } from "@/lib/algo/plan";
 import { loadOptionChain } from "@/server/option-chain";
-import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/option-replay";
+import { checkReplayClock, sessionTape } from "@/server/option-replay";
 import { ensurePracticeAccount } from "@/server/practice-account";
-import { FILL_STALE_SECONDS, replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
+import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
 import { algoTrades, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
@@ -359,81 +364,11 @@ async function algoWallet(userId: string) {
  * account is used: nothing is written to the paper ledger, and no order goes anywhere.
  */
 export function replayAdapter(input: { underlying: string; date: string; candles: Candle[]; chain: Awaited<ReturnType<typeof loadOptionChain>>; config: AlgoConfig; capital: number }): ExecutionAdapter & { setClock: (now: number) => void } {
-  const orders = new Map<string, Fill>();
-  let cash = input.capital;
-  // The simulated clock: the close of the candle being replayed.
-  let clock = 0;
-  const tapes = new Map<string, Promise<Candle[]>>();
-  const tapeOf = (contract: Pick<ContractRef, "underlying" | "expiry" | "strike" | "right" | "securityId" | "lotSize">) => {
-    const key = contract.securityId;
-    if (!tapes.has(key)) {
-      const replay: ReplayContract = { underlying: contract.underlying, name: contract.underlying, expiry: contract.expiry, strike: contract.strike, right: contract.right, securityId: contract.securityId, kind: input.chain.kind, lotSize: contract.lotSize };
-      tapes.set(key, sessionTape(replay, input.date, new Date()).catch(() => []));
-    }
-    return tapes.get(key)!;
-  };
-  const candleAt = (tape: Candle[], time: number) => tape.find((candle) => candle.time === time) ?? null;
-  // The latest premium candle at or before `time` that is still fresh enough to trade on (an ATM option
-  // that did not trade in one minute keeps its last price, but never one older than the fill limit).
-  const lastAt = (tape: Candle[], time: number) => {
-    const found = [...tape].reverse().find((candle) => candle.time <= time) ?? null;
-    return found && time - found.time <= FILL_STALE_SECONDS ? found : null;
-  };
-  return {
-    kind: "replay",
-    setClock: (now) => { clock = now; },
-    health: async () => ({ ok: true }),
-    cash: async () => cash,
-    charges: (side, premium, quantity) => rupees(optionCharges(side, paise(premium), quantity).total),
-    async chain(right) {
-      // The underlying's close at the signal minute is the spot; only the ATM contract's premium is loaded.
-      const view = input.chain;
-      const now = clock;
-      const spotCandle = [...input.candles].filter((candle) => candle.time + 60 <= now).at(-1);
-      let quoteAsOf = now;
-      const spot = spotCandle?.close ?? null;
-      const strikes = view.strikes.map((row) => ({ strike: row.strike, ce: null as ChainInput["strikes"][number]["ce"], pe: null as ChainInput["strikes"][number]["pe"] }));
-      const strike = spot != null ? atmStrike(view.strikes.map((row) => row.strike), spot, input.config.rounding) : null;
-      const row = view.strikes.find((item) => item.strike === strike);
-      const side = right === "CE" ? row?.ce : row?.pe;
-      if (row && side?.securityId && view.lotSize && spotCandle) {
-        const tape = await tapeOf({ underlying: view.symbol, expiry: view.expiry!, strike: row.strike, right, securityId: side.securityId, lotSize: view.lotSize });
-        const premium = lastAt(tape, spotCandle.time);
-        const quote = premium ? { ltp: premium.close, bid: premium.close, ask: premium.close, securityId: side.securityId } : { ltp: null, bid: null, ask: null, securityId: side.securityId };
-        const target = strikes.find((item) => item.strike === row.strike)!;
-        if (right === "CE") target.ce = quote; else target.pe = quote;
-        // The quote is as old as its candle: a premium from an earlier minute is checked against the age limit.
-        if (premium) quoteAsOf = premium.time + 60;
-      }
-      return { underlying: view.symbol, spot, expiry: view.expiry, asOf: new Date(quoteAsOf * 1000).toISOString(), lotSize: view.lotSize, strikes };
-    },
-    async mark(contract, now) {
-      const tape = await tapeOf(contract);
-      const candle = candleAt(tape, now - 60);
-      if (candle) return { bid: candle.close, ask: candle.close, candle: { open: candle.open, high: candle.high, low: candle.low, close: candle.close }, asOf: now };
-      // No trade in this minute: the last traded premium stands (its own range was checked in its minute).
-      const last = lastAt(tape, now - 60);
-      return last ? { bid: last.close, ask: last.close, candle: null, asOf: last.time + 60 } : null;
-    },
-    async enter(order) {
-      if (orders.has(order.key)) return orders.get(order.key)!;
-      const charges = rupees(optionCharges("BUY", paise(order.price), order.quantity).total);
-      const cost = order.price * order.quantity + charges;
-      const fill: Fill = cost > cash ? { status: "REJECTED", reason: "Insufficient virtual buying power." } : { status: "FILLED", quantity: order.quantity, price: order.price, charges };
-      if (fill.status === "FILLED") cash -= cost;
-      orders.set(order.key, fill);
-      return fill;
-    },
-    async exit(order) {
-      if (orders.has(order.key)) return orders.get(order.key)!;
-      const charges = rupees(optionCharges("SELL", paise(order.price), order.quantity).total);
-      const fill: Fill = { status: "FILLED", quantity: order.quantity, price: order.price, charges };
-      cash += order.price * order.quantity - charges;
-      orders.set(order.key, fill);
-      return fill;
-    },
-    lookup: async (key) => orders.get(key) ?? null,
-  };
+  // Premiums from the listed contracts' own 1-minute history.
+  return createReplayAdapter({
+    candles: input.candles, chain: input.chain, config: input.config, capital: input.capital,
+    tapeOf: (contract) => sessionTape({ underlying: contract.underlying, name: contract.underlying, expiry: contract.expiry, strike: contract.strike, right: contract.right, securityId: contract.securityId, kind: input.chain.kind, lotSize: contract.lotSize }, input.date, new Date()),
+  });
 }
 
 /* ---------------- view ---------------- */
@@ -686,34 +621,58 @@ export async function tickAllSessions() {
  * real 1-minute premiums and a virtual account. Nothing is stored and no order goes anywhere. Used by the
  * quick backtest (stored for its log) and the multi-day backtest (returned only).
  */
-async function simulateDay(sessionId: string, date: string, config: AlgoConfig) {
+/**
+ * One past session simulated with the strategy engine on a virtual account. With `historical`, an index's
+ * options are priced from the expired weekly contracts' own history (the contract that was really the
+ * nearest that day); without it, or when that history is not published yet (the latest sessions), from the
+ * nearest still-listed contract, which is said in the result.
+ */
+async function simulateDay(sessionId: string, date: string, config: AlgoConfig, options: { capital?: number; historical?: boolean } = {}) {
   const data = await getS1Data(config.underlying, date);
   if (!data.previous) throw new AppError(data.message || "No strategy levels for that date.", 409, "NO_LEVELS");
   const candles = await dayTape(config.underlying, date);
   if (!candles.length) throw new AppError(`No 1-minute candles for ${config.underlying} on ${date} (a holiday or no data).`, 409, "NO_CANDLES");
-  const chain = await runChain(config, date);
-  const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain, config, capital: rupees(ALGO_STARTING_CAPITAL_PAISE) });
-  if (adapter.kind !== "replay") throw new AppError("Replay must use the replay adapter.", 500);
+  const listed = await runChain(config, date);
+  const capital = options.capital ?? rupees(ALGO_STARTING_CAPITAL_PAISE);
   const lines = strategyLines(data, config.custom);
-  let state: AlgoState = { ...initialState(date), running: true, entries: true };
-  const events: AlgoEvent[] = [{ key: "start", time: candles[0].time, kind: "INFO", message: `Replay of ${date} with expiry ${chain.expiry} (the nearest still-listed expiry; expired contracts cannot be replayed). Premiums: real 1-minute option candles. Virtual account; no orders are sent anywhere.` }];
-  for (const candle of candles) {
-    const clock = candle.time + 60;
-    adapter.setClock(clock);
-    const result = await advance(state, { sessionId, sessionDate: date, config, candles, lines, now: clock, adapter });
-    state = result.state;
-    events.push(...result.events);
-    // Like chart replay: the session stops once its trades are all done, or once the entry window has
-    // closed with nothing open (no later candle can enter).
-    if (sessionComplete(state, config.stopAtLimit === false ? Infinity : config.maxTrades)) break;
-    if (!state.position && !state.pending && new Date((clock + 19_800) * 1000).toISOString().slice(11, 16) > config.entryCutoff) break;
+  const expired = options.historical ? await expiredSession(config.underlying, date) : null;
+  if (expired && listed.lotSize) {
+    const chain = expiredChain({ symbol: listed.symbol, date, expiry: expired.expiry, lotSize: listed.lotSize, tapes: expired.tapes });
+    const adapter = createReplayAdapter({ candles, chain, config, capital, tapeOf: async (contract) => expiredTape(expired.tapes, contract.securityId) });
+    const { events, state } = await simulateSession({ sessionId, date, config, candles, lines, adapter, startNote: `Backtest of ${date}: the nearest weekly expiry that day (${expired.expiry ?? "after the tested range"}), real 1-minute premiums from the expired contracts' history; lot size ${listed.lotSize} (today's). Virtual account; no orders are sent anywhere.` });
+    return { events, state, expiry: expired.expiry, source: "expired" as const, candles, lines };
   }
-  if (state.position) {
-    const last = candles.at(-1)!.time + 60;
-    const mark = await adapter.mark(state.position.contract, last);
-    await startExit(state, { sessionId, sessionDate: date, config, candles, lines, now: last, adapter }, "SESSION_END", mark ? { price: mark.bid ?? state.position.avg, note: "Closed at the end of the replayed session." } : null, (event) => events.push({ time: last, ...event }));
+  const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain: listed, config, capital });
+  if (adapter.kind !== "replay") throw new AppError("Replay must use the replay adapter.", 500);
+  const { events, state } = await simulateSession({ sessionId, date, config, candles, lines, adapter, startNote: `Replay of ${date} with expiry ${listed.expiry} (the nearest still-listed expiry; expired contracts cannot be replayed). Premiums: real 1-minute option candles. Virtual account; no orders are sent anywhere.` });
+  return { events, state, expiry: listed.expiry, source: "listed" as const, candles, lines };
+}
+
+const expiredSessions = new Map<string, Promise<{ tapes: Map<string, Candle[]>; expiry: string | null } | null>>();
+
+/**
+ * A past day's expired weekly option tapes for an index (null for a stock, or when Dhan has no history for
+ * that day yet), and that day's expiry, found from the following days' at-the-money premiums.
+ */
+function expiredSession(underlying: string, date: string) {
+  const key = `${underlying}|${date}`;
+  if (!expiredSessions.has(key)) {
+    if (expiredSessions.size > 60) expiredSessions.delete(expiredSessions.keys().next().value as string);
+    expiredSessions.set(key, (async () => {
+      const index = findIndex(underlying);
+      if (!index) return null;
+      const next = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+      const tapes = (await dhanExpiredOptions(Number(index.id), date, next(date, 1))).get(date);
+      if (!tapes?.size) return null;
+      // The expiry: the first day from this one whose at-the-money options end with no time value.
+      const window = await dhanExpiredOptions(Number(index.id), date, next(date, 10), ["ATM"]).catch(() => null);
+      return { tapes, expiry: window ? weeklyExpiries(window).get(date) ?? null : null };
+    })().catch((error) => {
+      expiredSessions.delete(key);
+      throw error;
+    }));
   }
-  return { events, state, expiry: chain.expiry };
+  return expiredSessions.get(key)!;
 }
 
 async function runReplay(user: SessionUser, sessionId: string, date: string) {
@@ -733,7 +692,7 @@ async function runReplay(user: SessionUser, sessionId: string, date: string) {
  * settings with every entry filter and the structure stop off ("baseline") to compare. Read-only: nothing
  * is written and no order is placed anywhere.
  */
-export async function backtestDay(user: SessionUser, date: string, variant: string, strategy: AlgoStrategy = "EXISTING_ALGO") {
+export async function backtestDay(user: SessionUser, date: string, variant: string, strategy: AlgoStrategy = "EXISTING_ALGO", capital = rupees(ALGO_STARTING_CAPITAL_PAISE), slippageTicks?: number) {
   assertAllowed(user);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayIst()) throw new AppError("Choose a past trading date.", 400);
   const session = await loadSession(user.id);
@@ -745,15 +704,18 @@ export async function backtestDay(user: SessionUser, date: string, variant: stri
   const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false }
     : score ? { ...saved, minScore: Math.min(100, Number(score[1])) }
     : confirm ? { ...saved, filters: { ...saved.filters, secondCandle: false }, confirmation: { ...saved.confirmation, mode: confirm[1] as "single" | "hold" | "retest" } }
-    : saved;
+    : { ...saved };
+  if (slippageTicks != null) config.slippageTicks = slippageTicks;
   const problems = algoConfigProblems(config);
   if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
   try {
-    const { events, expiry } = await simulateDay(session.id, date, config);
-    const trades = algoTrades(events, null);
-    // The planned risk of each entry (risk sizing), in entry order, for results in R (multiples of risk).
-    const risks = events.filter((event) => event.kind === "ENTRY").map((event) => event.setup?.risk ?? null);
-    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade, index) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized, gross: trade.gross, adverse: trade.adverse, risk: risks[index] ?? null })), rejected: skippedSignals(events).length, dailyTarget: config.risk.dailyTarget };
+    const { events, expiry, source, candles, lines } = await simulateDay(session.id, date, config, { capital, historical: true });
+    const notes = source === "listed" ? [`No expired-option history for ${date} yet: priced on the nearest still-listed contract (${expiry}).`] : [];
+    return {
+      date, variant, ok: true as const, expiry, stats: runStats(events), trades: backtestTrades(events, expiry), rejected: skippedSignals(events).length, dailyTarget: config.risk.dailyTarget,
+      capital, source, notes, missed: missedSignals(events, candles),
+      session: { candles: candles.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })), lines: lines.map((line) => ({ label: line.label, price: line.price })) },
+    };
   } catch (error) {
     // A day without data (a holiday, missing history) is reported, not fatal.
     return { date, variant, ok: false as const, reason: error instanceof Error ? error.message : "This day could not be simulated." };
@@ -1126,6 +1088,51 @@ async function archiveRun(user: SessionUser, run: Prisma.AlgoRunGetPayload<objec
   }, [...events, { key: `archived:${now}`, time: run.processedThrough, kind: "INFO", message }]);
   // The next session starts on a fresh ₹1,00,000 period (an unresolved position stays with this one).
   if (wallet === "ALGO" && reason !== "COMPLETED") await startAlgoPeriod(user.id, `Algo replay session ${run.replaySession} ended (${reason}).`).catch(() => undefined);
+}
+
+/**
+ * Saved backtests (the user's own only): save one run's days (every total is recomputed here from them, with
+ * the saved strategy settings and the data coverage), list them, open one, delete one. Separate from replay
+ * runs and from every ledger: nothing here places or records an order.
+ */
+export async function backtestRecords(user: SessionUser, command: Extract<AlgoRequest, { action: "backtestSave" | "backtestList" | "backtestGet" | "backtestDelete" }>) {
+  assertAllowed(user);
+  const session = await loadSession(user.id);
+  if (command.action === "backtestList") {
+    const rows = await prisma.algoBacktest.findMany({ where: { sessionId: session.id }, orderBy: { createdAt: "desc" }, take: 30, select: { id: true, strategy: true, strategyVersion: true, fromDate: true, toDate: true, underlying: true, capital: true, mode: true, status: true, summary: true, warnings: true, createdAt: true } });
+    return { backtests: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })) };
+  }
+  if (command.action === "backtestGet") {
+    const row = await prisma.algoBacktest.findFirst({ where: { id: command.id, sessionId: session.id } });
+    if (!row) throw new AppError("That backtest was not found.", 404);
+    return { backtest: { ...row, createdAt: row.createdAt.toISOString() } };
+  }
+  if (command.action === "backtestDelete") {
+    await prisma.algoBacktest.deleteMany({ where: { id: command.id, sessionId: session.id } });
+    return { ok: true };
+  }
+  const strategy = command.strategy ?? "EXISTING_ALGO";
+  const settings = configFor(session, strategy);
+  const runs = command.runs as Partial<Record<"daily" | "continuous", BacktestDay[]>>;
+  const days = runs.daily ?? runs.continuous ?? [];
+  const priced = days.filter((day) => day.ok);
+  const coverage = {
+    sessions: days.length, simulated: priced.length, skipped: days.filter((day) => !day.ok).map((day) => ({ date: day.date, reason: day.ok ? "" : day.reason })),
+    expiredHistory: priced.filter((day) => day.ok && day.source === "expired").length, listedFallback: priced.filter((day) => day.ok && day.source === "listed").map((day) => day.date),
+  };
+  const warnings = [
+    ...coverage.skipped.map((item) => `${item.date}: not simulated — ${item.reason}`),
+    ...coverage.listedFallback.map((date) => `${date}: no expired-option history yet; priced on the nearest still-listed contract.`),
+  ];
+  const summary = Object.fromEntries(Object.entries(runs).map(([mode, list]) => [mode, backtestTotals(list ?? [])]));
+  const row = await prisma.algoBacktest.create({
+    data: {
+      sessionId: session.id, strategy, strategyVersion: settings.settingsVersion, fromDate: command.from, toDate: command.to, underlying: settings.underlying, interval: "1m",
+      capital: command.capital, mode: command.mode, settings: settings as unknown as Prisma.InputJsonValue, costs: { slippageTicks: command.slippageTicks, charges: "Option charges as on the ledger (brokerage, STT, exchange, SEBI, stamp duty, GST)" },
+      coverage: coverage as unknown as Prisma.InputJsonValue, warnings, status: command.status, summary: summary as unknown as Prisma.InputJsonValue, days: runs as unknown as Prisma.InputJsonValue,
+    },
+  });
+  return { id: row.id };
 }
 
 /** Home → Algo History: every archived (and the running) replay session, newest first. Read-only. */

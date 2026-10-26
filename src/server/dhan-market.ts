@@ -7,6 +7,7 @@ import { daysBefore, intradayEnds } from "@/lib/market/dhan-ranges";
 import { classifyProviderFailure, timeoutFailure, withRetries, type ProviderFailure } from "@/lib/market/provider-errors";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
+import { mergeRolling, rollingRequest, ROLLING_OFFSETS, type ExpiredTapes, type RollingSide } from "@/lib/algo/expired-options";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
 import { getDhanAccessToken, getDhanClientId } from "@/server/settings";
 import { aggregateCount, aggregateMinutes, aggregatePeriod, type ChartSpan } from "@/lib/market/spans";
@@ -592,4 +593,29 @@ export function rankFeed(items: Array<{ symbol: string; name: string; id: string
       volume: row.volume != null && Number.isFinite(row.volume) ? row.volume : null,
     }];
   });
+}
+
+/**
+ * Expired weekly index-option premiums for [from, to) (YYYY-MM-DD), regrouped into each strike's own
+ * 1-minute tape per day (see lib/algo/expired-options): every requested offset from ATM, calls and puts,
+ * a few requests at a time for the data API's rate limit. Offsets with no history are skipped; if every
+ * request fails, the first failure is raised (an expired or missing token, no data permission).
+ */
+export async function dhanExpiredOptions(underlyingId: number, from: string, to: string, offsets: string[] = ROLLING_OFFSETS): Promise<ExpiredTapes> {
+  const jobs = offsets.flatMap((offset) => (["CALL", "PUT"] as const).map((side) => ({ offset, side })));
+  const responses: Array<{ side: RollingSide; data: unknown }> = [];
+  let failure: unknown = null;
+  for (let index = 0; index < jobs.length; index += 4) {
+    const batch = await Promise.all(jobs.slice(index, index + 4).map(async (job) => {
+      try {
+        return { side: job.side, data: await dhanPost("/charts/rollingoption", rollingRequest({ underlyingSecurityId: underlyingId, offset: job.offset, side: job.side, from, to })) as unknown };
+      } catch (error) {
+        failure ??= error;
+        return null;
+      }
+    }));
+    for (const item of batch) if (item) responses.push(item);
+  }
+  if (!responses.length && failure) throw failure;
+  return mergeRolling(responses);
 }

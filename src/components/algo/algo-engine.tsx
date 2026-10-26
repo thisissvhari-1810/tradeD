@@ -162,7 +162,7 @@ export function MathiStatus({ state, config, mode, now, signal: latest = null }:
         <Cell label="Trades" value={`${trades}/${config.maxTrades}`} tone={trades >= config.maxTrades ? "text-warning" : undefined} />
         <Cell label="Position" value={state?.position ? `Open · ${state.position.side === "CALL" ? "ATM CE" : "ATM PE"}` : "None"} />
         <Cell label="Target" value={`Entry premium +${config.target.value}%`} />
-        <Cell label="Stop-loss" value={config.stopLoss === false ? "None" : "On"} />
+        <Cell label="Stop-loss" value={config.stopLoss !== false ? "On" : config.structureStop ? "Line close-back" : "None"} />
         <Cell label="Confirmation" value={{ single: "Single candle", hold: "Breakout hold", retest: "Retest" }[confirmationMode(config)]} />
         <Cell label="Entry" value={blocked ? `Blocked — ${blocked}` : "Enabled"} tone={blocked ? "text-warning" : "text-profit"} />
       </dl>

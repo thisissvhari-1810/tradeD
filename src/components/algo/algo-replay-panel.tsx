@@ -342,7 +342,7 @@ function TradeCard({ trade, max, position, confirmations, stale, selected, onOpe
         <span className="inline-flex items-center gap-1 text-xs font-semibold"><CircleDot className={cx("h-3 w-3", trade.status === "OPEN" ? "text-profit" : "text-warning")} aria-hidden />{trade.status === "OPEN" ? "OPEN" : "EXIT PENDING"}</span>
       </div>
       {confirmations?.some((item) => item.status === "SETUP INVALIDATED") ? (
-        <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-xs font-semibold text-warning" role="alert">SETUP INVALIDATED — POSITION STILL OPEN. {confirmations.find((item) => item.status === "SETUP INVALIDATED")?.why} There is no stop-loss: the trade stays open for its +target until you exit it.</p>
+        <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-xs font-semibold text-warning" role="alert">SETUP INVALIDATED — POSITION STILL OPEN. {confirmations.find((item) => item.status === "SETUP INVALIDATED")?.why} There is no stop-loss and the line exit is off: the trade stays open for its +target until you exit it.</p>
       ) : null}
       <p className="text-sm text-text-2">{trade.underlying} {trade.strike} {trade.right} · {trade.expiry}</p>
       <p className="text-xs text-muted">{STRATEGY_LABEL[trade.strategy]}{trade.strategies.length > 1 ? ` (+ ${trade.strategies.slice(1).map((id) => STRATEGY_LABEL[id]).join(", ")})` : ""}</p>
@@ -565,7 +565,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Algo account equity", data.account.equity],
     ["Quantity", config.sizing === "capital" ? `Whole lots for up to ${config.allocation.percent}% of ₹${config.allocation.maxCapital.toLocaleString("en-IN")} (max ${config.lots})` : config.sizing === "risk" ? `Sized to ₹${Math.round(config.risk.capital * config.risk.perTradePercent) / 100} risk (max ${config.lots} lots)` : `${config.lots} lot${config.lots === 1 ? "" : "s"} (ATM CALL / PUT)`],
     ["Target", config.target.mode === "percent" ? `${config.target.value}% of the option premium` : `₹${config.target.value} above entry`],
-    ["Stop-loss", config.stopLoss === false ? "None" : config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
+    ["Stop-loss", config.stopLoss === false ? (config.structureStop ? "None on the premium; exit when NIFTY closes back through the line" : "None") : config.stop.mode === "percent" ? `${config.stop.value}% of premium` : `₹${config.stop.value} below entry`],
     ["Max trades", `${config.maxTrades} per session`],
     ["Max daily loss", inr(config.maxDailyLoss)],
     ["Cooldown", `${config.cooldownMinutes} min`],
@@ -584,7 +584,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   const blocked = lock.owner !== "NONE" && lock.owner !== strategy && lock.activity && (lock.activity.running || lock.activity.position || lock.activity.pending) ? blockedMessage(lock.owner, strategy, lock.activity) : null;
   return (
     <Dialog title="Start Algo Trading Replay?" onClose={onCancel}>
-      <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. {config.stopLoss === false ? `The +${config.target.value}% premium target is monitored throughout the replay; there is no stop-loss.` : "Stop-loss and target rules will be monitored throughout the replay."}</p>
+      <p className="text-micro text-text-2">The strategy will monitor completed 1-minute candles and may automatically open ATM CALL or PUT demo positions when valid signals occur. {config.stopLoss === false ? `The +${config.target.value}% premium target is monitored throughout the replay; ${config.structureStop ? "the trade exits if NIFTY closes back through the broken line" : "there is no stop-loss"}.` : "Stop-loss and target rules will be monitored throughout the replay."}</p>
       <p className="mt-2 text-xs font-semibold text-text">{STRATEGY_NAME[strategy]}</p>
       {blocked ? <p className="mt-2 rounded-md bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{blocked}</p> : null}
       {unsaved ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">The Algo settings in the Strategy panel have unsaved changes. The replay uses the saved settings shown below: press Save settings there first to use your changes.</p> : null}

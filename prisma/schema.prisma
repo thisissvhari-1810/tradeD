@@ -1131,6 +1131,34 @@ model AlgoSession {
   updatedAt   DateTime    @updatedAt
   events      AlgoEvent[]
   runs        AlgoRun[]
+  backtests   AlgoBacktest[]
+}
+
+/// A saved multi-day backtest (simulated on historical data; never orders, never the ledger): its settings,
+/// cost assumptions and data coverage, and every day's result and trade, so it can be reopened and audited.
+model AlgoBacktest {
+  id              String      @id @default(cuid())
+  sessionId       String
+  session         AlgoSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  strategy        String
+  strategyVersion Int
+  fromDate        String
+  toDate          String
+  underlying      String
+  interval        String
+  /// Starting capital (₹) and "daily" (each day starts with it) or "continuous" (P&L carries forward).
+  capital         Float
+  mode            String
+  settings        Json
+  costs           Json
+  coverage        Json
+  warnings        Json
+  status          String
+  summary         Json
+  days            Json
+  createdAt       DateTime    @default(now())
+
+  @@index([sessionId, createdAt])
 }
 
 /// One Algo run inside the chart's historical replay (one per option replay session). Its orders are on

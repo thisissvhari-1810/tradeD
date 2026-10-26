@@ -1,5 +1,7 @@
-import type { RunStats } from "./chart-replay";
+import { algoTrades, skippedSignals, type RunStats } from "./chart-replay";
 import { csvCell } from "./report";
+import type { AlgoEvent } from "./runner";
+import type { Candle } from "./lines";
 
 /**
  * Multi-day backtest arithmetic: the days to run, the totals across them and the chronological training /
@@ -8,12 +10,89 @@ import { csvCell } from "./report";
  * (a holiday, missing history) are counted as skipped, never as zero-P&L days.
  */
 
-export type BacktestTrade = { number: number; side: "CALL" | "PUT"; strategy: string; entryTime: number; entryPremium: number; exitTime: number | null; exitPremium: number | null; exitReason: string | null; realized: number | null; risk?: number | null; gross?: number | null; adverse?: number | null };
-/** "saved", "baseline" (entry filters and structure stop off) or "score:NN" (another minimum score). */
+export type BacktestTrade = {
+  number: number; side: "CALL" | "PUT"; strategy: string; entryTime: number; entryPremium: number; exitTime: number | null; exitPremium: number | null; exitReason: string | null; realized: number | null;
+  risk?: number | null; gross?: number | null; adverse?: number | null;
+  /** Largest rise of the premium above the entry while open, per unit. */
+  favorable?: number | null;
+  contract?: string; expiry?: string | null; lotSize?: number | null; quantity?: number; target?: number | null; stop?: number | null;
+  /** Entry and exit charges, ₹. */
+  charges?: number;
+  /** The lines crossed and the candle that signalled (its open time), and the reason logged at the entry. */
+  lines?: string[]; signalTime?: number; reason?: string;
+};
+/** A signal that did not become a trade, and how the underlying moved in the window after it. */
+export type MissedSignal = { time: number; side: "CALL" | "PUT" | null; reason: string; lines: string[]; close: number | null; move: number | null; windowMinutes: number };
+/** "saved", "baseline" (entry filters and structure stop off), "score:NN" or "confirm:MODE". */
 export type BacktestVariant = string;
 export type BacktestDay =
-  | { date: string; variant: BacktestVariant; ok: true; expiry: string | null; stats: RunStats; trades: BacktestTrade[]; rejected: number; dailyTarget?: number }
+  | {
+    date: string; variant: BacktestVariant; ok: true; expiry: string | null; stats: RunStats; trades: BacktestTrade[]; rejected: number; dailyTarget?: number;
+    /** The starting capital of the day's virtual account (₹). */
+    capital?: number;
+    /** Where the premiums came from: the expired weekly contracts' history, or a still-listed contract's. */
+    source?: "expired" | "listed";
+    missed?: MissedSignal[];
+    notes?: string[];
+    /** For the day view (not stored): the underlying's candles and the strategy lines. */
+    session?: { candles: Candle[]; lines: Array<{ label: string; price: number }> };
+  }
   | { date: string; variant: BacktestVariant; ok: false; reason: string };
+
+/** One backtested session's trades, with everything about each one (from the run's own log). */
+export function backtestTrades(events: AlgoEvent[], expiry: string | null): BacktestTrade[] {
+  const risks = events.filter((event) => event.kind === "ENTRY").map((event) => event.setup?.risk ?? null);
+  return algoTrades(events, null).map((trade, index) => {
+    const entry = events.find((event) => event.kind === "ENTRY" && event.order?.key === trade.entryKey);
+    const decided = entry ? events.find((event) => event.key === `eval:${entry.time}`)?.message ?? "" : "";
+    return {
+      number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium,
+      exitReason: trade.exitReason, realized: trade.realized, gross: trade.gross, adverse: trade.adverse, favorable: trade.favorable, risk: risks[index] ?? null,
+      contract: `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`.trim(), expiry, lotSize: trade.lotSize, quantity: trade.quantity, target: trade.target, stop: trade.stop,
+      charges: Math.round((trade.entryCharges + trade.exitCharges) * 100) / 100, lines: trade.lines, signalTime: trade.signalTime, reason: decided,
+    };
+  });
+}
+
+/** Signals that were not traded, with the underlying's move over the next `windowMinutes` (from completed candles). */
+export function missedSignals(events: AlgoEvent[], candles: Candle[], windowMinutes = 15): MissedSignal[] {
+  return skippedSignals(events).map((item) => {
+    const at = candles.find((candle) => candle.time + 60 === item.time) ?? null;
+    const later = candles.find((candle) => candle.time + 60 === item.time + windowMinutes * 60) ?? candles.at(-1) ?? null;
+    return { time: item.time, side: item.side, reason: item.reason, lines: item.lines, close: at?.close ?? null, move: at && later && later.time > at.time ? Math.round((later.close - at.close) * 100) / 100 : null, windowMinutes };
+  }).sort((a, b) => a.time - b.time);
+}
+
+export type DaySummary = {
+  date: string; capital: number; trades: number; calls: number; puts: number; wins: number; losses: number; winRate: number | null;
+  grossProfit: number; grossLoss: number; charges: number; net: number; returnPercent: number; endCapital: number;
+  best: number | null; worst: number | null; drawdown: number; missed: number; falseBreakouts: number;
+};
+
+/** One day's figures from its trades (win rate over closed trades; return against the day's starting capital). */
+export function daySummary(day: Extract<BacktestDay, { ok: true }>, fallbackCapital: number): DaySummary {
+  const capital = day.capital ?? fallbackCapital;
+  const closed = day.trades.filter((trade) => trade.realized != null);
+  const wins = closed.filter((trade) => trade.realized! > 0);
+  const losses = closed.filter((trade) => trade.realized! < 0);
+  let running = 0;
+  let peak = 0;
+  let drawdown = 0;
+  for (const trade of [...closed].sort((a, b) => a.entryTime - b.entryTime)) {
+    running += trade.realized!;
+    peak = Math.max(peak, running);
+    drawdown = Math.max(drawdown, peak - running);
+  }
+  const net = round(closed.reduce((sum, trade) => sum + trade.realized!, 0));
+  return {
+    date: day.date, capital, trades: day.trades.length, calls: day.trades.filter((trade) => trade.side === "CALL").length, puts: day.trades.filter((trade) => trade.side === "PUT").length,
+    wins: wins.length, losses: losses.length, winRate: closed.length ? round((wins.length / closed.length) * 100) : null,
+    grossProfit: round(wins.reduce((sum, trade) => sum + trade.realized!, 0)), grossLoss: round(losses.reduce((sum, trade) => sum + trade.realized!, 0)),
+    charges: round(day.trades.reduce((sum, trade) => sum + (trade.charges ?? 0), 0)), net, returnPercent: capital ? round((net / capital) * 100) : 0, endCapital: round(capital + net),
+    best: closed.length ? Math.max(...closed.map((trade) => trade.realized!)) : null, worst: closed.length ? Math.min(...closed.map((trade) => trade.realized!)) : null,
+    drawdown: round(drawdown), missed: day.missed?.length ?? day.rejected, falseBreakouts: day.stats.falseBreakouts ?? 0,
+  };
+}
 
 export const CONFIRMATION_SHORT = { single: "single candle", hold: "breakout hold", retest: "retest" } as const;
 
@@ -92,6 +171,15 @@ export type BacktestTotals = {
   /** Largest adverse premium move of any trade, per unit, and the average across trades. */
   worstAdverse: number | null;
   averageAdverse: number | null;
+  /** Longest run of winning trades, in time order. */
+  maxConsecutiveWins: number;
+  /** Sum of the winning trades and of the losing trades (net of charges), ₹. */
+  grossProfit: number;
+  grossLossTotal: number;
+  /** Entry and exit charges of every trade, ₹. */
+  charges: number;
+  /** CALL and PUT trades separately. */
+  sides: Record<"CALL" | "PUT", { trades: number; wins: number; losses: number; pnl: number }>;
 };
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -107,6 +195,8 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
   let grossLoss = 0;
   let streak = 0;
   let maxConsecutiveLosses = 0;
+  let winStreak = 0;
+  let maxConsecutiveWins = 0;
   const winners: number[] = [];
   const losers: number[] = [];
   const multiples: number[] = [];
@@ -122,7 +212,10 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
         grossWin += result;
         winners.push(result);
         streak = 0;
+        winStreak += 1;
+        maxConsecutiveWins = Math.max(maxConsecutiveWins, winStreak);
       } else {
+        winStreak = 0;
         grossLoss -= result;
         if (trade.realized != null) losers.push(result);
         streak += 1;
@@ -172,6 +265,14 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
     gross: round(all.reduce((sum, trade) => sum + (trade.gross ?? 0), 0)),
     worstAdverse: adverse.length ? Math.max(...adverse) : null,
     averageAdverse: average(adverse),
+    maxConsecutiveWins,
+    grossProfit: round(grossWin),
+    grossLossTotal: round(-grossLoss),
+    charges: round(all.reduce((sum, trade) => sum + (trade.charges ?? 0), 0)),
+    sides: Object.fromEntries((["CALL", "PUT"] as const).map((side) => {
+      const list = all.filter((trade) => trade.side === side);
+      return [side, { trades: list.length, wins: list.filter((trade) => (trade.realized ?? 0) > 0).length, losses: list.filter((trade) => (trade.realized ?? 0) < 0).length, pnl: round(list.reduce((sum, trade) => sum + (trade.realized ?? 0), 0)) }];
+    })) as BacktestTotals["sides"],
   };
 }
 

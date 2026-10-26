@@ -1406,7 +1406,13 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
 
   it("old saved Mathi settings move once to the line-breakout version (3% target, no stop-loss); later choices are kept", () => {
     const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2, filters: { secondCandle: true, momentum: true } });
-    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 50, 3]);
+    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, true, "body", 50, 3]);
+    // Version 12 turns the line exit and the 9 / 21 EMA trend filter on once; a choice saved since is kept.
+    const v11 = readAlgoConfig({ settingsVersion: 11, structureStop: false, filters: { momentum: false } });
+    expect([v11.structureStop, v11.filters.momentum]).toEqual([true, true]);
+    const v12 = readAlgoConfig({ settingsVersion: 12, structureStop: false, filters: { momentum: false } });
+    expect([v12.structureStop, v12.filters.momentum]).toEqual([false, false]);
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 11, structureStop: false, filters: { momentum: false } })).toMatchObject({ structureStop: false, filters: { momentum: false } });
     // A saved "any crossing" (version 9) moves once to 50% of the body; a share chosen later is kept.
     expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 0 }).crossPercent).toBe(50);
     expect(readAlgoConfig({ settingsVersion: 10, crossPercent: 30 }).crossPercent).toBe(30);
@@ -1631,6 +1637,8 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
   // Full-capital sizing (the default); the daily-target stop is off here so all three entries can be shown —
   // at full capital two +3% winners already pass the ₹3,000 daily target (its own test below).
   const mathi: AlgoConfig = { ...ALGO_DEFAULTS, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
+  // The version 11 behaviour: no exit when the index closes back through the line.
+  const noLineExit: AlgoConfig = { ...mathi, structureStop: false };
   /** Flat closes at `base` off the line; `moves` sets a candle's open and close (index → [open, close]). */
   function path(moves: Record<number, [number, number]>, base: (index: number) => number): Candle[] {
     const candles: Candle[] = [];
@@ -1957,7 +1965,17 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(runStats(result.events).expired).toBe(1);
     });
 
-    it("an open trade whose setup is invalidated stays open (no stop-loss) and records its maximum adverse premium move", async () => {
+    it("with the line exit on (the default), a trade whose setup is invalidated exits on that close", async () => {
+      expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.filters.momentum]).toEqual([true, true]);
+      feed.premiums = premiums((index) => (index === 10 ? { low: 95, high: 100.5, close: 97 } : index === 12 ? { low: 99.5, high: 104, close: 100 } : null));
+      const result = await run(oct22Candles(), { cursor: m(12), config: mathi });
+      const exit = result.events.find((event) => event.kind === "EXIT")!;
+      expect(exit.message).toMatch(/^Exit \(STRUCTURE\)/);
+      expect(algoTrades(result.events, null)[0].exitReason).toBe("Setup invalidated");
+    });
+
+    it("with the line exit off, an open trade whose setup is invalidated stays open (no stop-loss) and records its maximum adverse premium move", async () => {
+      const mathi = { ...noLineExit };
       // Enters on the 09:24 candle (single), the premium dips to 95 at 10 and reaches the target at 12.
       feed.premiums = premiums((index) => (index === 10 ? { low: 95, high: 100.5, close: 97 } : index === 12 ? { low: 99.5, high: 104, close: 100 } : null));
       const result = await run(oct22Candles(), { cursor: m(12), config: mathi });
@@ -1974,6 +1992,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     });
 
     it("a trade without an exit is never reported Completed: Open, or OPEN AT REPLAY END once the session ended", async () => {
+      const mathi = { ...noLineExit };
       feed.premiums = premiums((index) => (index >= 10 ? { low: 80, high: 90, close: 85 } : null));
       const result = await run(oct22Candles(), { cursor: m(30), config: mathi });
       const { tradeRecord, tradeStatusLabel } = await import("../src/lib/algo/report");

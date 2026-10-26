@@ -48,6 +48,10 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Version 11: Mathi Strategy confirms a breakout before entering (the next candle must hold beyond the line);
   // saved Mathi settings move to that once. Algo - Primary Strategy keeps its own engine's confirmation.
   const v11 = num(row.settingsVersion) >= 11;
+  // Version 12: Mathi Strategy exits when the index closes back through the broken line and needs the 9 / 21 EMA
+  // trend to agree (the month's backtest: the one unprotected loss was a counter-trend breakout that failed);
+  // saved Mathi settings move to both once.
+  const v12 = num(row.settingsVersion) >= 12 || !mathi;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -86,8 +90,8 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
-    filters: v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters },
-    structureStop: v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    filters: ((filters) => (v12 ? filters : { ...filters, momentum: true }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
+    structureStop: !v12 ? true : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
     crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
     crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
     stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,

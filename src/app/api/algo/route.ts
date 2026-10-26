@@ -2,7 +2,7 @@ import { readJson } from "@/lib/http";
 import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
 import { mutation, query } from "@/server/http";
-import { algoCommand, algoHistory, algoReport, algoView, backtestDay, marketPlan } from "@/server/algo";
+import { algoCommand, algoHistory, algoReport, algoView, backtestDay, backtestRecords, marketPlan } from "@/server/algo";
 import { ALGO_SESSION_ID, algoRequest } from "@/lib/algo/request";
 
 /** The Strategy Algo of the signed-in user: settings, state, position and signal log. */
@@ -36,7 +36,11 @@ export const POST = mutation(async (request) => {
   else if (input.action === "chartStep") rateLimit(`algo:step:${user.id}`, 240, 60_000);
   else if (input.action === "backtestDay") {
     rateLimit(`algo:backtest:${user.id}`, 90, 60_000);
-    return Response.json(await backtestDay(user, input.date, input.variant, input.strategy));
+    return Response.json(await backtestDay(user, input.date, input.variant, input.strategy, input.capital, input.slippageTicks));
+  }
+  else if (input.action === "backtestSave" || input.action === "backtestList" || input.action === "backtestGet" || input.action === "backtestDelete") {
+    rateLimit(`algo:backtests:${user.id}`, 30, 60_000);
+    return Response.json(await backtestRecords(user, input));
   }
   else if (input.action === "replay") rateLimit(`algo:replay:${user.id}`, 6, 60_000);
   else rateLimit(`algo:command:${user.id}`, 30, 60_000);

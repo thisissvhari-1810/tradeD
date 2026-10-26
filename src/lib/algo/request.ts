@@ -28,5 +28,16 @@ export const algoRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("chartReset"), session }).strict(),
   z.object({ action: z.literal("chartFinalize"), session }).strict(),
   z.object({ action: z.literal("stopStrategy"), strategy, exit: z.boolean() }).strict(),
-  z.object({ action: z.literal("backtestDay"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), variant: z.union([z.enum(["saved", "baseline"]), z.string().regex(/^(score:\d{1,3}|confirm:(single|hold|retest))$/)]), strategy: strategy.optional() }).strict(),
+  z.object({ action: z.literal("backtestDay"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), variant: z.union([z.enum(["saved", "baseline"]), z.string().regex(/^(score:\d{1,3}|confirm:(single|hold|retest))$/)]), strategy: strategy.optional(), capital: z.number().min(1_000).max(100_000_000).optional(), slippageTicks: z.number().int().min(0).max(20).optional() }).strict(),
+  // Saved backtests: the browser sends the days it ran; the server recomputes every total from them.
+  z.object({
+    action: z.literal("backtestSave"), strategy: strategy.optional(), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    capital: z.number().min(1_000).max(100_000_000), mode: z.enum(["daily", "continuous", "both"]), slippageTicks: z.number().int().min(0).max(20),
+    status: z.enum(["COMPLETED", "CANCELLED"]), runs: z.record(z.enum(["daily", "continuous"]), z.array(z.record(z.string(), z.unknown())).max(80)),
+  }).strict(),
+  z.object({ action: z.literal("backtestList") }).strict(),
+  z.object({ action: z.literal("backtestGet"), id: z.string().regex(/^[a-z0-9]{8,40}$/) }).strict(),
+  z.object({ action: z.literal("backtestDelete"), id: z.string().regex(/^[a-z0-9]{8,40}$/) }).strict(),
 ]);
+
+export type AlgoRequest = z.infer<typeof algoRequest>;

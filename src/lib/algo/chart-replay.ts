@@ -312,6 +312,8 @@ export type AlgoTrade = {
   confirmedAt: number | null;
   /** Largest fall of the premium below the entry while open, per unit (from the exit; null while open). */
   adverse: number | null;
+  /** Largest rise of the premium above the entry while open, per unit (from the exit; null while open). */
+  favorable: number | null;
   returnPercent: number | null;
   durationMinutes: number | null;
   /** Simulated charges of the entry fill and of the exit fills (₹). */
@@ -372,6 +374,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       realized: null,
       gross: null,
       adverse: null,
+      favorable: null,
       returnPercent: null,
       durationMinutes: null,
     });
@@ -392,6 +395,8 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       trade.exitCharges = Math.round(exits.reduce((sum, event) => sum + (event.order?.charges ?? 0), 0) * 100) / 100;
       const adverse = exits.map((event) => event.adverse).filter((value): value is number => value != null);
       trade.adverse = adverse.length ? Math.max(...adverse) : null;
+      const favorable = exits.map((event) => event.favorable).filter((value): value is number => value != null);
+      trade.favorable = favorable.length ? Math.max(...favorable) : null;
       if (sold >= trade.quantity) trade.status = "COMPLETED";
     }
     if (open && open.entryKey === trade.entryKey) trade.status = open.exitPending ? "EXIT_PENDING" : "OPEN";

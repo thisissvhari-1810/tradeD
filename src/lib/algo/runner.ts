@@ -121,7 +121,8 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   timeframe: "1m",
   expiry: "nearest",
   // Mathi Strategy: a line breakout buys as many whole ATM lots as the ₹1,00,000 capital pays for (up to
-  // 50 lots); +3% on the option premium; no stop-loss.
+  // 50 lots); +3% on the option premium; no premium stop-loss — the trade exits when the index closes back
+  // through the broken line, and only takes signals the 9 / 21 EMA trend agrees with.
   lots: 50,
   stop: { mode: "percent", value: 3 },
   target: { mode: "percent", value: 3 },
@@ -152,9 +153,9 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   observationMinutes: 0,
   engine: "existing",
   primary: PRIMARY_SETTINGS_DEFAULTS,
-  settingsVersion: 11,
-  filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
-  structureStop: false,
+  settingsVersion: 12,
+  filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: true },
+  structureStop: true,
   patterns: PATTERN_DEFAULTS,
   // Enter once 50% of the candle's body is past an enabled line.
   crossRule: "body",
@@ -226,6 +227,8 @@ export type OpenPosition = {
   setup?: TradeSetup;
   /** The lowest option premium seen while open (completed candle lows, or quotes): the maximum adverse move. */
   lowest?: number;
+  /** The highest option premium seen while open: the maximum favourable move. */
+  highest?: number;
 };
 
 export type PendingEntry = { key: string; contract: ContractRef; side: Side; lots: number; quantity: number; signalTime: number; lineIds: string[]; explanation: string; uncertain: boolean; wallet?: "ALGO"; setup?: TradeSetup; plan?: TradePlan | null };
@@ -321,6 +324,8 @@ export type AlgoEvent = {
   gross?: number;
   /** On exits: the largest fall of the premium below the entry while open, per unit (maximum adverse move). */
   adverse?: number;
+  /** On exits: the largest rise of the premium above the entry while open, per unit (maximum favourable move). */
+  favorable?: number;
   reasons?: string[];
   /** On entries: the strategy and the broken level the trade was taken on. */
   setup?: TradeSetup;
@@ -680,6 +685,8 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   }
   const seen = mark.candle ? mark.candle.low : mark.bid;
   if (seen != null) position.lowest = Math.min(position.lowest ?? position.avg, seen);
+  const best = mark.candle ? mark.candle.high : mark.bid;
+  if (best != null) position.highest = Math.max(position.highest ?? position.avg, best);
   const trigger = mark.candle ? candleExit(mark.candle, position.stop, position.target) : mark.bid != null ? quoteExit(mark.bid, position.stop, position.target) : null;
   if (trigger) {
     await startExit(state, input, trigger.reason, trigger, log);
@@ -786,7 +793,7 @@ function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, {
   position.entryCharges -= entryCharges;
   const key = position.exit?.key ?? `${position.entryKey}:exit:${position.exitAttempts}`;
   const message = `Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note.replace(/\.$/, "")}` : ""}. Realized ₹${pnl} (gross ₹${gross}, charges ₹${charges})${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
-  log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, gross, adverse: money(Math.max(0, position.avg - Math.min(position.lowest ?? position.avg, fill.price))), stop: position.stop, target: position.target });
+  log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, gross, adverse: money(Math.max(0, position.avg - Math.min(position.lowest ?? position.avg, fill.price))), favorable: money(Math.max(0, Math.max(position.highest ?? position.avg, fill.price) - position.avg)), stop: position.stop, target: position.target });
   state.lastOrder = { time: input.now, status: position.quantity > 0 ? "PARTIAL" : "COMPLETED", message };
   if (position.quantity > 0) {
     // Partially closed: the rest is exited again on the next check (a new key: the first exit is known).
