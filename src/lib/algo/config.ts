@@ -48,10 +48,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Version 11: Mathi Strategy confirms a breakout before entering (the next candle must hold beyond the line);
   // saved Mathi settings move to that once. Algo - Primary Strategy keeps its own engine's confirmation.
   const v11 = num(row.settingsVersion) >= 11;
-  // Version 12: Mathi Strategy exits when the index closes back through the broken line and needs the 9 / 21 EMA
-  // trend to agree (the month's backtest: the one unprotected loss was a counter-trend breakout that failed);
-  // saved Mathi settings move to both once.
-  const v12 = num(row.settingsVersion) >= 12 || !mathi;
+  // Version 13: Mathi Strategy's only change from version 11 is a 30-minute time limit on an open trade; the line
+  // exit and the 9 / 21 EMA filter (on by default in version 12) move back off once. Later choices are kept.
+  const v13 = num(row.settingsVersion) >= 13 || !mathi;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -90,8 +89,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
-    filters: ((filters) => (v12 ? filters : { ...filters, momentum: true }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
-    structureStop: !v12 ? true : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    filters: ((filters) => (v13 ? filters : { ...filters, momentum: false }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
+    structureStop: !v13 ? false : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? num(row.maxHoldMinutes) : ALGO_DEFAULTS.maxHoldMinutes,
     crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
     crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
     stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
@@ -230,6 +230,7 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (risky && config.maxDailyLoss > risk.capital) problems.push("The maximum daily loss cannot be more than the capital.");
   if (!(config.maxDailyLoss > 0)) problems.push("The maximum daily loss must be more than ₹0.");
   if (!Number.isInteger(config.maxTrades) || config.maxTrades < 1 || config.maxTrades > 50) problems.push("The trades-per-session limit must be 1 to 50.");
+  if (!Number.isInteger(config.maxHoldMinutes ?? 0) || (config.maxHoldMinutes ?? 0) < 0 || (config.maxHoldMinutes ?? 0) > 375) problems.push("The trade time limit must be 0 (off) to 375 minutes.");
   if (!Number.isInteger(config.cooldownMinutes) || config.cooldownMinutes < 0 || config.cooldownMinutes > 120) problems.push("The cooldown must be 0 to 120 minutes.");
   if (!(config.maxSpreadPercent > 0 && config.maxSpreadPercent <= 50)) problems.push("The maximum spread must be above 0% and at most 50%.");
   if (!(config.maxQuoteAgeSeconds >= 5 && config.maxQuoteAgeSeconds <= 600)) problems.push("The quote freshness limit must be 5 to 600 seconds.");

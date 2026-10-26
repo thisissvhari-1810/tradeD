@@ -407,7 +407,7 @@ describe("algo orders on the demo ledger during chart replay", () => {
   });
 
   it("squares off at the session close with a real ledger fill", async () => {
-    const result = await run(underlying("DOWN", 300), { cursor: CLOSE + 30 });
+    const result = await run(underlying("DOWN", 300), { cursor: CLOSE + 30, config: { ...config, maxHoldMinutes: 0 } });
     expect(result.ended).toBe(true);
     expect(result.state.position).toBeNull();
     expect(sells()).toHaveLength(1);
@@ -1406,13 +1406,13 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
 
   it("old saved Mathi settings move once to the line-breakout version (3% target, no stop-loss); later choices are kept", () => {
     const old = readAlgoConfig({ stop: { mode: "percent", value: 5 }, target: { mode: "percent", value: 10 }, settingsVersion: 2, filters: { secondCandle: true, momentum: true } });
-    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, true, "body", 50, 3]);
-    // Version 12 turns the line exit and the 9 / 21 EMA trend filter on once; a choice saved since is kept.
-    const v11 = readAlgoConfig({ settingsVersion: 11, structureStop: false, filters: { momentum: false } });
-    expect([v11.structureStop, v11.filters.momentum]).toEqual([true, true]);
-    const v12 = readAlgoConfig({ settingsVersion: 12, structureStop: false, filters: { momentum: false } });
-    expect([v12.structureStop, v12.filters.momentum]).toEqual([false, false]);
-    expect(readAlgoConfig({ engine: "primary", settingsVersion: 11, structureStop: false, filters: { momentum: false } })).toMatchObject({ structureStop: false, filters: { momentum: false } });
+    expect([old.target.value, old.stopLoss, old.structureStop, old.crossRule, old.crossPercent, old.maxTrades]).toEqual([3, false, false, "body", 50, 3]);
+    // Version 13: the line exit and the 9 / 21 EMA filter (version 12) move back off once, with a 30-minute time limit; later choices are kept.
+    const v12 = readAlgoConfig({ settingsVersion: 12, structureStop: true, filters: { momentum: true } });
+    expect([v12.structureStop, v12.filters.momentum, v12.maxHoldMinutes]).toEqual([false, false, 30]);
+    const v13 = readAlgoConfig({ settingsVersion: 13, structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
+    expect([v13.structureStop, v13.filters.momentum, v13.maxHoldMinutes]).toEqual([true, true, 0]);
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 11, structureStop: true, filters: { momentum: true } })).toMatchObject({ structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
     // A saved "any crossing" (version 9) moves once to 50% of the body; a share chosen later is kept.
     expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 0 }).crossPercent).toBe(50);
     expect(readAlgoConfig({ settingsVersion: 10, crossPercent: 30 }).crossPercent).toBe(30);
@@ -1638,7 +1638,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
   // at full capital two +3% winners already pass the ₹3,000 daily target (its own test below).
   const mathi: AlgoConfig = { ...ALGO_DEFAULTS, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
   // The version 11 behaviour: no exit when the index closes back through the line.
-  const noLineExit: AlgoConfig = { ...mathi, structureStop: false };
+  const noLineExit: AlgoConfig = { ...mathi, structureStop: false, maxHoldMinutes: 0 };
   /** Flat closes at `base` off the line; `moves` sets a candle's open and close (index → [open, close]). */
   function path(moves: Record<number, [number, number]>, base: (index: number) => number): Candle[] {
     const candles: Candle[] = [];
@@ -1789,7 +1789,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
   it("live steps: a long open trade (no target reached) never makes the algo lag: a 6-hour catch-up is one step", async () => {
     const candles = path({ 5: moves[5] }, (index) => (index < 5 ? LINE - 10 : LINE + 12));
     const chain = await loadOptionChain("NIFTY", null);
-    const go = (state: AlgoState, processedThrough: number, cursor: number) => stepChartRun({ user: student, wallet: "ALGO", runId: "long", session: SESSION, date: DATE, config: mathi, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor, liveSteps: true });
+    const go = (state: AlgoState, processedThrough: number, cursor: number) => stepChartRun({ user: student, wallet: "ALGO", runId: "long", session: SESSION, date: DATE, config: noLineExit, lines, candles, chain, sessionOpen: OPEN, sessionClose: CLOSE, now: NOW, state, processedThrough, cursor, liveSteps: true });
     const first = await go({ ...initialState(DATE), running: true, entries: true }, OPEN, m(370));
     expect(first.processedThrough).toBe(m(6));
     const second = await go(first.state, first.processedThrough, m(370));
@@ -1965,13 +1965,32 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(runStats(result.events).expired).toBe(1);
     });
 
-    it("with the line exit on (the default), a trade whose setup is invalidated exits on that close", async () => {
-      expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.filters.momentum]).toEqual([true, true]);
+    it("with the line exit switched on, a trade whose setup is invalidated exits on that close", async () => {
+      expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.filters.momentum, ALGO_DEFAULTS.maxHoldMinutes]).toEqual([false, false, 30]);
       feed.premiums = premiums((index) => (index === 10 ? { low: 95, high: 100.5, close: 97 } : index === 12 ? { low: 99.5, high: 104, close: 100 } : null));
-      const result = await run(oct22Candles(), { cursor: m(12), config: mathi });
+      const result = await run(oct22Candles(), { cursor: m(12), config: { ...mathi, structureStop: true } });
       const exit = result.events.find((event) => event.kind === "EXIT")!;
       expect(exit.message).toMatch(/^Exit \(STRUCTURE\)/);
       expect(algoTrades(result.events, null)[0].exitReason).toBe("Setup invalidated");
+    });
+
+    it("time limit: a trade short of its target 30 minutes after its entry exits at the premium", async () => {
+      feed.premiums = premiums((index) => (index >= 10 ? { low: 80, high: 90, close: 85 } : null));
+      const result = await run(oct22Candles(), { cursor: m(60), config: mathi });
+      const entry = result.events.find((event) => event.kind === "ENTRY")!;
+      const exit = result.events.find((event) => event.kind === "EXIT")!;
+      expect(exit.message).toMatch(/^Exit \(TIME\)/);
+      // 30 minutes after the fill (the entry is logged on its signal minute).
+      expect(exit.time - entry.time).toBeGreaterThanOrEqual(30 * 60);
+      expect(exit.time - entry.time).toBeLessThanOrEqual(31 * 60);
+      expect(algoTrades(result.events, null)[0].exitReason).toBe("Time limit");
+    });
+
+    it("time limit 0: the trade stays open past 30 minutes", async () => {
+      feed.premiums = premiums((index) => (index >= 10 ? { low: 80, high: 90, close: 85 } : null));
+      const off = await run(oct22Candles(), { cursor: m(60), config: { ...mathi, maxHoldMinutes: 0 } });
+      expect(off.state.position).not.toBeNull();
+      expect(off.events.some((event) => event.kind === "EXIT")).toBe(false);
     });
 
     it("with the line exit off, an open trade whose setup is invalidated stays open (no stop-loss) and records its maximum adverse premium move", async () => {

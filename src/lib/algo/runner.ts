@@ -97,6 +97,8 @@ export type AlgoConfig = {
   intrabar: boolean;
   /** Pause the replay once the session's entries are used up (otherwise it keeps playing; new entries stay blocked). */
   stopAtLimit: boolean;
+  /** Time limit: a trade still open this many minutes after its entry exits at the premium (0 = off). */
+  maxHoldMinutes: number;
   /**
    * Breakout confirmation before an entry: "single" — enter on the crossing candle; "hold" — the next completed
    * candle must close beyond the line; "retest" — a retest of the line must hold and price move on.
@@ -121,8 +123,8 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   timeframe: "1m",
   expiry: "nearest",
   // Mathi Strategy: a line breakout buys as many whole ATM lots as the ₹1,00,000 capital pays for (up to
-  // 50 lots); +3% on the option premium; no premium stop-loss — the trade exits when the index closes back
-  // through the broken line, and only takes signals the 9 / 21 EMA trend agrees with.
+  // 50 lots); +3% on the option premium; no stop-loss — a trade that has not reached its target 30 minutes
+  // after its entry exits at the premium (the month's winners all reached it within 15).
   lots: 50,
   stop: { mode: "percent", value: 3 },
   target: { mode: "percent", value: 3 },
@@ -153,9 +155,9 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   observationMinutes: 0,
   engine: "existing",
   primary: PRIMARY_SETTINGS_DEFAULTS,
-  settingsVersion: 12,
-  filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: true },
-  structureStop: true,
+  settingsVersion: 13,
+  filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false },
+  structureStop: false,
   patterns: PATTERN_DEFAULTS,
   // Enter once 50% of the candle's body is past an enabled line.
   crossRule: "body",
@@ -163,6 +165,7 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   stopLoss: false,
   intrabar: true,
   stopAtLimit: false,
+  maxHoldMinutes: 30,
   // A crossing is only a detected signal: the next completed candle must hold beyond the line before an entry.
   confirmation: { mode: "hold", retestTolerancePercent: 0.02, retestWindowMinutes: 15, holdMustAgree: true },
 };
@@ -185,6 +188,7 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
   maxTrades: 2,
   stopLoss: true,
   stopAtLimit: true,
+  maxHoldMinutes: 0,
   crossRule: "classic",
   crossPercent: 0,
   intrabar: false,
@@ -690,6 +694,12 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   const trigger = mark.candle ? candleExit(mark.candle, position.stop, position.target) : mark.bid != null ? quoteExit(mark.bid, position.stop, position.target) : null;
   if (trigger) {
     await startExit(state, input, trigger.reason, trigger, log);
+    return;
+  }
+  // Time limit: still short of the target this long after the entry, the trade exits at the premium.
+  const hold = input.config.maxHoldMinutes ?? 0;
+  if (hold > 0 && input.now - position.openedAt >= hold * 60 && mark.bid != null) {
+    await startExit(state, input, "TIME", { price: mark.bid, note: `No target ${hold} minutes after the entry` }, log);
     return;
   }
   const setup = position.setup;
