@@ -265,7 +265,7 @@ export type AlgoState = {
   confirmations?: Confirmation[] | null;
   /** A signal waiting for the next candle to confirm it (second-candle filter). */
   /** A detected breakout waiting for its confirmation (hold / retest); its retest candle once one is seen. */
-  awaiting?: { direction: Direction; signals: StrategySignal[]; time: number; mode?: "hold" | "retest"; retest?: { time: number; extreme: number } | null } | null;
+  awaiting?: { direction: Direction; signals: StrategySignal[]; time: number; mode?: "hold" | "retest"; retest?: { time: number; extreme: number } | null; candle?: Candle; events?: CandleEvaluation["events"] } | null;
   /** Levels stopped out recently: not traded again until `until` (level-block filter). */
   blockedLevels?: Array<{ level: number; until: number }>;
   /** The engine's state on the latest evaluated candle. */
@@ -939,6 +939,11 @@ async function confirm(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   state.confirmations = next;
 }
 
+/** The crossing a confirmed setup started from (saved with the setup), for the trade's record. */
+function breakoutOf(waiting: NonNullable<AlgoState["awaiting"]>): Pick<CandleEvaluation, "breakout"> {
+  return waiting.candle ? { breakout: { time: waiting.time, candle: waiting.candle, events: waiting.events ?? [] } } : {};
+}
+
 /** The breakout confirmation mode in force ("single" when the legacy second-candle filter is off). */
 export function confirmationMode(config: AlgoConfig): ConfirmationMode {
   const mode = config.confirmation?.mode ?? "single";
@@ -978,7 +983,7 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
         const beyond = put ? close < level * (1 - filters.breakoutBufferPercent / 100) : close > level * (1 + filters.breakoutBufferPercent / 100);
         if (beyond && !opposite(waiting.direction)) {
           const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
-          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, explanation: `SETUP CONFIRMED — breakout held: the next candle closed at ${close.toFixed(2)}, still ${put ? "below" : "above"} ${level.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — breakout held: the next candle closed at ${close.toFixed(2)}, still ${put ? "below" : "above"} ${level.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
         }
         ended = cancel("FALSE_BREAKOUT", `FALSE BREAKOUT — ENTRY CANCELLED: the ${name} did not hold; the next candle closed at ${close.toFixed(2)}${back ? `, back ${put ? "above" : "below"} the line` : opposite(waiting.direction) ? " with an opposite signal" : `, not beyond it${filters.breakoutBufferPercent ? ` by the ${filters.breakoutBufferPercent}% buffer` : ""}`}. No order was sent.`);
       }
@@ -992,7 +997,7 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
       const moved = waiting.retest && (put ? close < open && close < waiting.retest.extreme : close > open && close > waiting.retest.extreme);
       if (moved) {
         const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
-        return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, explanation: `SETUP CONFIRMED — retest held: price came back to ${level.toFixed(2)} at ${istClock(waiting.retest!.time)} without closing back across it, and this ${put ? "bearish" : "bullish"} candle closed at ${close.toFixed(2)}, ${put ? "below the retest low" : "above the retest high"} ${waiting.retest!.extreme.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+        return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — retest held: price came back to ${level.toFixed(2)} at ${istClock(waiting.retest!.time)} without closing back across it, and this ${put ? "bearish" : "bullish"} candle closed at ${close.toFixed(2)}, ${put ? "below the retest low" : "above the retest high"} ${waiting.retest!.extreme.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
       }
       const tolerance = level * (settings.retestTolerancePercent / 100);
       const touched = put ? high >= level - tolerance : low <= level + tolerance;
@@ -1019,7 +1024,7 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
     const direction = all[0].direction;
     const names = all.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
     const observing = line.time + 60 < dayStart(input.sessionDate) + config.observationMinutes * 60;
-    if (!observing) state.awaiting = { direction, signals: all, time: line.time, mode, retest: null };
+    if (!observing) state.awaiting = { direction, signals: all, time: line.time, mode, retest: null, candle: line.candle, events: line.events };
     const wait = mode === "hold" ? "waiting for the next completed candle to close beyond it" : `waiting for a retest of the level that holds (up to ${settings.retestWindowMinutes} minutes)`;
     return { ...line, strategies: all, decision: "NO_SIGNAL", stage: "SIGNAL_DETECTED", setupSide: direction, explanation: `SIGNAL DETECTED — ${names}: ${direction === "CALL" ? "bullish" : "bearish"} crossing at ${all[0].level.toFixed(2)}${observing ? " during the observation window: not carried forward." : `; not traded yet — ${wait}.`} ${line.explanation}`.replace(/\s+/g, " ").trim() };
   }

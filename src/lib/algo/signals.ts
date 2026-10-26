@@ -90,6 +90,8 @@ export type CandleEvaluation = {
   setupSide?: "CALL" | "PUT";
   /** Why a pending setup was cancelled (FALSE_BREAKOUT / EXPIRED): no order is sent. */
   cancelled?: string;
+  /** SETUP_CONFIRMED: the crossing that started the setup (its candle and lines); this candle only confirmed it. */
+  breakout?: { time: number; candle: Candle; events: CrossEvent[] };
 };
 
 /** Same IST trading day (a session's first candle is never paired with the previous day's last). */

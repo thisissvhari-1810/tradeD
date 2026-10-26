@@ -51,8 +51,10 @@ function flowKind(event: AlgoEvent) {
 
 /** How a trade was bought: its signal candle, the line crossed and how much of the body went past it. */
 function signalOf(trade: AlgoTrade, events: AlgoEvent[]) {
-  const evaluation = events.find((event) => event.evaluation && event.evaluation.time === trade.signalTime && (event.key.startsWith("eval:") || event.key.startsWith("eval-forming:")))?.evaluation ?? null;
-  const candle = evaluation?.candle ?? null;
+  const find = (time: number) => events.find((event) => event.evaluation && event.evaluation.time === time && (event.key.startsWith("eval:") || event.key.startsWith("eval-forming:")))?.evaluation ?? null;
+  const confirming = trade.confirmedAt != null ? find(trade.confirmedAt) : null;
+  const evaluation = find(trade.signalTime) ?? (confirming?.breakout ? { ...confirming, candle: confirming.breakout.candle } : null);
+  const candle = confirming?.breakout?.candle ?? evaluation?.candle ?? null;
   const line = trade.linePrices[0] ?? null;
   const body = candle ? Math.abs(candle.close - candle.open) : 0;
   const past = candle && line != null ? (trade.side === "CALL" ? candle.close - line : line - candle.close) : null;
@@ -62,7 +64,8 @@ function signalOf(trade: AlgoTrade, events: AlgoEvent[]) {
     line,
     pastPoints: past,
     bodyShare: past != null && body > 0 ? Math.round((past / body) * 1000) / 10 : null,
-    reason: evaluation?.explanation ?? "",
+    reason: [confirming && evaluation !== confirming ? evaluation?.explanation : null, confirming?.explanation ?? evaluation?.explanation].filter(Boolean).join(" Then: ") || "",
+    confirming,
   };
 }
 
@@ -103,6 +106,8 @@ export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: Alg
     ["Share of the body past the line (%)", signal.bodyShare == null ? "" : signal.bodyShare.toFixed(1)],
     ["Required share (%)", settings.crossRule === "body" ? String(settings.crossPercent || "any crossing") : "classic body crossing"],
     ["Breakout confirmation", CONFIRMATION_LABEL[confirmationMode(settings)]],
+    ["Confirmation candle (IST)", trade.confirmedAt == null ? "None (entered on the signal candle)" : `${ist(trade.confirmedAt)}–${ist(trade.confirmedAt + 60)}`],
+    ["Confirmation candle open / close", signal.confirming ? `${num(signal.confirming.candle.open)} / ${num(signal.confirming.candle.close)}` : ""],
     ["Why it entered", signal.reason],
     ["Underlying at signal", num(trade.underlyingAtSignal)],
     ["Option contract", `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`],

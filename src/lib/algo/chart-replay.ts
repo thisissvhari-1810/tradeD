@@ -308,6 +308,8 @@ export type AlgoTrade = {
   realized: number | null;
   /** (exit premium − entry premium) × quantity, before charges. */
   gross: number | null;
+  /** Hold / retest: the candle that confirmed the setup (the signal candle is the crossing). */
+  confirmedAt: number | null;
   /** Largest fall of the premium below the entry while open, per unit (from the exit; null while open). */
   adverse: number | null;
   returnPercent: number | null;
@@ -333,7 +335,9 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
   for (const event of events) {
     if (event.kind !== "ENTRY" || !event.order || event.order.price == null || !event.side) continue;
     if (trades.some((trade) => trade.entryKey === event.order!.key)) continue;
-    const evaluation = event.key.startsWith("entry:") ? signal(event.time) : null;
+    const entered = event.key.startsWith("entry:") ? signal(event.time) : null;
+    // A confirmed setup (hold / retest): the line, the signal candle and its figures are the crossing's.
+    const evaluation = entered?.breakout ? { ...entered, time: entered.breakout.time, candle: entered.breakout.candle, events: entered.breakout.events } : entered;
     const contract = event.contract;
     trades.push({
       number: trades.length + 1,
@@ -352,6 +356,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       entryCharges: event.order.charges ?? 0,
       exitCharges: 0,
       signalTime: evaluation?.time ?? event.time,
+      confirmedAt: entered?.breakout ? entered.time : null,
       underlyingAtSignal: evaluation?.candle.close ?? null,
       entryTime: entryFillTime(event),
       entryPremium: event.order.price,

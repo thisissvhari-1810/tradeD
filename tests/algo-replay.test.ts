@@ -1876,6 +1876,29 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(skippedSignals(result.events).find((item) => item.id === `eval:${m(11)}`)).toMatchObject({ side: "PUT" });
     });
 
+    it("your 19 Oct CALL: a bearish 09:19 candle closing 7 points above the line confirmed the hold; the trade's report shows the 09:18 crossing (line, price, signal candle) and the confirming candle", async () => {
+      const shift19 = LINE - 23_146.15;
+      const c = (open: number, high: number, low: number, close: number) => ({ open: open + shift19, high: high + shift19, low: low + shift19, close: close + shift19 });
+      const candles = session({
+        9: c(23_131.0, 23_172.0, 23_130.0, 23_169.1), // 09:24 here (09:18 on the day): bullish crossing
+        10: c(23_169.1, 23_174.8, 23_153.25, 23_153.3), // bearish, still closes 7.15 above the line: hold confirms
+        11: c(23_153.3, 23_155.0, 23_120.0, 23_123.9), // back below the line: setup invalidated
+      }, 23_131 + shift19, 23_123.9 + shift19, 9);
+      feed.premiums = premiums((index) => (index >= 11 ? { low: 60, high: 75, close: 70 } : null));
+      const result = await run(candles, { cursor: m(30), config: hold });
+      expect(result.events.find((event) => event.kind === "ENTRY")).toMatchObject({ time: m(10), side: "CALL" });
+      const { tradeRecord } = await import("../src/lib/algo/report");
+      const trade = algoTrades(result.events, null)[0];
+      expect(trade).toMatchObject({ signalTime: m(9), confirmedAt: m(10), lines: ["Test line"], linePrices: [LINE] });
+      const record = Object.fromEntries(tradeRecord(trade, result.events, hold));
+      expect(record).toMatchObject({ "Line crossed": "Test line", "Line price": "23150.00", "Signal candle close": (23_169.1 + shift19).toFixed(2), "Points past the line": "22.95" });
+      expect(record["Confirmation candle open / close"]).toBe(`${(23_169.1 + shift19).toFixed(2)} / ${(23_153.3 + shift19).toFixed(2)}`);
+      expect(record["Why it entered"]).toMatch(/^SIGNAL DETECTED[\s\S]*Then: SETUP CONFIRMED — breakout held/);
+      // No stop-loss: the position is still open, deep in loss, with the setup invalidated.
+      expect(result.state.position).not.toBeNull();
+      expect(result.state.confirmations?.some((item) => item.status === "SETUP INVALIDATED")).toBe(true);
+    });
+
     it("hold: a next candle back across the line cancels the setup; a cancelled setup never takes an entry slot, and later breakouts still trade", async () => {
       // CALL break at 5 back below at 6 (cancelled); CALL break at 20 holding at 21 (enters at 21).
       const candles = session({
