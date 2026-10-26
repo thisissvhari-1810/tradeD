@@ -87,7 +87,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
   const openTrades = trades.filter((trade) => trade.status !== "COMPLETED");
   const skipped = run ? skippedSignals(run.events) : [];
   const slots = tradeSlots(trades, skipped, Boolean(state?.pending), max);
-  const diagnostics = run ? runDiagnostics(run.events, run.enabledLines) : null;
+  const diagnostics = run ? run.diagnostics ?? runDiagnostics(run.events, run.enabledLines) : null;
   const netPnl = rupeesOf(account?.netPnl);
   const equity = rupeesOf(account?.equity);
 

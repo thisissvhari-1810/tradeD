@@ -4,7 +4,7 @@ import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
 import { ALGO_DEFAULTS, initialState, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
-import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
+import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, panelEvents, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
 import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
 import { tradeSummary } from "../src/components/algo/algo-trade-drawer";
@@ -1783,6 +1783,35 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     const after = await go(result.state, result.processedThrough);
     expect(after.processedThrough).toBe(m(20));
     expect(buys()).toHaveLength(1);
+  });
+
+  it("your session: three trades early in a full session all stay in the panel (it once showed only the last 400 events)", async () => {
+    feed.premiums = premiums((index) => ([6, 9, 13].includes(index) ? { low: 99.5, high: 104, close: 100 } : null));
+    // Three quick +3% trades in the first quarter hour, then crossings all day that the 3/3 limit blocks.
+    const flips: Record<number, [number, number]> = { 5: moves[5], 8: [LINE + 12, LINE - 15], 12: [LINE - 15, LINE + 15] };
+    for (let index = 40; index < 370; index += 20) flips[index] = (index / 20) % 2 ? [LINE + 15, LINE - 15] : [LINE - 15, LINE + 15];
+    const base = (index: number) => { const at = Math.max(...Object.keys(flips).map(Number).filter((key) => key <= index), -1); return at < 0 ? LINE - 10 : flips[at][1]; };
+    const result = await run(path(flips, base), { cursor: CLOSE, config: mathi });
+    expect(buys()).toHaveLength(3);
+    expect(result.state.tradesToday).toBe(3);
+    // A real session logs more than the panel's window (an evaluation every minute plus each trade's
+    // monitoring). The old feed (only the latest events) lost the first trade: two trades shown, counter 3/3.
+    const window = 300;
+    expect(result.events.length).toBeGreaterThan(window);
+    expect(algoTrades(result.events.slice(-window), null).length).toBeLessThan(3);
+    // The panel feed now keeps every trade's events: three numbered trades, each with its signal, entry and exit.
+    const shown = panelEvents(result.events, window);
+    expect(shown.length).toBeLessThan(result.events.length);
+    const trades = algoTrades(shown, null);
+    expect(trades.map((trade) => trade.number)).toEqual([1, 2, 3]);
+    expect(trades.every((trade) => trade.exitTime != null)).toBe(true);
+    expect(tradeTimeline(shown, trades[0].entryKey).some((item) => item.kind === "signal")).toBe(true);
+    expect(runDiagnostics(result.events, 1).accepted).toBe(3);
+    // The server sends this feed, and the panel's counts come from the whole log.
+    const server = readFileSync("src/server/algo.ts", "utf8");
+    expect(server).toContain("events: panelEvents(events)");
+    expect(server).toContain("diagnostics: runDiagnostics(events, enabledLines)");
+    expect(server).not.toContain("events.slice(-400)");
   });
 
   it("no entry cutoff: a valid breakout at 12:30 enters (the session is open until 15:30)", async () => {

@@ -19,7 +19,7 @@ import { checkReplayClock, sessionTape, type ReplayContract } from "@/server/opt
 import { ensurePracticeAccount } from "@/server/practice-account";
 import { FILL_STALE_SECONDS, replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
-import { algoTrades, positionValuation, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
+import { algoTrades, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
 import { startAlgoPeriod } from "@/server/trading";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
@@ -987,9 +987,11 @@ async function chartCommand(user: SessionUser, sessionId: string, config: AlgoCo
 async function chartView(user: SessionUser, sessionId: string, chartSession: string | null) {
   const runs = await prisma.algoRun.findMany({ where: { sessionId }, orderBy: { startedAt: "desc" }, take: 20 });
   const current = chartSession ? runs.find((run) => run.replaySession === chartSession) ?? await prisma.algoRun.findUnique({ where: { sessionId_replaySession: { sessionId, replaySession: chartSession } } }) : null;
-  const ids = [...new Set([...runs.map((run) => run.id), ...(current ? [current.id] : [])])];
+  const ids = runs.map((run) => run.id).filter((id) => id !== current?.id);
   const rows = ids.length ? await prisma.algoEvent.findMany({ where: { sessionId, mode: "CHART", runId: { in: ids } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 4000 }) : [];
-  const eventsOf = (runId: string) => rows.filter((row) => row.runId === runId).map((row) => row.payload as unknown as AlgoEvent);
+  // The current run's whole log (never cut by the history's row cap): its trades and entry count come from it.
+  const currentRows = current ? await prisma.algoEvent.findMany({ where: { sessionId, mode: "CHART", runId: current.id }, orderBy: [{ time: "asc" }, { createdAt: "asc" }] }) : [];
+  const eventsOf = (runId: string) => (runId === current?.id ? currentRows : rows.filter((row) => row.runId === runId)).map((row) => row.payload as unknown as AlgoEvent);
   let run = null;
   if (current) {
     const state = runStateOf(current);
@@ -1005,13 +1007,16 @@ async function chartView(user: SessionUser, sessionId: string, chartSession: str
     }
     const events = eventsOf(current.id);
     const runLines = Array.isArray(current.lines) ? (current.lines as unknown as AlgoLine[]) : [];
+    const enabledLines = runLines.filter((line) => !readAlgoConfig(current.config).disabledLines.includes(line.type)).length;
     run = {
       id: current.id, replaySession: current.replaySession, date: current.date, underlying: current.underlying, strategy: strategyOf(current.strategy), armed: current.armed, status: current.status, endReason: current.endReason,
-      processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: events.slice(-400), stats: runStats(events), config: readAlgoConfig(current.config),
+      processedThrough: current.processedThrough, startedAt: current.startedAt.toISOString(), state, position, events: panelEvents(events), stats: runStats(events), config: readAlgoConfig(current.config),
       summary: (current.summary ?? null) as { account?: Awaited<ReturnType<typeof algoWallet>> | null; stats?: ReturnType<typeof runStats>; completed?: number; maxTrades?: number; startCapital?: number; status?: string; finalizedAt?: string } | null,
       // The strategy lines this run compares (fixed for its date) and how many of them are switched on.
       lineCount: runLines.length,
-      enabledLines: runLines.filter((line) => !readAlgoConfig(current.config).disabledLines.includes(line.type)).length,
+      enabledLines,
+      // From the whole log (the panel's events are the recent ones plus every trade's).
+      diagnostics: runDiagnostics(events, enabledLines),
     };
   }
   return {

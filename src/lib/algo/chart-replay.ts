@@ -239,6 +239,18 @@ export type RunDiagnostics = {
   lastRejection: { time: number; reason: string } | null;
 };
 
+/**
+ * The events sent to the chart's panel: the most recent `recent`, plus every trade's own events whatever their
+ * age (entries, exits and their orders, and each entry's signal candle). A full session logs more than
+ * `recent` events, and the trades, entry count and markers must never lose the session's early trades.
+ */
+export function panelEvents(events: AlgoEvent[], recent = 400): AlgoEvent[] {
+  if (events.length <= recent) return events;
+  const signals = new Set(events.filter((event) => event.kind === "ENTRY").map((event) => `eval:${event.time}`));
+  const from = events.length - recent;
+  return events.filter((event, index) => index >= from || event.kind === "ENTRY" || event.kind === "EXIT" || event.kind === "ERROR" || event.order != null || signals.has(event.key));
+}
+
 /** What the algo has processed so far, from its own log (shown so a quiet replay is never a mystery). */
 export function runDiagnostics(events: AlgoEvent[], enabledLines: number): RunDiagnostics {
   const evaluations = events.filter((event) => event.evaluation && event.key.startsWith("eval:"));
