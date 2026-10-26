@@ -4,12 +4,12 @@ import { useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
-import { backtestCsv, backtestTotals, chooseOnTraining, lastTradingDays, SPLIT_LABEL, splitDates, tradingDays, variantLabel, type BacktestDay, type BacktestTotals, type BacktestVariant } from "@/lib/algo/backtest";
+import { backtestCsv, backtestTotals, chooseOnTraining, CONFIRMATION_SHORT, lastTradingDays, SPLIT_LABEL, splitDates, tradingDays, variantLabel, type BacktestDay, type BacktestTotals, type BacktestVariant } from "@/lib/algo/backtest";
 
 const inr = (value: number | null | undefined) => (value == null ? "—" : `${value > 0 ? "+" : value < 0 ? "−" : ""}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const tone = (value: number | null | undefined) => (value == null ? "text-muted" : value > 0 ? "text-profit" : value < 0 ? "text-loss" : "text-text");
 const todayIst = () => new Date(Date.now() + 19_800_000).toISOString().slice(0, 10);
-const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : variant === "baseline" ? "No filters" : variant.replace("score:", "Score "));
+const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : variant === "baseline" ? "No filters" : variant.startsWith("confirm:") ? CONFIRMATION_SHORT[variant.slice(8) as keyof typeof CONFIRMATION_SHORT] ?? variant : variant.replace("score:", "Score "));
 
 /**
  * Multi-day backtest of the saved settings: each day is simulated on the server (real 1-minute candles and
@@ -23,6 +23,7 @@ export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { dis
   const [from, setFrom] = useState(range[0]);
   const [to, setTo] = useState(range.at(-1)!);
   const [compare, setCompare] = useState(false);
+  const [confirmModes, setConfirmModes] = useState(false);
   const [scores, setScores] = useState("");
   const [days, setDays] = useState<BacktestDay[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -30,7 +31,10 @@ export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { dis
   const cancel = useRef(false);
 
   const scoreVariants = [...new Set(scores.split(/[\s,]+/).filter(Boolean).map(Number).filter((value) => Number.isInteger(value) && value >= 0 && value <= 100))].slice(0, 4).map((value) => `score:${value}`);
-  const planned: BacktestVariant[] = ["saved", ...(compare ? ["baseline"] : []), ...scoreVariants];
+  const mathi = strategy === "EXISTING_ALGO";
+  // Mathi Strategy: the same saved settings with each breakout confirmation mode, side by side.
+  const confirmVariants = mathi && confirmModes ? ["confirm:single", "confirm:hold", "confirm:retest"] : [];
+  const planned: BacktestVariant[] = confirmVariants.length ? confirmVariants : ["saved", ...(compare ? ["baseline"] : []), ...scoreVariants];
   const plannedDates = tradingDays(from, to, 60).filter((date) => date < todayIst());
 
   async function start() {
@@ -86,7 +90,9 @@ export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { dis
           <span className="text-micro text-muted">to</span>
           <input type="date" className="compact-field w-[8.5rem]" aria-label="To" value={to} min={from} max={range.at(-1)} onChange={(event) => setTo(event.target.value)} />
         </div>
-        <label className="flex cursor-pointer items-center gap-1.5 text-micro text-text-2"><input type="checkbox" className="oc-check" checked={compare} onChange={(event) => setCompare(event.target.checked)} />Also run with the entry filters and structure stop off</label>
+        {mathi ? <label className="flex cursor-pointer items-center gap-1.5 text-micro text-text-2"><input type="checkbox" className="oc-check" checked={confirmModes} onChange={(event) => setConfirmModes(event.target.checked)} />Compare breakout confirmation: single candle / breakout hold / retest</label> : null}
+        {confirmModes && mathi ? <p className="text-micro text-muted">Each mode runs on the same days with your other saved settings. Judge them on the later, untouched days, not on one session.</p> : null}
+        <label className={cx("flex cursor-pointer items-center gap-1.5 text-micro text-text-2", confirmModes && mathi && "opacity-50")}><input type="checkbox" className="oc-check" disabled={confirmModes && mathi} checked={compare} onChange={(event) => setCompare(event.target.checked)} />Also run with the entry filters and structure stop off</label>
         <label className="flex items-center gap-1.5 text-micro text-text-2">Also compare minimum scores
           <input className="compact-field w-[7.5rem]" aria-label="Minimum scores to compare" placeholder="e.g. 50, 70" value={scores} onChange={(event) => setScores(event.target.value)} />
         </label>
@@ -165,6 +171,14 @@ function Totals({ title, totals }: { title: string; totals: BacktestTotals }) {
         <Cell label="No-trade days" value={totals.noTradeDays == null ? "—" : `${totals.noTradeDays}%`} />
         <Cell label="Target days" value={totals.targetDays == null ? "—" : `${totals.targetDays}%`} />
         <Cell label="Days" value={`${totals.days - totals.daysSkipped} run · ${totals.daysSkipped} skipped`} />
+        <Cell label="Breakouts detected" value={String(totals.detected)} />
+        <Cell label="False breakouts filtered" value={String(totals.filtered)} />
+        <Cell label="Expired" value={String(totals.expired)} />
+        <Cell label="Target hits" value={String(totals.targetHits)} />
+        <Cell label="Open at session end" value={String(totals.openAtEnd)} />
+        <Cell label="Gross P&L" value={inr(totals.gross)} />
+        <Cell label="Worst adverse / unit" value={totals.worstAdverse == null ? "—" : `₹${totals.worstAdverse}`} />
+        <Cell label="Avg adverse / unit" value={totals.averageAdverse == null ? "—" : `₹${totals.averageAdverse}`} />
       </dl>
     </div>
   );

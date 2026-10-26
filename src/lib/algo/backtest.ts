@@ -8,18 +8,22 @@ import { csvCell } from "./report";
  * (a holiday, missing history) are counted as skipped, never as zero-P&L days.
  */
 
-export type BacktestTrade = { number: number; side: "CALL" | "PUT"; strategy: string; entryTime: number; entryPremium: number; exitTime: number | null; exitPremium: number | null; exitReason: string | null; realized: number | null; risk?: number | null };
+export type BacktestTrade = { number: number; side: "CALL" | "PUT"; strategy: string; entryTime: number; entryPremium: number; exitTime: number | null; exitPremium: number | null; exitReason: string | null; realized: number | null; risk?: number | null; gross?: number | null; adverse?: number | null };
 /** "saved", "baseline" (entry filters and structure stop off) or "score:NN" (another minimum score). */
 export type BacktestVariant = string;
 export type BacktestDay =
   | { date: string; variant: BacktestVariant; ok: true; expiry: string | null; stats: RunStats; trades: BacktestTrade[]; rejected: number; dailyTarget?: number }
   | { date: string; variant: BacktestVariant; ok: false; reason: string };
 
+export const CONFIRMATION_SHORT = { single: "single candle", hold: "breakout hold", retest: "retest" } as const;
+
 export function variantLabel(variant: BacktestVariant) {
   if (variant === "saved") return "Saved settings";
   if (variant === "baseline") return "Filters and structure stop off";
   const score = /^score:(\d+)$/.exec(variant);
-  return score ? `Minimum score ${score[1]}` : variant;
+  if (score) return `Minimum score ${score[1]}`;
+  const confirm = /^confirm:(single|hold|retest)$/.exec(variant);
+  return confirm ? `Confirmation: ${CONFIRMATION_SHORT[confirm[1] as keyof typeof CONFIRMATION_SHORT]}` : variant;
 }
 
 /** Weekdays from `from` to `to` (inclusive, YYYY-MM-DD), oldest first, at most `limit`. */
@@ -76,6 +80,18 @@ export type BacktestTotals = {
   averageTrade: number | null;
   /** Share of trades closed by the stop or because the setup was invalidated (the break did not hold), %. */
   falseBreakouts: number | null;
+  /** Breakout confirmation: crossings detected, setups cancelled as false breakouts, and expired. */
+  detected: number;
+  filtered: number;
+  expired: number;
+  /** Trades closed at their premium target, and trades still open at the session's end (closed there). */
+  targetHits: number;
+  openAtEnd: number;
+  /** Gross P&L (before charges) of the closed trades; `pnl` is net. */
+  gross: number;
+  /** Largest adverse premium move of any trade, per unit, and the average across trades. */
+  worstAdverse: number | null;
+  averageAdverse: number | null;
 };
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -123,6 +139,8 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
   const wins = ok.reduce((sum, day) => sum + day.stats.wins, 0);
   const losses = ok.reduce((sum, day) => sum + day.stats.losses, 0);
   const average = (values: number[]) => (values.length ? round(values.reduce((sum, value) => sum + value, 0) / values.length) : null);
+  const all = ok.flatMap((day) => day.trades);
+  const adverse = all.map((trade) => trade.adverse).filter((value): value is number => value != null);
   return {
     days: ordered.length,
     daysTraded: ok.filter((day) => day.trades.length).length,
@@ -146,6 +164,14 @@ export function backtestTotals(days: BacktestDay[]): BacktestTotals {
     tradesPerDay: ok.length ? round(trades / ok.length) : null,
     averageTrade: trades ? round(running / trades) : null,
     falseBreakouts: percent(ok.reduce((sum, day) => sum + day.trades.filter((trade) => trade.exitReason === "Stop-loss" || trade.exitReason === "Setup invalidated").length, 0), trades),
+    detected: ok.reduce((sum, day) => sum + (day.stats.detected ?? 0), 0),
+    filtered: ok.reduce((sum, day) => sum + (day.stats.falseBreakouts ?? 0), 0),
+    expired: ok.reduce((sum, day) => sum + (day.stats.expired ?? 0), 0),
+    targetHits: all.filter((trade) => trade.exitReason === "Target").length,
+    openAtEnd: all.filter((trade) => trade.exitReason === "Session end" || trade.exitReason === "Replay session closed" || trade.exitTime == null).length,
+    gross: round(all.reduce((sum, trade) => sum + (trade.gross ?? 0), 0)),
+    worstAdverse: adverse.length ? Math.max(...adverse) : null,
+    averageAdverse: average(adverse),
   };
 }
 
@@ -183,7 +209,7 @@ export function backtestCsv(days: BacktestDay[]): string {
       : row([day.date, variantLabel(day.variant), "Skipped", "", "", "", "", "", day.reason]));
   }
   lines.push("");
-  lines.push(row(["Totals", "Variant", "Part", "Trades", "Wins", "Losses", "Net P&L", "Max drawdown", "Win rate % / profit factor / avg trade / avg win / avg loss / avg R / max losing streak / false breakouts % / no-trade days % / target days %"]));
+  lines.push(row(["Totals", "Variant", "Part", "Trades", "Wins", "Losses", "Net P&L", "Max drawdown", "Win rate % / profit factor / avg trade / avg win / avg loss / avg R / max losing streak / false breakouts % / no-trade days % / target days %", "Breakouts detected", "False breakouts filtered", "Expired", "Target hits", "Open at session end", "Gross P&L", "Worst adverse move / unit", "Avg adverse move / unit"]));
   const split = splitDates(days.map((day) => day.date));
   for (const variant of [...new Set(days.map((day) => day.variant))]) {
     const set = days.filter((day) => day.variant === variant);
@@ -191,8 +217,15 @@ export function backtestCsv(days: BacktestDay[]): string {
     for (const [part, subset] of parts) {
       if (!subset.length) continue;
       const totals = backtestTotals(subset);
-      lines.push(row(["TOTAL", variantLabel(variant), `${part}: ${totals.days} days (${totals.daysSkipped} skipped)`, totals.trades, totals.wins, totals.losses, totals.pnl.toFixed(2), totals.maxDrawdown.toFixed(2), [totals.winRate ?? "—", totals.profitFactor ?? "—", totals.averageTrade ?? "—", totals.averageWin ?? "—", totals.averageLoss ?? "—", totals.averageR ?? "—", totals.maxConsecutiveLosses, totals.falseBreakouts ?? "—", totals.noTradeDays ?? "—", totals.targetDays ?? "—"].join(" / ")]));
+      lines.push(row(["TOTAL", variantLabel(variant), `${part}: ${totals.days} days (${totals.daysSkipped} skipped)`, totals.trades, totals.wins, totals.losses, totals.pnl.toFixed(2), totals.maxDrawdown.toFixed(2), [totals.winRate ?? "—", totals.profitFactor ?? "—", totals.averageTrade ?? "—", totals.averageWin ?? "—", totals.averageLoss ?? "—", totals.averageR ?? "—", totals.maxConsecutiveLosses, totals.falseBreakouts ?? "—", totals.noTradeDays ?? "—", totals.targetDays ?? "—"].join(" / "), totals.detected, totals.filtered, totals.expired, totals.targetHits, totals.openAtEnd, totals.gross.toFixed(2), totals.worstAdverse ?? "", totals.averageAdverse ?? ""]));
     }
+  }
+  lines.push("");
+  lines.push(row(["Trades", "Variant", "Trade", "Side", "Entry time (IST)", "Entry premium", "Exit time (IST)", "Exit premium", "Exit reason", "Gross P&L", "Net P&L", "Max adverse move / unit"]));
+  const ist = (seconds: number | null) => (seconds == null ? "" : new Date((seconds + 19_800) * 1000).toISOString().slice(11, 16));
+  for (const day of [...days].sort((a, b) => a.date.localeCompare(b.date) || a.variant.localeCompare(b.variant))) {
+    if (!day.ok) continue;
+    for (const trade of day.trades) lines.push(row([day.date, variantLabel(day.variant), trade.number, trade.side, ist(trade.entryTime), trade.entryPremium.toFixed(2), ist(trade.exitTime), trade.exitPremium?.toFixed(2) ?? "", trade.exitReason ?? "Open", trade.gross?.toFixed(2) ?? "", trade.realized?.toFixed(2) ?? "", trade.adverse?.toFixed(2) ?? ""]));
   }
   return `﻿${lines.join("\r\n")}\r\n`;
 }

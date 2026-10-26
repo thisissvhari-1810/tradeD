@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { cx } from "@/components/ui";
 import { api } from "@/components/api";
-import { ENGINE_LABEL, type AlgoConfig, type AlgoState, type EngineStatus } from "@/lib/algo/runner";
+import { confirmationMode, ENGINE_LABEL, type AlgoConfig, type AlgoState, type EngineStatus } from "@/lib/algo/runner";
 import { RISK_DEFAULTS } from "@/lib/algo/sizing";
 import type { MarketPlan } from "@/lib/algo/plan";
 
@@ -149,9 +149,12 @@ export function MathiStatus({ state, config, mode, now, signal: latest = null }:
     : state.position ? "A position is open (one at a time)"
     : !state.entries ? "New entries are switched off"
     : null;
-  const signal = state?.lastSignal && (state.lastSignal.decision === "CALL" || state.lastSignal.decision === "PUT") ? `${state.lastSignal.decision === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"} at ${ist(state.lastSignal.time + 60)}` : "Waiting";
+  const awaiting = state?.awaiting ?? null;
+  const signal = awaiting ? `${awaiting.direction} detected at ${ist(awaiting.time + 60)} — confirming` : state?.lastSignal && (state.lastSignal.decision === "CALL" || state.lastSignal.decision === "PUT") ? `${state.lastSignal.decision === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"} at ${ist(state.lastSignal.time + 60)}` : "Waiting";
+  const invalidated = state?.position ? state.confirmations?.find((item) => item.status === "SETUP INVALIDATED") ?? null : null;
   return (
     <section className="rounded-lg border border-border-soft" aria-label="Mathi Strategy status">
+      {invalidated ? <p className="border-b border-border-soft bg-warning-soft px-3 py-1.5 text-xs font-semibold text-warning" role="alert">SETUP INVALIDATED — POSITION STILL OPEN · {invalidated.why}</p> : null}
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 px-3 py-2 text-xs">
         <Cell label="Strategy" value="Mathi Strategy" />
         <Cell label="Mode" value={mode} />
@@ -160,11 +163,12 @@ export function MathiStatus({ state, config, mode, now, signal: latest = null }:
         <Cell label="Position" value={state?.position ? `Open · ${state.position.side === "CALL" ? "ATM CE" : "ATM PE"}` : "None"} />
         <Cell label="Target" value={`Entry premium +${config.target.value}%`} />
         <Cell label="Stop-loss" value={config.stopLoss === false ? "None" : "On"} />
+        <Cell label="Confirmation" value={{ single: "Single candle", hold: "Breakout hold", retest: "Retest" }[confirmationMode(config)]} />
         <Cell label="Entry" value={blocked ? `Blocked — ${blocked}` : "Enabled"} tone={blocked ? "text-warning" : "text-profit"} />
       </dl>
       {latest ? (
         <div className="border-t border-border-soft px-3 py-2 text-xs">
-          <p className="flex items-center gap-2"><span className={cx("rounded-pill px-2 py-0.5 font-semibold", latest.result.startsWith("REJECTED") ? "bg-loss-soft text-loss" : latest.result.startsWith("ORDER") ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{latest.result.split(" — ")[0]}</span><span className={cx("font-semibold", latest.side === "CALL" ? "text-profit" : "text-loss")}>{latest.side === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"}</span><span className="num ml-auto text-muted">{ist(latest.time)}–{ist(latest.time + 60)}</span></p>
+          <p className="flex items-center gap-2"><span className={cx("rounded-pill px-2 py-0.5 font-semibold", latest.result.startsWith("REJECTED") || latest.result.startsWith("FALSE BREAKOUT") || latest.result.startsWith("SIGNAL EXPIRED") ? "bg-loss-soft text-loss" : latest.result.startsWith("ORDER") ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{latest.result.split(" — ")[0]}</span><span className={cx("font-semibold", latest.side === "CALL" ? "text-profit" : "text-loss")}>{latest.side === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"}</span><span className="num ml-auto text-muted">{ist(latest.time)}–{ist(latest.time + 60)}</span></p>
           <p className="mt-0.5 text-text-2">{latest.line}{latest.price != null ? ` ${latest.price.toFixed(2)}` : ""}{latest.contract ? ` · ${latest.contract}` : ""}</p>
           {latest.result.includes(" — ") ? <p className="mt-0.5 text-muted">{latest.result.split(" — ").slice(1).join(" — ")}</p> : null}
         </div>

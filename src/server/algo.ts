@@ -740,7 +740,12 @@ export async function backtestDay(user: SessionUser, date: string, variant: stri
   const saved = { ...configFor(session, strategy), mode: "REPLAY" as const };
   // "baseline": the entry filters and the structure stop off; "score:NN": the saved settings with another minimum score.
   const score = /^score:(\d{1,3})$/.exec(variant);
-  const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false } : score ? { ...saved, minScore: Math.min(100, Number(score[1])) } : saved;
+  // "confirm:single|hold|retest": the saved settings with another breakout confirmation mode (Mathi Strategy).
+  const confirm = /^confirm:(single|hold|retest)$/.exec(variant);
+  const config: AlgoConfig = variant === "baseline" ? { ...saved, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false }
+    : score ? { ...saved, minScore: Math.min(100, Number(score[1])) }
+    : confirm ? { ...saved, filters: { ...saved.filters, secondCandle: false }, confirmation: { ...saved.confirmation, mode: confirm[1] as "single" | "hold" | "retest" } }
+    : saved;
   const problems = algoConfigProblems(config);
   if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
   try {
@@ -748,7 +753,7 @@ export async function backtestDay(user: SessionUser, date: string, variant: stri
     const trades = algoTrades(events, null);
     // The planned risk of each entry (risk sizing), in entry order, for results in R (multiples of risk).
     const risks = events.filter((event) => event.kind === "ENTRY").map((event) => event.setup?.risk ?? null);
-    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade, index) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized, risk: risks[index] ?? null })), rejected: skippedSignals(events).length, dailyTarget: config.risk.dailyTarget };
+    return { date, variant, ok: true as const, expiry, stats: runStats(events), trades: trades.map((trade, index) => ({ number: trade.number, side: trade.side, strategy: trade.strategy, entryTime: trade.entryTime, entryPremium: trade.entryPremium, exitTime: trade.exitTime, exitPremium: trade.exitPremium, exitReason: trade.exitReason, realized: trade.realized, gross: trade.gross, adverse: trade.adverse, risk: risks[index] ?? null })), rejected: skippedSignals(events).length, dailyTarget: config.risk.dailyTarget };
   } catch (error) {
     // A day without data (a holiday, missing history) is reported, not fatal.
     return { date, variant, ok: false as const, reason: error instanceof Error ? error.message : "This day could not be simulated." };

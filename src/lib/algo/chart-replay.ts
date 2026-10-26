@@ -55,19 +55,30 @@ export type RunStats = {
   realized: number;
   maxDrawdown: number;
   exits: Record<string, number>;
+  /** Breakout confirmation: crossings detected (waiting to be confirmed), cancelled as false breakouts, expired. */
+  detected?: number;
+  falseBreakouts?: number;
+  expired?: number;
 };
 
 const EXIT_REASON = /^Exit \(([A-Z_]+)\)/;
 
 /** Session figures from the run's own log (closed trades are counted once, by their exit events). */
 export function runStats(events: AlgoEvent[]): RunStats {
-  const stats: RunStats = { signals: 0, accepted: 0, rejected: 0, trades: 0, wins: 0, losses: 0, realized: 0, maxDrawdown: 0, exits: {} };
+  const stats: RunStats = { signals: 0, accepted: 0, rejected: 0, trades: 0, wins: 0, losses: 0, realized: 0, maxDrawdown: 0, exits: {}, detected: 0, falseBreakouts: 0, expired: 0 };
   let peak = 0;
   const byEntry = new Map<string, number>();
   const ordered = [...events].sort((a, b) => a.time - b.time);
   for (const event of ordered) {
     const decision = event.evaluation?.decision;
     if (decision === "CALL" || decision === "PUT") stats.signals += 1;
+    if (event.key.startsWith("eval:")) {
+      const stage = event.evaluation?.stage;
+      // A cancellation on a candle that also detects a new crossing counts both.
+      if (stage === "SIGNAL_DETECTED" || (event.evaluation?.cancelled && event.evaluation.explanation.includes("SIGNAL DETECTED"))) stats.detected! += 1;
+      if (stage === "FALSE_BREAKOUT") stats.falseBreakouts! += 1;
+      if (stage === "EXPIRED") stats.expired! += 1;
+    }
     if (event.kind === "ENTRY") stats.accepted += 1;
     // One per rejected signal: the candle's evaluation (its "reject:" twin carries the same reasons).
     if (event.kind === "REJECTED" && !event.key.startsWith("reject:")) stats.rejected += 1;
@@ -297,6 +308,8 @@ export type AlgoTrade = {
   realized: number | null;
   /** (exit premium − entry premium) × quantity, before charges. */
   gross: number | null;
+  /** Largest fall of the premium below the entry while open, per unit (from the exit; null while open). */
+  adverse: number | null;
   returnPercent: number | null;
   durationMinutes: number | null;
   /** Simulated charges of the entry fill and of the exit fills (₹). */
@@ -346,12 +359,14 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       lotSize: contract?.lotSize ?? null,
       stop: event.stop ?? null,
       target: event.target ?? null,
-      status: "COMPLETED",
+      // Completed only once its exit fills cover the whole quantity (set below); never from the caller alone.
+      status: "OPEN",
       exitTime: null,
       exitPremium: null,
       exitReason: null,
       realized: null,
       gross: null,
+      adverse: null,
       returnPercent: null,
       durationMinutes: null,
     });
@@ -370,6 +385,9 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       trade.returnPercent = cost ? Math.round((trade.realized / cost) * 10_000) / 100 : null;
       trade.durationMinutes = Math.round((last.time - trade.entryTime) / MINUTE);
       trade.exitCharges = Math.round(exits.reduce((sum, event) => sum + (event.order?.charges ?? 0), 0) * 100) / 100;
+      const adverse = exits.map((event) => event.adverse).filter((value): value is number => value != null);
+      trade.adverse = adverse.length ? Math.max(...adverse) : null;
+      if (sold >= trade.quantity) trade.status = "COMPLETED";
     }
     if (open && open.entryKey === trade.entryKey) trade.status = open.exitPending ? "EXIT_PENDING" : "OPEN";
   }
@@ -384,7 +402,7 @@ export function skippedSignals(events: AlgoEvent[]): SkippedSignal[] {
   for (const event of events) {
     if (!event.key.startsWith("eval:") || !event.evaluation) continue;
     const decision = event.evaluation.decision;
-    const side = decision === "CALL" || decision === "PUT" ? decision : null;
+    const side = decision === "CALL" || decision === "PUT" ? decision : event.evaluation.setupSide ?? null;
     const lines = event.evaluation.events.map((cross) => `${cross.label} ${cross.direction === "DOWN" ? "↓" : "↑"}`);
     if (event.kind === "REJECTED") list.push({ id: event.key, time: event.time + MINUTE, side, reason: (event.reasons ?? [event.message]).join(" "), lines });
     else if (decision === "CONFLICTING_SIGNAL") list.push({ id: event.key, time: event.time + MINUTE, side: null, reason: event.evaluation.explanation, lines });

@@ -5,7 +5,7 @@ import { ArrowRight, Ban, Bot, ChevronDown, CircleDot, Download, History, LogIn,
 import { downloadAlgoReport } from "@/components/algo/algo-report";
 import { cx } from "@/components/ui";
 import { activityFeed, algoTrades, runDiagnostics, skippedSignals, tradeSlots, type ActivityItem, type AlgoTrade, type SlotState } from "@/lib/algo/chart-replay";
-import type { AlgoStatus } from "@/lib/algo/runner";
+import { confirmationMode, type AlgoStatus } from "@/lib/algo/runner";
 import type { ChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
 import { LiveMoney, money, rupeesOf, toneOf } from "@/components/algo/live-value";
@@ -308,15 +308,22 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 }
 
 /** The latest line signal of the run: the crossed line, its candle, the contract once bought, and what happened. */
-function latestSignal(events: Array<{ key: string; time: number; kind: string; message: string; evaluation?: { decision: string; time: number; events: Array<{ label: string; price: number }> }; contract?: { underlying: string; strike: number; right: string; expiry: string }; reasons?: string[] }>) {
-  const evaluation = [...events].reverse().find((event) => event.key.startsWith("eval") && (event.evaluation?.decision === "CALL" || event.evaluation?.decision === "PUT"));
+function latestSignal(events: Array<{ key: string; time: number; kind: string; message: string; evaluation?: { decision: string; time: number; events: Array<{ label: string; price: number }>; stage?: string; setupSide?: "CALL" | "PUT"; cancelled?: string; explanation: string }; contract?: { underlying: string; strike: number; right: string; expiry: string }; reasons?: string[] }>) {
+  const evaluation = [...events].reverse().find((event) => event.key.startsWith("eval") && (event.evaluation?.decision === "CALL" || event.evaluation?.decision === "PUT" || event.evaluation?.setupSide));
   if (!evaluation?.evaluation) return null;
   const time = evaluation.evaluation.time;
   const entry = events.find((event) => event.kind === "ENTRY" && event.time === time && event.contract);
   const cross = evaluation.evaluation.events[0];
+  const stage = evaluation.evaluation.stage;
+  // A detected breakout waiting for its confirmation, or cancelled (false breakout / expired): no order.
+  if (!entry && (stage === "SIGNAL_DETECTED" || stage === "WAITING" || stage === "FALSE_BREAKOUT" || stage === "EXPIRED") && evaluation.evaluation.setupSide) {
+    const text = evaluation.evaluation.explanation;
+    const [head, ...rest] = text.split(" — ");
+    return { side: evaluation.evaluation.setupSide, line: cross?.label ?? "Strategy line", price: cross?.price ?? null, time, contract: null, result: `${head} — ${rest.join(" — ")}` };
+  }
   const rejected = evaluation.kind === "REJECTED" ? (evaluation.reasons?.join(" ") || evaluation.message) : null;
   return {
-    side: evaluation.evaluation.decision as "CALL" | "PUT",
+    side: (evaluation.evaluation.decision === "CALL" || evaluation.evaluation.decision === "PUT" ? evaluation.evaluation.decision : evaluation.evaluation.setupSide) as "CALL" | "PUT",
     line: cross?.label ?? "Strategy line",
     price: cross?.price ?? null,
     time,
@@ -334,6 +341,9 @@ function TradeCard({ trade, max, position, confirmations, stale, selected, onOpe
         <p className="text-base font-semibold">T{trade.number} · <span className={call ? "text-profit" : "text-loss"}>BUY {trade.side}</span></p>
         <span className="inline-flex items-center gap-1 text-xs font-semibold"><CircleDot className={cx("h-3 w-3", trade.status === "OPEN" ? "text-profit" : "text-warning")} aria-hidden />{trade.status === "OPEN" ? "OPEN" : "EXIT PENDING"}</span>
       </div>
+      {confirmations?.some((item) => item.status === "SETUP INVALIDATED") ? (
+        <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-xs font-semibold text-warning" role="alert">SETUP INVALIDATED — POSITION STILL OPEN. {confirmations.find((item) => item.status === "SETUP INVALIDATED")?.why} There is no stop-loss: the trade stays open for its +target until you exit it.</p>
+      ) : null}
       <p className="text-sm text-text-2">{trade.underlying} {trade.strike} {trade.right} · {trade.expiry}</p>
       <p className="text-xs text-muted">{STRATEGY_LABEL[trade.strategy]}{trade.strategies.length > 1 ? ` (+ ${trade.strategies.slice(1).map((id) => STRATEGY_LABEL[id]).join(", ")})` : ""}</p>
       <p className="mt-2 text-xs font-medium uppercase tracking-wide text-muted">Live P&amp;L</p>
@@ -561,7 +571,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Cooldown", `${config.cooldownMinutes} min`],
     ["Entry cutoff", noCutoff ? "None" : `${config.entryCutoff} IST`],
     // Optional Mathi confirmations are listed only when switched on.
-    ...(mathi && config.filters.secondCandle ? [["Second candle", "Required"] as [string, string]] : []),
+    ...(mathi ? [["Breakout confirmation", { single: "Single candle (no confirmation)", hold: "Next candle must hold beyond the line", retest: `Retest must hold within ${config.confirmation.retestWindowMinutes} min` }[confirmationMode(config)]] as [string, string]] : []),
     ...(mathi && config.filters.momentum ? [["Momentum (9/21 EMA)", "Must agree"] as [string, string]] : []),
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];

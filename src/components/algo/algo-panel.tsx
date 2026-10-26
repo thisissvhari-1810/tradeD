@@ -12,7 +12,7 @@ import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/al
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
-import type { AlgoConfig, AlgoStatus } from "@/lib/algo/runner";
+import { confirmationMode, type AlgoConfig, type AlgoStatus, type ConfirmationMode } from "@/lib/algo/runner";
 import type { algoView } from "@/server/algo";
 
 export type AlgoData = Awaited<ReturnType<typeof algoView>>;
@@ -32,6 +32,12 @@ const STATUS: Record<AlgoStatus, { label: string; tone: string }> = {
   RISK_LOCKED: { label: "Risk lock", tone: "bg-loss-soft text-loss" },
 };
 
+const CONFIRMATION_TEXT: Record<ConfirmationMode, string> = { single: "Single candle", hold: "Breakout hold (next candle)", retest: "Retest of the line" };
+const CONFIRMATION_HELP: Record<ConfirmationMode, string> = {
+  hold: "The crossing candle is only a detected signal. The next completed candle must close beyond the line (below it for a PUT, above it for a CALL); if it closes back, the setup is cancelled as FALSE BREAKOUT — ENTRY CANCELLED and no order is sent.",
+  retest: "After the break, price must come back to the line without closing back across it, then a candle must move on (a bearish close below the retest candle's low for a PUT, a bullish close above its high for a CALL). A close back across the line cancels it; no retest in the window lets it expire. Fewer, later entries.",
+  single: "Enters on the crossing candle itself (no confirmation): fastest, but a break that reverses the next minute is still traded.",
+};
 const inr = (value: number | null | undefined) => (value == null ? "—" : `₹${value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const clock = (seconds: number | null | undefined) => (seconds ? new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000)) : "—");
 
@@ -237,6 +243,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
             <Info label="Strategy" text="Mathi Strategy" />
             <Info label="Entry signals" text="Enabled line breakouts / breakdowns" />
             <Info label="Body confirmation" text={draft.crossPercent ? `${draft.crossPercent}% of the body` : "Any body crossing"} />
+            <Info label="Breakout confirmation" text={CONFIRMATION_TEXT[confirmationMode(draft)]} />
             <Info label="Entry cutoff" text={draft.entryCutoff >= "15:30" ? "None" : `${draft.entryCutoff} IST`} />
             <Info label="Stop-loss" text={draft.stopLoss === false ? "Disabled" : "On"} />
             <Info label="Profit target" text={`${draft.target.value}% of option premium`} />
@@ -253,11 +260,28 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <p className="text-micro text-muted">Mathi Strategy trades only the enabled strategy lines (below): ATM CE when a bullish candle that opened at or below a line closes above it, ATM PE when a bearish candle that opened at or above a line closes below it. A wick never counts. W / M, bounce / rejection, trendline and opening-range signals are not used.</p>
           <Field label="Body past the line (%)"><NumberInput value={draft.crossPercent} step={5} min={0} onChange={(crossPercent) => set({ crossPercent })} /></Field>
           <p className="text-micro text-muted">{draft.crossPercent ? `At least ${draft.crossPercent}% of the candle's body must be past the line.` : "0 = any genuine crossing: the body opens at or before the line and closes past it, by any amount (e.g. 7 points). A wick alone never counts."}</p>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Enter while the candle forms (live paper)</span><input type="checkbox" className="oc-check" aria-label="Enter while the candle forms" checked={draft.intrabar} onChange={(event) => set({ intrabar: event.target.checked })} /></label>
-          <p className="text-micro text-muted">Live-price paper only, when the data feed provides the forming candle; once per candle. Replay uses 1-minute candles, so there the share is checked when each minute completes.</p>
-          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Second-candle confirmation</span><input type="checkbox" className="oc-check" aria-label="Second-candle confirmation" checked={draft.filters.secondCandle} onChange={(event) => set({ filters: { ...draft.filters, secondCandle: event.target.checked } })} /></label>
+          <p className="eyebrow pt-2">Breakout confirmation (false-breakout filter)</p>
+          <Field label="Confirmation">
+            <select className="compact-field w-[9.5rem]" aria-label="Breakout confirmation" value={confirmationMode(draft)} onChange={(event) => set({ filters: { ...draft.filters, secondCandle: false }, confirmation: { ...draft.confirmation, mode: event.target.value as ConfirmationMode } })}>
+              <option value="hold">Breakout hold</option>
+              <option value="retest">Retest</option>
+              <option value="single">Single candle</option>
+            </select>
+          </Field>
+          <p className="text-micro text-muted">{CONFIRMATION_HELP[confirmationMode(draft)]}</p>
+          {confirmationMode(draft) === "retest" ? (
+            <>
+              <Field label="Retest window (min)"><NumberInput value={draft.confirmation.retestWindowMinutes} step={1} min={2} onChange={(retestWindowMinutes) => set({ confirmation: { ...draft.confirmation, retestWindowMinutes } })} /></Field>
+              <Field label="Retest tolerance (%)"><NumberInput value={draft.confirmation.retestTolerancePercent} step={0.01} min={0} onChange={(retestTolerancePercent) => set({ confirmation: { ...draft.confirmation, retestTolerancePercent } })} /></Field>
+              <p className="text-micro text-muted">A candle within {draft.confirmation.retestTolerancePercent}% of the line (about {Math.round(22_500 * draft.confirmation.retestTolerancePercent) / 100} points on NIFTY 22,500) counts as its retest.</p>
+            </>
+          ) : null}
+          <Field label="Breakout buffer (%)"><NumberInput value={draft.filters.breakoutBufferPercent} step={0.01} min={0} onChange={(breakoutBufferPercent) => set({ filters: { ...draft.filters, breakoutBufferPercent } })} /></Field>
+          <p className="text-micro text-muted">{draft.filters.breakoutBufferPercent ? `The close must be at least ${draft.filters.breakoutBufferPercent}% beyond the line (the signal and the hold).` : "0 = off: any close beyond the line counts."}</p>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
-          <p className="text-micro text-muted">Both off by default: one completed candle that crosses with enough of its body is the signal.</p>
+          <p className="text-micro text-muted">Off by default. When on, a CALL needs the 9 EMA above the 21 EMA and a PUT below; a rejection says so.</p>
+          <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Enter while the candle forms (live paper)</span><input type="checkbox" className="oc-check" aria-label="Enter while the candle forms" checked={draft.intrabar} disabled={confirmationMode(draft) !== "single"} onChange={(event) => set({ intrabar: event.target.checked })} /></label>
+          <p className="text-micro text-muted">{confirmationMode(draft) === "single" ? "Live-price paper only, when the data feed provides the forming candle; once per candle. Replay uses 1-minute candles." : "Not used with breakout confirmation: a breakout is confirmed on completed candles only."}</p>
 
           <p className="eyebrow pt-2">Quantity, target and limits</p>
           <Field label="Position size">

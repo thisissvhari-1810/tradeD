@@ -1,6 +1,6 @@
 import { algoTrades, confirmationEntryKey, entryFillTime, EXIT_LABEL, type AlgoTrade, type RunStats } from "./chart-replay";
 import { STRATEGY_IDS, STRATEGY_LABEL } from "./patterns";
-import type { AlgoConfig, AlgoEvent } from "./runner";
+import { confirmationMode, type AlgoConfig, type AlgoEvent } from "./runner";
 
 /**
  * The downloadable Algo trade report for one replay session: a CSV (opens in Excel / Sheets) with three
@@ -73,8 +73,17 @@ function grossOf(trade: AlgoTrade, events: AlgoEvent[]) {
   return Math.round(exits.reduce((sum, event) => sum + (event.gross ?? ((event.order?.price ?? 0) - trade.entryPremium) * (event.order?.quantity ?? 0)), 0) * 100) / 100;
 }
 
+/** A trade's status: completed only with its exit fills; still open when the session ended is said so. */
+export function tradeStatusLabel(trade: AlgoTrade, ended: boolean) {
+  if (trade.status === "COMPLETED") return "Completed";
+  if (trade.status === "EXIT_PENDING") return "Exit pending";
+  return ended ? "OPEN AT REPLAY END" : "Open";
+}
+
+const CONFIRMATION_LABEL = { single: "Single candle (enter on the crossing candle)", hold: "Breakout hold (the next candle must close beyond the line)", retest: "Retest (a retest of the line must hold, then price moves on)" } as const;
+
 /** Everything about one trade, as label / value rows (where and how it was bought, and how it ended). */
-export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: AlgoConfig): Array<[string, string]> {
+export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: AlgoConfig, ended = false): Array<[string, string]> {
   const signal = signalOf(trade, events);
   const gross = grossOf(trade, events);
   const lots = trade.lotSize ? trade.quantity / trade.lotSize : null;
@@ -93,6 +102,7 @@ export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: Alg
     ["Points past the line", num(signal.pastPoints)],
     ["Share of the body past the line (%)", signal.bodyShare == null ? "" : signal.bodyShare.toFixed(1)],
     ["Required share (%)", settings.crossRule === "body" ? String(settings.crossPercent || "any crossing") : "classic body crossing"],
+    ["Breakout confirmation", CONFIRMATION_LABEL[confirmationMode(settings)]],
     ["Why it entered", signal.reason],
     ["Underlying at signal", num(trade.underlyingAtSignal)],
     ["Option contract", `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`],
@@ -110,14 +120,16 @@ export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: Alg
     ["Stop-loss premium", trade.stop ? num(trade.stop) : "None (no stop-loss)"],
     ["Exit time (IST)", trade.exitTime ? ist(trade.exitTime) : ""],
     ["Exit premium per unit", num(trade.exitPremium)],
-    ["Exit reason", trade.exitReason ?? (trade.status === "COMPLETED" ? "" : "Still open")],
+    ["Exit reason", trade.exitReason ?? (ended ? "Still open when the replay ended" : "Still open")],
     ["Exit charges", num(trade.exitCharges)],
     ["Gross P&L (before charges)", num(gross)],
     ["Total charges", num(trade.entryCharges + trade.exitCharges)],
     ["Net realized P&L (after charges)", num(trade.realized)],
     ["Return on the premium paid (%)", trade.returnPercent == null ? "" : trade.returnPercent.toFixed(2)],
     ["Duration (minutes)", trade.durationMinutes == null ? "" : String(trade.durationMinutes)],
-    ["Status", trade.status === "COMPLETED" ? "Completed" : trade.status === "EXIT_PENDING" ? "Exit pending" : "Open"],
+    ["Max adverse premium move per unit", trade.adverse == null ? "" : num(trade.adverse)],
+    ["Max adverse premium move (% of entry)", trade.adverse == null || !trade.entryPremium ? "" : ((trade.adverse / trade.entryPremium) * 100).toFixed(2)],
+    ["Status", tradeStatusLabel(trade, ended)],
   ];
 }
 
@@ -133,7 +145,7 @@ export function algoTradeCsv(report: AlgoReportInput, entryKey: string): string 
   lines.push(row(["Replay date", report.date]));
   lines.push("");
   lines.push(row(["TRADE DETAILS"]));
-  for (const [label, value] of tradeRecord(trade, report.events, report.settings)) lines.push(row([label, value]));
+  for (const [label, value] of tradeRecord(trade, report.events, report.settings, report.status === "ENDED")) lines.push(row([label, value]));
   lines.push("");
   lines.push(row(["TRADE EVENTS"]));
   lines.push(row(["Time (IST)", "Event", "Option", "Order", "Quantity", "Premium", "Charges", "P&L", "Details"]));
@@ -175,12 +187,14 @@ export function algoReportCsv(report: AlgoReportInput): string {
   lines.push(row(["Wins / losses", `${report.stats.wins} / ${report.stats.losses}`]));
   lines.push(row(["Max drawdown", num(report.stats.maxDrawdown)]));
   lines.push(row(["Signals / accepted / rejected", `${report.stats.signals} / ${report.stats.accepted} / ${report.stats.rejected}`]));
+  lines.push(row(["Breakouts detected / false breakouts cancelled / expired", `${report.stats.detected ?? 0} / ${report.stats.falseBreakouts ?? 0} / ${report.stats.expired ?? 0}`]));
+  lines.push(row(["Breakout confirmation", CONFIRMATION_LABEL[confirmationMode(settings)]]));
   lines.push(row(["Strategies on", STRATEGY_IDS.filter((id) => settings.strategies?.[id]).map((id) => STRATEGY_LABEL[id]).join("; ")]));
   lines.push(row(["Settings", `${settings.lots} lot(s); stop ${settings.stop.value}${settings.stop.mode === "percent" ? "%" : " Rs"}; target ${settings.target.value}${settings.target.mode === "percent" ? "%" : " Rs"}; max daily loss ${settings.maxDailyLoss}; cooldown ${settings.cooldownMinutes} min; observation ${settings.observationMinutes} min; entries until ${settings.entryCutoff}`]));
   lines.push("");
 
   lines.push(row(["TRADES"]));
-  lines.push(row(["Trade", "Side", "Strategy", "Trigger", "Line price", "Signal candle open", "Signal candle high", "Signal candle low", "Signal candle close", "Points past the line", "Body past the line %", "Option", "Expiry", "Lot size", "Lots", "Quantity", "Signal time", "Underlying at signal", "Entry time", "Entry premium", "Entry value", "Entry charges", "Capital committed", "Stop-loss", "Target", "Exit time", "Exit premium", "Exit reason", "Exit charges", "Gross P&L", "Total charges", "Net realized P&L", "Return %", "Duration (min)", "Status"]));
+  lines.push(row(["Trade", "Side", "Strategy", "Trigger", "Line price", "Signal candle open", "Signal candle high", "Signal candle low", "Signal candle close", "Points past the line", "Body past the line %", "Option", "Expiry", "Lot size", "Lots", "Quantity", "Signal time", "Underlying at signal", "Entry time", "Entry premium", "Entry value", "Entry charges", "Capital committed", "Stop-loss", "Target", "Exit time", "Exit premium", "Exit reason", "Exit charges", "Gross P&L", "Total charges", "Net realized P&L", "Return %", "Duration (min)", "Max adverse move / unit", "Status"]));
   for (const trade of trades) {
     const signal = signalOf(trade, report.events);
     lines.push(row([
@@ -188,7 +202,7 @@ export function algoReportCsv(report: AlgoReportInput): string {
       `${trade.underlying} ${trade.strike ?? ""} ${trade.right}`, trade.expiry, trade.lotSize ?? "", trade.lotSize ? trade.quantity / trade.lotSize : "", trade.quantity,
       ist(trade.signalTime + 60), num(trade.underlyingAtSignal), ist(trade.entryTime), num(trade.entryPremium), num(trade.entryPremium * trade.quantity), num(trade.entryCharges), num(trade.entryPremium * trade.quantity + trade.entryCharges), trade.stop ? num(trade.stop) : "None", num(trade.target),
       trade.exitTime ? ist(trade.exitTime) : "", num(trade.exitPremium), trade.exitReason ?? "", num(trade.exitCharges), num(grossOf(trade, report.events)), num(trade.entryCharges + trade.exitCharges), num(trade.realized),
-      trade.returnPercent == null ? "" : trade.returnPercent.toFixed(2), trade.durationMinutes ?? "", trade.status === "COMPLETED" ? "Completed" : "Open",
+      trade.returnPercent == null ? "" : trade.returnPercent.toFixed(2), trade.durationMinutes ?? "", trade.adverse == null ? "" : num(trade.adverse), tradeStatusLabel(trade, report.status === "ENDED"),
     ]));
   }
   if (!trades.length) lines.push(row(["No trades in this session."]));

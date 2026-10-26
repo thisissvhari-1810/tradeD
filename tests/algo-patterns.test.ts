@@ -318,7 +318,7 @@ describe("multi-day backtest arithmetic", () => {
     const start = server.indexOf("export async function backtestDay");
     const day = server.slice(start, start + server.slice(start).search(/\r?\n\}\r?\n/));
     expect(day.length).toBeGreaterThan(200);
-    expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \} : score \? \{ \.\.\.saved, minScore: Math\.min\(100, Number\(score\[1\]\)\) \} : saved/);
+    expect(day).toMatch(/variant === "baseline" \? \{ \.\.\.saved, filters: \{ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false \}, structureStop: false \}\s*: score \? \{ \.\.\.saved, minScore: Math\.min\(100, Number\(score\[1\]\)\) \}\s*: confirm \? \{ \.\.\.saved, filters: \{ \.\.\.saved\.filters, secondCandle: false \}, confirmation: \{ \.\.\.saved\.confirmation, mode: confirm\[1\]/);
     expect(day).not.toMatch(/prisma\.\w+\.(update|create|upsert|delete)/);
     expect(server).toMatch(/if \(sessionComplete\(state, config\.stopAtLimit === false \? Infinity : config\.maxTrades\)\) break;/);
     expect(readFileSync("src/app/api/algo/route.ts", "utf8")).toMatch(/return Response\.json\(await backtestDay\(user, input\.date, input\.variant, input\.strategy\)\)/);

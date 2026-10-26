@@ -208,7 +208,7 @@ function premiums(shape: (index: number) => { low: number; high: number; close: 
 }
 
 // The engine's replay tests run with the entry filters and the structure stop off; the filters have their own tests.
-const config: AlgoConfig = { ...ALGO_DEFAULTS, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false }, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+const config: AlgoConfig = { ...ALGO_DEFAULTS, stopLoss: true, crossRule: "classic", crossPercent: 0, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, stopAtLimit: true, intrabar: false, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false }, lots: 1, sizing: "fixed", entryCutoff: "15:00", maxDailyLoss: 5_000, strategies: { line: true, trendline: true, w: true, m: true, orb: false, bounce: false, rejection: false }, mode: "REPLAY", stop: { mode: "percent", value: 20 }, target: { mode: "percent", value: 40 }, slippageTicks: 1, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
 
 async function run(candles: Candle[], options: { state?: AlgoState; processedThrough?: number; cursor: number; config?: AlgoConfig }) {
   return stepChartRun({
@@ -1352,14 +1352,14 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
     const confirmed = await run(day(LINE + 10, { 30: LINE - 10, 31: LINE - 15 }), { cursor: m(40), config: only({ secondCandle: true }) });
     const entry = confirmed.events.find((event) => event.kind === "ENTRY");
     expect(entry?.time).toBe(m(31));
-    expect(confirmed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/^Second candle confirmed/);
+    expect(confirmed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/^SETUP CONFIRMED — breakout held/);
   });
 
   it("second candle: a signal whose next candle comes back is dropped (no trade)", async () => {
     // The next candle closes back on the line (not beyond it, and not a new crossing either).
     const failed = await run(day(LINE + 10, { 30: LINE - 10, 31: LINE }), { cursor: m(40), config: only({ secondCandle: true }) });
     expect(db.state.orders).toHaveLength(0);
-    expect(failed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/signal was not confirmed/);
+    expect(failed.events.find((event) => event.key === `eval:${m(31)}`)?.message).toMatch(/^FALSE BREAKOUT — ENTRY CANCELLED/);
   });
 
   it("momentum: a PUT against a rising 9 / 21 EMA is rejected with the reason", async () => {
@@ -1419,7 +1419,7 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
 describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   // Line break only (the other setups have their own tests), no filters, any score: the window and sizing alone.
   // The ₹500 / ₹1,500 / ₹5,000 limits these cases were written for.
-  const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, mode: "REPLAY", maxDailyLoss: 1_500, risk: { ...ALGO_DEFAULTS.risk, perTradePercent: 0.5, dailyTarget: 5_000 }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+  const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, stopAtLimit: true, intrabar: false, mode: "REPLAY", maxDailyLoss: 1_500, risk: { ...ALGO_DEFAULTS.risk, perTradePercent: 0.5, dailyTarget: 5_000 }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
   /** Flat 10 above the line, a body crossing down to `by` below it at `at`, then flat there; `after` overrides closes. */
   function crossing(at: number, by: number, after: Record<number, number> = {}): Candle[] {
     const candles: Candle[] = [];
@@ -1482,7 +1482,7 @@ describe("session strategy: 09:15–12:00, risk-based sizing", () => {
 
 describe("trailing stop", () => {
   it("moves the index stop to each swing high confirmed after a PUT entry, never back", async () => {
-    const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, stopAtLimit: true, intrabar: false, mode: "REPLAY", risk: { ...ALGO_DEFAULTS.risk, targetMode: "trail" }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
+    const early: AlgoConfig = { ...ALGO_DEFAULTS, sizing: "risk", lots: 10, stopLoss: true, crossRule: "classic", crossPercent: 0, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, stopAtLimit: true, intrabar: false, mode: "REPLAY", risk: { ...ALGO_DEFAULTS.risk, targetMode: "trail" }, strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false }, minScore: 0, cooldownMinutes: 0, filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false }, structureStop: false };
     // Cross down at 1 (to LINE − 3), fall, bounce to a swing high at 6 (high LINE − 11), then fall further.
     const path: Record<number, number> = { 0: LINE + 10, 1: LINE - 3, 2: LINE - 10, 3: LINE - 14, 4: LINE - 18, 5: LINE - 22, 6: LINE - 12, 7: LINE - 24, 8: LINE - 28 };
     const candles: Candle[] = [];
@@ -1630,7 +1630,7 @@ describe("Algo - Primary Strategy re-entries in chart replay", () => {
 describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no stop-loss, 3 entries", () => {
   // Full-capital sizing (the default); the daily-target stop is off here so all three entries can be shown —
   // at full capital two +3% winners already pass the ₹3,000 daily target (its own test below).
-  const mathi: AlgoConfig = { ...ALGO_DEFAULTS, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
+  const mathi: AlgoConfig = { ...ALGO_DEFAULTS, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
   /** Flat closes at `base` off the line; `moves` sets a candle's open and close (index → [open, close]). */
   function path(moves: Record<number, [number, number]>, base: (index: number) => number): Candle[] {
     const candles: Candle[] = [];
@@ -1812,6 +1812,144 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     expect(server).toContain("events: panelEvents(events)");
     expect(server).toContain("diagnostics: runDiagnostics(events, enabledLines)");
     expect(server).not.toContain("events.slice(-400)");
+  });
+
+  describe("breakout confirmation (false-breakout filter)", () => {
+    // Your 22 Oct trade, shifted onto the test line (the previous-day box bottom 22,575.85 → LINE).
+    const shift = LINE - 22_575.85;
+    const at = (open: number, high: number, low: number, close: number) => ({ open: open + shift, high: high + shift, low: low + shift, close: close + shift });
+    const oct22: Record<number, ReturnType<typeof at>> = {
+      9: at(22_584.2, 22_589.7, 22_557.95, 22_560.4), // 09:24 — 64.9% of the bearish body below the line
+      10: at(22_560.4, 22_576.5, 22_556.0, 22_569.05), // 09:25 — back up to the line, still closes below it
+      11: at(22_569.05, 22_584.0, 22_566.0, 22_581.9), // 09:26 — closes back above the line
+    };
+    function session(special: Record<number, { open: number; high: number; low: number; close: number }>, before: number, after: number, from: number): Candle[] {
+      const candles: Candle[] = [];
+      for (let index = 0; index < 375; index += 1) {
+        const close = index < from ? before : after;
+        candles.push({ time: m(index), volume: 1000, ...(special[index] ?? { open: close, high: close + 1, low: close - 1, close }) });
+      }
+      return candles;
+    }
+    const oct22Candles = () => session(oct22, 22_584.2 + shift, 22_585 + shift, 9);
+    const hold: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation } };
+    const retest: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "retest" } };
+
+    it("Mathi Strategy confirms by default (breakout hold); saved settings move to it once; Algo - Primary Strategy is unaffected", () => {
+      expect(ALGO_DEFAULTS.confirmation.mode).toBe("hold");
+      expect(readAlgoConfig({ settingsVersion: 10 }).confirmation.mode).toBe("hold");
+      expect(readAlgoConfig({ settingsVersion: 11, confirmation: { mode: "single" } }).confirmation.mode).toBe("single");
+      expect(readAlgoConfig({ settingsVersion: 11, confirmation: { mode: "retest", retestWindowMinutes: 20 } }).confirmation).toMatchObject({ mode: "retest", retestWindowMinutes: 20 });
+      expect(readAlgoConfig({ engine: "primary", settingsVersion: 10 }).confirmation.mode).toBe("single");
+      expect(algoConfigProblems({ ...retest, confirmation: { ...retest.confirmation, retestWindowMinutes: 1 } })).toContain("The retest window must be 2 to 120 minutes.");
+    });
+
+    it("your 22 Oct PUT: single-candle mode entered at 09:25 on the crossing candle (the cause)", async () => {
+      const result = await run(oct22Candles(), { cursor: m(30), config: mathi });
+      expect(buys()).toHaveLength(1);
+      expect(result.events.find((event) => event.kind === "ENTRY")?.time).toBe(m(9));
+    });
+
+    it("your 22 Oct PUT with breakout hold: detected at 09:25, not traded; the 09:25 candle still closed below the line, so it confirms and enters at 09:26 — hold alone does not avoid this trade", async () => {
+      const result = await run(oct22Candles(), { cursor: m(30), config: hold });
+      const signal = result.events.find((event) => event.key === `eval:${m(9)}`)!;
+      expect(signal.evaluation?.stage).toBe("SIGNAL_DETECTED");
+      expect(signal.message).toMatch(/^SIGNAL DETECTED — Line break: bearish crossing at 23150\.00; not traded yet/);
+      expect(result.events.find((event) => event.key === `eval:${m(10)}`)?.message).toMatch(/^SETUP CONFIRMED — breakout held: the next candle closed at 23143\.20, still below 23150\.00/);
+      expect(result.events.find((event) => event.kind === "ENTRY")?.time).toBe(m(10));
+      expect(buys()).toHaveLength(1);
+    });
+
+    it("your 22 Oct PUT with retest: the 09:25 candle retests the line, the 09:26 candle reclaims it — FALSE BREAKOUT — ENTRY CANCELLED, no order, no entry counted", async () => {
+      const result = await run(oct22Candles(), { cursor: m(30), config: retest });
+      expect(result.events.find((event) => event.key === `eval:${m(10)}`)?.message).toMatch(/^RETEST IN PROGRESS/);
+      const cancelled = result.events.find((event) => event.key === `eval:${m(11)}`)!;
+      expect(cancelled.kind).toBe("REJECTED");
+      expect(cancelled.message).toMatch(/^FALSE BREAKOUT — ENTRY CANCELLED: the \d\d:\d\d PUT break of 23150\.00 was reclaimed; this candle closed at 23156\.05, back above the line after the retest\. No order was sent\./);
+      expect(buys()).toHaveLength(0);
+      expect(result.state.tradesToday).toBe(0);
+      expect(runStats(result.events)).toMatchObject({ detected: 1, falseBreakouts: 1, accepted: 0 });
+      expect(skippedSignals(result.events).find((item) => item.id === `eval:${m(11)}`)).toMatchObject({ side: "PUT" });
+    });
+
+    it("hold: a next candle back across the line cancels the setup; a cancelled setup never takes an entry slot, and later breakouts still trade", async () => {
+      // CALL break at 5 back below at 6 (cancelled); CALL break at 20 holding at 21 (enters at 21).
+      const candles = session({
+        5: { open: LINE - 10, high: LINE + 13, low: LINE - 11, close: LINE + 12 },
+        6: { open: LINE + 12, high: LINE + 13, low: LINE - 9, close: LINE - 8 },
+        20: { open: LINE - 8, high: LINE + 13, low: LINE - 9, close: LINE + 12 },
+        21: { open: LINE + 12, high: LINE + 16, low: LINE + 10, close: LINE + 15 },
+      }, LINE - 10, LINE - 8, 6).map((candle, index) => (index > 21 ? { ...candle, open: LINE + 15, high: LINE + 16, low: LINE + 14, close: LINE + 15 } : candle));
+      const result = await run(candles, { cursor: m(30), config: hold });
+      expect(result.events.find((event) => event.key === `eval:${m(6)}`)?.message).toMatch(/^FALSE BREAKOUT — ENTRY CANCELLED: the \d\d:\d\d CALL break of 23150\.00 did not hold; the next candle closed at 23142\.00, back below the line\. No order was sent\./);
+      const entries = result.events.filter((event) => event.kind === "ENTRY");
+      expect(entries.map((event) => [event.time, event.side])).toEqual([[m(21), "CALL"]]);
+      expect(result.state.tradesToday).toBe(1);
+    });
+
+    it("retest, CALL: break up, a retest that holds, then a bullish close above the retest high enters ATM CE; never on a future candle", async () => {
+      const candles = session({
+        5: { open: LINE - 10, high: LINE + 13, low: LINE - 11, close: LINE + 12 },
+        6: { open: LINE + 12, high: LINE + 14, low: LINE + 3, close: LINE + 6 }, // retest: low within 0.02% (4.63) of the line
+        7: { open: LINE + 6, high: LINE + 12, low: LINE + 5, close: LINE + 11 }, // bullish, but not above the retest high 14
+        8: { open: LINE + 11, high: LINE + 18, low: LINE + 10, close: LINE + 17 }, // bullish close above 14: confirmed
+      }, LINE - 10, LINE + 17, 9);
+      const partial = await run(candles, { cursor: m(8), config: retest });
+      expect(buys()).toHaveLength(0);
+      const result = await run(candles, { state: partial.state, processedThrough: partial.processedThrough, cursor: m(15), config: retest });
+      // Candle 7 is evaluated in the first step (completed at the cursor); candle 8 only once it has completed.
+      expect(partial.events.find((event) => event.key === `eval:${m(7)}`)?.message).toMatch(/^WAITING — .*waiting for a bullish close above 23164\.00/);
+      expect(partial.events.some((event) => event.key === `eval:${m(8)}`)).toBe(false);
+      expect(result.events.find((event) => event.key === `eval:${m(8)}`)?.message).toMatch(/^SETUP CONFIRMED — retest held/);
+      expect(result.events.find((event) => event.kind === "ENTRY")).toMatchObject({ time: m(8), side: "CALL" });
+      expect(String(db.state.instruments[0].symbol)).toContain("|CE|");
+    });
+
+    it("retest: no retest within the window lets the setup expire (no order)", async () => {
+      const candles = session({ 5: { open: LINE - 10, high: LINE + 13, low: LINE - 11, close: LINE + 12 } }, LINE - 10, LINE + 40, 6);
+      const result = await run(candles, { cursor: m(40), config: { ...retest, confirmation: { ...retest.confirmation, retestWindowMinutes: 10 } } });
+      expect(result.events.find((event) => event.key === `eval:${m(16)}`)?.message).toMatch(/^SIGNAL EXPIRED — no retest of 23150\.00 that held and moved on within 10 minutes/);
+      expect(buys()).toHaveLength(0);
+      expect(runStats(result.events).expired).toBe(1);
+    });
+
+    it("an open trade whose setup is invalidated stays open (no stop-loss) and records its maximum adverse premium move", async () => {
+      // Enters on the 09:24 candle (single), the premium dips to 95 at 10 and reaches the target at 12.
+      feed.premiums = premiums((index) => (index === 10 ? { low: 95, high: 100.5, close: 97 } : index === 12 ? { low: 99.5, high: 104, close: 100 } : null));
+      const result = await run(oct22Candles(), { cursor: m(12), config: mathi });
+      expect(result.state.position).not.toBeNull();
+      // The 09:26 close back above the line: the setup is invalidated, the position is still open.
+      expect(result.state.confirmations?.some((item) => item.status === "SETUP INVALIDATED")).toBe(true);
+      expect(sells()).toHaveLength(0);
+      const later = await run(oct22Candles(), { state: result.state, processedThrough: result.processedThrough, cursor: m(14), config: mathi });
+      const exit = later.events.find((event) => event.kind === "EXIT")!;
+      expect(exit.message).toMatch(/^Exit \(TARGET\)/);
+      const entry = result.events.find((event) => event.kind === "ENTRY")!;
+      expect(exit.adverse).toBeCloseTo(entry.order!.price! - 95, 2);
+      expect(algoTrades([...result.events, ...later.events], null)[0].adverse).toBeCloseTo(entry.order!.price! - 95, 2);
+    });
+
+    it("a trade without an exit is never reported Completed: Open, or OPEN AT REPLAY END once the session ended", async () => {
+      feed.premiums = premiums((index) => (index >= 10 ? { low: 80, high: 90, close: 85 } : null));
+      const result = await run(oct22Candles(), { cursor: m(30), config: mathi });
+      const { tradeRecord, tradeStatusLabel } = await import("../src/lib/algo/report");
+      const trade = algoTrades(result.events, null)[0];
+      expect(trade.status).toBe("OPEN");
+      expect(trade.exitTime).toBeNull();
+      expect(Object.fromEntries(tradeRecord(trade, result.events, mathi)).Status).toBe("Open");
+      expect(Object.fromEntries(tradeRecord(trade, result.events, mathi, true))).toMatchObject({ Status: "OPEN AT REPLAY END", "Exit reason": "Still open when the replay ended" });
+      expect(tradeStatusLabel({ ...trade, status: "COMPLETED" }, true)).toBe("Completed");
+    });
+
+    it("the multi-day backtest compares the three modes on the same days, with the confirmation counts and target / open-at-end totals", async () => {
+      const { backtestTotals, variantLabel } = await import("../src/lib/algo/backtest");
+      expect(variantLabel("confirm:retest")).toBe("Confirmation: retest");
+      const stats = { ...runStats([]), detected: 4, falseBreakouts: 2, expired: 1, realized: 50 };
+      const trade = { number: 1, side: "PUT" as const, strategy: "line", entryTime: m(10), entryPremium: 100, exitTime: m(12), exitPremium: 103, exitReason: "Target", realized: 50, gross: 300, adverse: 4 };
+      const totals = backtestTotals([{ date: DATE, variant: "confirm:hold", ok: true, expiry: null, stats, trades: [trade, { ...trade, number: 2, exitReason: "Session end", realized: 0, gross: 10, adverse: 9 }], rejected: 0 }]);
+      expect(totals).toMatchObject({ detected: 4, filtered: 2, expired: 1, targetHits: 1, openAtEnd: 1, gross: 310, worstAdverse: 9, averageAdverse: 6.5 });
+      expect(readFileSync("src/lib/algo/request.ts", "utf8")).toContain("confirm:(single|hold|retest)");
+    });
   });
 
   it("no entry cutoff: a valid breakout at 12:30 enters (the session is open until 15:30)", async () => {

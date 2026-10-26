@@ -45,6 +45,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   const v8 = num(row.settingsVersion) >= 8 || !mathi;
   // Version 10: Mathi Strategy enters once 50% of the body is past the line; a saved share moves to 50% once.
   const v10 = num(row.settingsVersion) >= 10 || !mathi;
+  // Version 11: Mathi Strategy confirms a breakout before entering (the next candle must hold beyond the line);
+  // saved Mathi settings move to that once. Algo - Primary Strategy keeps its own engine's confirmation.
+  const v11 = num(row.settingsVersion) >= 11;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -90,6 +93,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
     intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : mathi,
     stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : !mathi,
+    confirmation: !mathi ? { ...ALGO_DEFAULTS.confirmation, mode: "single" } : v11 ? confirmationOf(row.confirmation) : { ...ALGO_DEFAULTS.confirmation },
     patterns: ((patterns) => (v6 ? patterns : { ...patterns, trendStop: PATTERN_DEFAULTS.trendStop }))(patternsOf(row.patterns)),
   };
 }
@@ -130,6 +134,16 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
     breakoutBufferPercent: Number.isFinite(num(row.breakoutBufferPercent)) ? num(row.breakoutBufferPercent) : fallback.breakoutBufferPercent,
     secondCandle: typeof row.secondCandle === "boolean" ? row.secondCandle : fallback.secondCandle,
     momentum: typeof row.momentum === "boolean" ? row.momentum : fallback.momentum,
+  };
+}
+
+function confirmationOf(value: unknown): AlgoConfig["confirmation"] {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const fallback = ALGO_DEFAULTS.confirmation;
+  return {
+    mode: row.mode === "single" || row.mode === "hold" || row.mode === "retest" ? row.mode : fallback.mode,
+    retestTolerancePercent: Number.isFinite(num(row.retestTolerancePercent)) ? num(row.retestTolerancePercent) : fallback.retestTolerancePercent,
+    retestWindowMinutes: Number.isFinite(num(row.retestWindowMinutes)) ? num(row.retestWindowMinutes) : fallback.retestWindowMinutes,
   };
 }
 
@@ -184,6 +198,11 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   const problems: string[] = [];
   const risky = config.sizing === "risk";
   if (!Number.isInteger(config.crossPercent) || config.crossPercent < 0 || config.crossPercent > 100) problems.push("The share of the body past the line must be 0 (any crossing) to 100%.");
+  const confirmation = config.confirmation ?? ALGO_DEFAULTS.confirmation;
+  if (confirmation.mode === "retest") {
+    if (!(confirmation.retestTolerancePercent >= 0 && confirmation.retestTolerancePercent <= 0.5)) problems.push("The retest tolerance must be 0% to 0.5% of the line.");
+    if (!Number.isInteger(confirmation.retestWindowMinutes) || confirmation.retestWindowMinutes < 2 || confirmation.retestWindowMinutes > 120) problems.push("The retest window must be 2 to 120 minutes.");
+  }
   if (config.sizing === "capital") {
     if (!(config.allocation.percent > 0 && config.allocation.percent <= 100)) problems.push("Capital allocation must be above 0% and at most 100%.");
     if (!(config.allocation.maxCapital >= 1_000 && config.allocation.maxCapital <= 100_000_000)) problems.push("Maximum capital must be ₹1,000 to ₹10,00,00,000.");

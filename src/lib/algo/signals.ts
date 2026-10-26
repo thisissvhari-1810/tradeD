@@ -80,6 +80,16 @@ export type CandleEvaluation = {
   explanation: string;
   /** Algo - Primary Strategy: every value and condition checked on this candle, and the order result. */
   audit?: import("./primary").PrimaryAudit | null;
+  /**
+   * Breakout confirmation (hold / retest modes): SIGNAL_DETECTED — the body crossed a line, not yet tradable;
+   * WAITING — still waiting for its hold or retest; SETUP_CONFIRMED — passed, goes to the entry checks;
+   * FALSE_BREAKOUT — price came back across the line, cancelled; EXPIRED — not confirmed in time, cancelled.
+   */
+  stage?: "SIGNAL_DETECTED" | "WAITING" | "SETUP_CONFIRMED" | "FALSE_BREAKOUT" | "EXPIRED";
+  /** The side of the setup a stage refers to (the decision itself is NO_SIGNAL until it is confirmed). */
+  setupSide?: "CALL" | "PUT";
+  /** Why a pending setup was cancelled (FALSE_BREAKOUT / EXPIRED): no order is sent. */
+  cancelled?: string;
 };
 
 /** Same IST trading day (a session's first candle is never paired with the previous day's last). */
