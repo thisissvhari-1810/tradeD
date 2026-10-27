@@ -21,7 +21,7 @@ export function featureStatus(data: AlgoData, strategy: AlgoStrategy) {
     return { label: activity?.running ? `Running${extra}` : `Stopping${extra}`, tone: "bg-profit-soft text-profit", owns: true, blocked: false };
   }
   if (owner !== "NONE") return { label: `Blocked: ${STRATEGY_NAME[owner]} is running`, tone: "bg-sunken text-muted", owns: false, blocked: true };
-  const problems = strategy === "PRIMARY_STRATEGY" ? data.primaryProblems : data.problems;
+  const problems = strategy === "PRIMARY_STRATEGY" ? data.primaryProblems : strategy === "MATHI_5" ? data.mathi5.problems : data.problems;
   return { label: problems.length ? "Settings need attention" : "Ready (stopped)", tone: problems.length ? "bg-warning-soft text-warning" : "bg-info-soft text-info", owns: false, blocked: false };
 }
 
@@ -70,7 +70,7 @@ export function StrategySelector({ data, selected, onSelect, onData }: { data: A
           <button key={strategy} type="button" role="radio" aria-checked={active} className={cx("w-full rounded-md border px-2.5 py-2 text-left transition-colors", active ? "border-primary bg-primary-soft/30" : "border-border-soft hover:bg-hover")} onClick={() => choose(strategy)}>
             <span className="flex items-center gap-2">
               <span className={cx("h-3 w-3 shrink-0 rounded-full border-2", active ? "border-primary bg-primary" : "border-border-strong")} aria-hidden />
-              <span className="min-w-0 flex-1 truncate font-semibold text-text">{STRATEGY_NAME[strategy]}{strategy === "PRIMARY_STRATEGY" ? " — NIFTY ORB + VWAP" : " — Existing Strategy"}</span>
+              <span className="min-w-0 flex-1 truncate font-semibold text-text">{STRATEGY_NAME[strategy]}{strategy === "PRIMARY_STRATEGY" ? " — NIFTY ORB + VWAP" : strategy === "MATHI_5" ? " — Mathi v18 with +5% target" : " — Existing Strategy"}</span>
               {status.owns ? <Lock className="h-3.5 w-3.5 shrink-0 text-profit" aria-label="Holds the execution lock" /> : null}
             </span>
             <span className="mt-0.5 block pl-5 text-micro leading-snug text-muted">{STRATEGY_DESCRIPTION[strategy]}</span>

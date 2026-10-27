@@ -1123,10 +1123,13 @@ model AlgoSession {
   state       Json
   /// A short lease so two ticks never run the same session at once.
   lockedUntil DateTime    @default(now())
-  /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO or PRIMARY_STRATEGY).
+  /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO, PRIMARY_STRATEGY or MATHI_5).
   activeStrategy String   @default("NONE")
   /// "Algo - Primary Strategy" (NIFTY ORB + VWAP) settings, independent of the existing algo's `config`.
   primaryConfig Json?
+  /// "Mathi 5%" (a copy of Mathi Strategy v18 with a +5% target): its own settings and live paper-trading state.
+  mathi5Config Json?
+  mathi5State  Json?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
   events      AlgoEvent[]

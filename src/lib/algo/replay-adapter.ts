@@ -1,7 +1,7 @@
 import { optionCharges } from "@/lib/options/engine";
 import { FILL_STALE_SECONDS } from "@/lib/options/replay-premium";
 import type { AlgoLine, Candle } from "./lines";
-import { atmStrike, type ChainInput, type Right } from "./options";
+import { tradeStrike, type ChainInput, type Right } from "./options";
 import { advance, initialState, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill } from "./runner";
 import { sessionComplete } from "./chart-replay";
 
@@ -58,7 +58,7 @@ export function createReplayAdapter(input: { candles: Candle[]; chain: ReplayCha
       let quoteAsOf = now;
       const spot = spotCandle?.close ?? null;
       const strikes = view.strikes.map((row) => ({ strike: row.strike, ce: null as ChainInput["strikes"][number]["ce"], pe: null as ChainInput["strikes"][number]["pe"] }));
-      const strike = spot != null ? atmStrike(view.strikes.map((row) => row.strike), spot, input.config.rounding) : null;
+      const strike = spot != null ? tradeStrike(view.strikes.map((row) => row.strike), spot, input.config.rounding, right, input.config.itmSteps ?? 0) : null;
       const row = view.strikes.find((item) => item.strike === strike);
       const side = right === "CE" ? row?.ce : row?.pe;
       if (row && side?.securityId && view.lotSize && spotCandle) {

@@ -116,6 +116,7 @@ export const EXIT_LABEL: Record<string, string> = {
   RECOVERY: "Recovery exit",
   INDEX_STOP: "NIFTY reversal stop",
   WINDOW_END: "Window end",
+  SQUARE_OFF: "End-of-day square-off",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
 };

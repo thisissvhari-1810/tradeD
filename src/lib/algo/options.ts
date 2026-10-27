@@ -20,7 +20,7 @@ export type ChainInput = {
 
 export type Right = "CE" | "PE";
 export type AtmContract = { underlying: string; expiry: string; strike: number; right: Right; securityId: string; lotSize: number; bid: number; ask: number; ltp: number | null; spot: number; asOf: string };
-export type AtmLimits = { rounding: "nearest" | "down" | "up"; maxQuoteAgeSeconds: number; maxSpreadPercent: number };
+export type AtmLimits = { rounding: "nearest" | "down" | "up"; maxQuoteAgeSeconds: number; maxSpreadPercent: number; itmSteps?: number };
 
 /** The chain's strike interval: the most common gap between neighbouring listed strikes. */
 export function strikeInterval(strikes: number[]) {
@@ -43,6 +43,15 @@ export function atmStrike(strikes: number[], spot: number, rounding: AtmLimits["
   return sorted.reduce((best, strike) => (Math.abs(strike - spot) < Math.abs(best - spot) ? strike : best), sorted[0]);
 }
 
+/** The ATM strike moved `itmSteps` listed strikes in the money (a CALL's lower strikes, a PUT's higher ones); 0 = ATM. Null when that strike is not listed. */
+export function tradeStrike(strikes: number[], spot: number, rounding: AtmLimits["rounding"], right: Right, itmSteps = 0) {
+  const atm = atmStrike(strikes, spot, rounding);
+  if (atm == null || !itmSteps) return atm;
+  const sorted = [...new Set(strikes)].sort((a, b) => a - b);
+  const index = sorted.indexOf(atm) + (right === "CE" ? -itmSteps : itmSteps);
+  return index >= 0 && index < sorted.length ? sorted[index] : null;
+}
+
 /** Resolves and validates the ATM CALL or PUT; every rejection names its reason. */
 export function resolveAtm(chain: ChainInput, right: Right, limits: AtmLimits, now: Date): { ok: true; contract: AtmContract } | { ok: false; reason: string } {
   if (chain.spot == null || !(chain.spot > 0)) return { ok: false, reason: "No valid underlying price." };
@@ -50,8 +59,8 @@ export function resolveAtm(chain: ChainInput, right: Right, limits: AtmLimits, n
   if (!chain.lotSize || !Number.isInteger(chain.lotSize) || chain.lotSize <= 0) return { ok: false, reason: "The contract's lot size is unknown or invalid." };
   const age = (now.getTime() - new Date(chain.asOf).getTime()) / 1000;
   if (!Number.isFinite(age) || age > limits.maxQuoteAgeSeconds) return { ok: false, reason: `Stale option quote (${Math.round(age)} s old; limit ${limits.maxQuoteAgeSeconds} s).` };
-  const strike = atmStrike(chain.strikes.map((row) => row.strike), chain.spot, limits.rounding);
-  if (strike == null) return { ok: false, reason: "No listed strike for the ATM price." };
+  const strike = tradeStrike(chain.strikes.map((row) => row.strike), chain.spot, limits.rounding, right, limits.itmSteps ?? 0);
+  if (strike == null) return { ok: false, reason: limits.itmSteps ? `No listed strike ${limits.itmSteps} step${limits.itmSteps === 1 ? "" : "s"} in the money.` : "No listed strike for the ATM price." };
   const row = chain.strikes.find((item) => item.strike === strike);
   const side = right === "CE" ? row?.ce : row?.pe;
   if (!side || !side.securityId) return { ok: false, reason: `The ATM ${right} contract (${strike}) is not listed.` };

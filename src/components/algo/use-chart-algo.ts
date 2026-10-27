@@ -260,7 +260,8 @@ export function useChartAlgo(input: {
   }, [command, date, forgetSession]);
 
   // Ready to trade the replay: Algo Trade in chart-replay mode, or Algo - Primary Strategy (chart replay only).
-  const replayReady = selected === "PRIMARY_STRATEGY" || run?.strategy === "PRIMARY_STRATEGY" || data?.config.mode === "REPLAY";
+  // Mathi 5% runs the same rules on the replay with its own settings (always chart replay there).
+  const replayReady = selected === "PRIMARY_STRATEGY" || selected === "MATHI_5" || run?.strategy === "PRIMARY_STRATEGY" || run?.strategy === "MATHI_5" || data?.config.mode === "REPLAY";
   const gate: PlayGate | null = cursor == null ? null : playGate({
     algoEnabled: enabled && replayReady,
     cursor,

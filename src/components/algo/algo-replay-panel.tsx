@@ -96,7 +96,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="text-base font-semibold">Algo</h2>
-        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : "Mathi"}</span>
+        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : feature === "MATHI_5" ? "Mathi 5%" : "Mathi"}</span>
         <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
         <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
         {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
@@ -530,7 +530,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   const [selected] = useSelectedStrategy();
   // The run's own feature (a resume), else the one selected for this new session.
   const strategy = algo.run?.strategy ?? selected;
-  const config = strategy === "PRIMARY_STRATEGY" ? data?.primaryConfig : data?.config;
+  const config = strategy === "PRIMARY_STRATEGY" ? data?.primaryConfig : strategy === "MATHI_5" ? (data ? { ...data.mathi5.config, mode: "REPLAY" as const } : undefined) : data?.config;
   const run = algo.run;
   const unsaved = useUnsavedSettings();
   // Always confirm with the settings saved right now (they may have been changed since the chart loaded them).

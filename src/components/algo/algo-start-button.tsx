@@ -5,6 +5,7 @@ import { Play, Square } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import type { AlgoData } from "@/components/algo/algo-panel";
+import { useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 
 /** Every fresh algo view is broadcast, so the chart button and the Algo panel always show the same session. */
 export const ALGO_VIEW_EVENT = "tradeD:algo-view";
@@ -14,6 +15,8 @@ export const broadcastAlgoView = (data: AlgoData) => {
 
 /** Algo panels on screen: while one is mounted it runs the 15-second server check, so the button does not repeat it. */
 export const algoPanelTicker = { mounted: 0 };
+/** Mathi 5% panels on screen: while one is mounted it runs Mathi 5%'s live check, so the button does not repeat it. */
+export const mathi5Ticker = { mounted: 0 };
 
 /**
  * Start Algo / Stop Algo on the live chart (paper trading only). Each Start begins a new session with its own
@@ -41,21 +44,38 @@ export function AlgoStartButton({ allowed, onUpgrade }: { allowed: boolean; onUp
     return () => window.removeEventListener(ALGO_VIEW_EVENT, onView);
   }, [allowed, apply]);
 
-  const activation = data?.liveSession.activation ?? null;
-  const running = Boolean(data?.state.running && activation && activation.endedAt == null);
-  const active = Boolean(running || data?.state.position || data?.state.pending);
+  // Mathi Strategy's live check runs from here while no Algo panel is open.
+  const mathiActive = Boolean(data?.state.running || data?.state.position || data?.state.pending);
   useEffect(() => {
-    if (!active) return;
+    if (!mathiActive) return;
     const timer = window.setInterval(() => {
       if (!document.hidden && algoPanelTicker.mounted === 0) api<AlgoData>("/api/algo", { action: "tick" }).then(apply).catch(() => undefined);
     }, 15_000);
     return () => window.clearInterval(timer);
-  }, [active, apply]);
+  }, [mathiActive, apply]);
+
+  // Mathi 5%'s live check also runs from here while no Mathi 5% panel is open.
+  const m5Active = Boolean(data?.mathi5.state.running || data?.mathi5.state.position || data?.mathi5.state.pending);
+  useEffect(() => {
+    if (!m5Active) return;
+    const timer = window.setInterval(() => {
+      if (!document.hidden && mathi5Ticker.mounted === 0) api<AlgoData>("/api/algo", { action: "mathi5", op: "tick" }).then(apply).catch(() => undefined);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [m5Active, apply]);
+
+  // The button starts and stops the strategy selected in the Algo panel (Mathi Strategy or Mathi 5%).
+  const [selected] = useSelectedStrategy();
+  const m5 = selected === "MATHI_5";
+  const view = m5 ? data?.mathi5 : data;
+  const name = m5 ? "Mathi 5%" : "Algo";
+  const activation = view?.liveSession.activation ?? null;
+  const running = Boolean(view?.state.running && activation && activation.endedAt == null);
 
   if (data && data.config.mode !== "PAPER") return null;
-  const summary = data?.liveSession.summary;
+  const summary = view?.liveSession.summary;
   const completedAll = activation?.end === "LIMIT";
-  const label = running ? "Stop Algo" : "Start Algo";
+  const label = running ? `Stop ${name}` : `Start ${name}`;
   const status = running ? "Running" : completedAll ? "Completed" : "Stopped";
 
   const toggle = async () => {
@@ -63,7 +83,7 @@ export function AlgoStartButton({ allowed, onUpgrade }: { allowed: boolean; onUp
     setBusy(true);
     setError("");
     try {
-      const body = { action: running ? "stop" : "start" };
+      const body = m5 ? { action: "mathi5", op: running ? "stop" : "start" } : { action: running ? "stop" : "start" };
       // A click that lands during the server's candle check is retried once.
       const next = await api<AlgoData>("/api/algo", body).catch(async (caught: unknown) => {
         if (!(caught instanceof Error && /busy/i.test(caught.message))) throw caught;
@@ -84,7 +104,7 @@ export function AlgoStartButton({ allowed, onUpgrade }: { allowed: boolean; onUp
         type="button"
         aria-pressed={running}
         aria-label="Start or stop the algo"
-        title={error || (running ? `Algo running · session ${activation?.id} · ${summary?.completed ?? 0} / ${summary?.max ?? 3} trades completed` : "Start a new paper-trading algo session (fresh ₹1,00,000, up to 3 trades)")}
+        title={error || (running ? `${name} running · session ${activation?.id} · ${summary?.completed ?? 0} / ${summary?.max ?? 3} trades completed` : `Start a new ${m5 ? "Mathi 5% " : ""}paper-trading algo session (fresh ₹1,00,000, up to 3 trades)`)}
         disabled={busy || !data}
         className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] disabled:opacity-60", running ? "bg-loss text-on-signal hover:brightness-110" : "bg-profit text-on-signal hover:brightness-110")}
         onClick={() => void toggle()}

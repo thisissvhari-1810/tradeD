@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readAlgoConfig, algoConfigProblems } from "@/lib/algo/config";
 import { ALL_LINE_TYPES, strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
-import { atmStrike, candleExit, protectiveLevels, quoteExit, resolveAtm, strikeInterval, type ChainInput } from "@/lib/algo/options";
+import { atmStrike, candleExit, protectiveLevels, quoteExit, resolveAtm, strikeInterval, tradeStrike, type ChainInput } from "@/lib/algo/options";
 import { advance, ALGO_DEFAULTS, initialState, regimeStatus, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import { bodyCross, consolidate, evaluateCandle } from "@/lib/algo/signals";
 import type { S1Data } from "@/lib/trading/s1";
@@ -213,6 +213,14 @@ describe("ATM option selection", () => {
     expect(put.ok && [put.contract.strike, put.contract.right, put.contract.securityId]).toEqual([24_000, "PE", "24000PE"]);
   });
 
+  it("moves one listed strike in the money when asked: a CALL's lower strike, a PUT's higher one", () => {
+    const strikes = [23_900, 23_950, 24_000, 24_050, 24_100];
+    expect(tradeStrike(strikes, 24_010, "nearest", "CE", 0)).toBe(24_000);
+    expect(tradeStrike(strikes, 24_010, "nearest", "CE", 1)).toBe(23_950);
+    expect(tradeStrike(strikes, 24_010, "nearest", "PE", 1)).toBe(24_050);
+    expect(tradeStrike(strikes, 24_090, "nearest", "PE", 1)).toBeNull(); // not listed: no trade, never a silent ATM
+  });
+
   it("rejects missing contracts, stale quotes, wide spreads and unknown lot sizes", () => {
     const limits = { rounding: "nearest" as const, maxQuoteAgeSeconds: 60, maxSpreadPercent: 5 };
     const now = new Date(NOW * 1000);
@@ -351,6 +359,18 @@ describe("the algo over time", () => {
     expect(locked.state.riskLocked).toBe(true);
     expect(locked.state.status).toBe("RISK_LOCKED");
     expect(adapter.calls.enter).toBe(0);
+  });
+
+  it("blocks new entries from the 15:20 IST square-off, even inside a later entry window", async () => {
+    const cfg = config({ entryCutoff: "15:30", squareOff: "15:20" });
+    // Signal candle 15:18 (closes 15:19): entered. Signal candle 15:19 (closes 15:20): blocked by the square-off.
+    const early = fakeAdapter();
+    await step(running({ lastCandle: at(360) }), crossing(lineOf("or-low").price, "DOWN", 362), early, undefined, cfg);
+    expect(early.calls.enter).toBe(1);
+    const late = fakeAdapter();
+    const blocked = await step(running({ lastCandle: at(361) }), crossing(lineOf("or-low").price, "DOWN", 363), late, undefined, cfg);
+    expect(late.calls.enter).toBe(0);
+    expect(blocked.events.find((event) => event.kind === "REJECTED")?.message).toMatch(/End-of-day square-off at 15:20 IST: no new entries/);
   });
 
   it("disabling entries blocks new trades but keeps protecting the open position", async () => {

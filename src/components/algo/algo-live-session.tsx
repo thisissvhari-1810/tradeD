@@ -36,7 +36,7 @@ function currentSignal(data: AlgoData, running: boolean): string {
  * the completed trades. Every figure is the server's (its stored state and order events); this only shows them
  * and sends ON / OFF — it never decides an entry or counts trades itself.
  */
-export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }: { data: AlgoData; busy: boolean; disabled: boolean; now: number | null; onStart: () => void; onStop: () => void }) {
+export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, title = "Mathi Strategy" }: { data: AlgoData; busy: boolean; disabled: boolean; now: number | null; onStart: () => void; onStop: () => void; title?: string }) {
   const live = data.liveSession;
   const account = data.account;
   const { activation, summary, trades } = live;
@@ -69,10 +69,10 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
   };
 
   return (
-    <div className="space-y-2" aria-label="Mathi Strategy live demo">
+    <div className="space-y-2" aria-label={`${title} live demo`}>
       <div className="flex items-center gap-2 rounded-md border border-border-soft bg-sunken/50 p-2">
         <div className="min-w-0">
-          <p className="font-semibold">Mathi Strategy <span className="text-micro font-normal text-muted">(live demo · simulated orders)</span></p>
+          <p className="font-semibold">{title} <span className="text-micro font-normal text-muted">(live demo · simulated orders)</span></p>
           <span className={cx("mt-0.5 inline-block whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", TONE[live.status])} role="status">{LIVE_STATUS_LABEL[live.status]}</span>
         </div>
         <button

@@ -1,5 +1,5 @@
 /**
- * The exclusive execution lock between the two algo features. Both can be configured, but only the lock's
+ * The exclusive execution lock between the algo features. All can be configured, but only the lock's
  * owner may place new orders. The lock lives with the user's algo session on the server and changes only
  * by compare-and-set (an atomic conditional update), so two start requests — rapid clicks, two tabs, a
  * remount — can never both acquire it. It is released only when its owner has nothing left to manage (no
@@ -7,21 +7,23 @@
  * protected. A lock whose owner is no longer active at all (a crash, an archived run) can be taken over.
  */
 
-export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY";
+export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5";
 export type LockOwner = "NONE" | AlgoStrategy;
-export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "PRIMARY_STRATEGY"];
+export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_5", "PRIMARY_STRATEGY"];
 
 export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Mathi Strategy",
   PRIMARY_STRATEGY: "Algo - Primary Strategy",
+  MATHI_5: "Mathi 5%",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE once 50% of a candle's body crosses an enabled line and the break holds on the next candle; +3% premium target, no stop-loss, 3 trades a session.",
   PRIMARY_STRATEGY: "NIFTY 50 options: opening-range breakout confirmed by session VWAP and the trend (9 / 21 EMA).",
+  MATHI_5: "A separate copy of Mathi Strategy v18: the same lines, confirmation, exits and 3 trades a session, with a +5% premium target.",
 };
 
 export function isAlgoStrategy(value: unknown): value is AlgoStrategy {
-  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY";
+  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY" || value === "MATHI_5";
 }
 
 export function lockOwnerOf(value: unknown): LockOwner {
@@ -61,7 +63,7 @@ export async function acquireLock(store: LockStore, strategy: AlgoStrategy, acti
     // Released (or taken by this strategy) between the two reads: try once more.
     if (await store.compareAndSet(["NONE", strategy], strategy)) return { ok: true };
     const now = await store.read();
-    if (now === "NONE" || now === strategy) return { ok: false, owner: strategy === "EXISTING_ALGO" ? "PRIMARY_STRATEGY" : "EXISTING_ALGO", reason: "The algo lock changed while starting. Try again." };
+    if (now === "NONE" || now === strategy) return { ok: false, owner: ALGO_STRATEGIES.find((item) => item !== strategy)!, reason: "The algo lock changed while starting. Try again." };
     return blocked(store, now, strategy, activityOf);
   }
   return blocked(store, owner, strategy, activityOf);

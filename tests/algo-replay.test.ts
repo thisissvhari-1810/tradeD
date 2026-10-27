@@ -411,6 +411,13 @@ describe("algo orders on the demo ledger during chart replay", () => {
     expect(result.ended).toBe(true);
     expect(result.state.position).toBeNull();
     expect(sells()).toHaveLength(1);
+    // The mandatory square-off (15:20 IST) closes it before the session's last candle.
+    expect(result.events.find((event) => event.kind === "EXIT")?.message).toMatch(/^Exit \(SQUARE_OFF\)/);
+  });
+
+  it("closes at the session end when the square-off is turned off", async () => {
+    const result = await run(underlying("DOWN", 300), { cursor: CLOSE + 30, config: { ...config, maxHoldMinutes: 0, squareOff: undefined } });
+    expect(result.state.position).toBeNull();
     expect(result.events.find((event) => event.kind === "EXIT")?.message).toMatch(/^Exit \(SESSION_END\)/);
   });
 
@@ -1638,7 +1645,8 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
   // at full capital two +3% winners already pass the ₹3,000 daily target (its own test below).
   const mathi: AlgoConfig = { ...ALGO_DEFAULTS, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" }, mode: "REPLAY", cooldownMinutes: 0, risk: { ...ALGO_DEFAULTS.risk, stopAtTarget: false } };
   // The version 11 behaviour: no exit when the index closes back through the line.
-  const noLineExit: AlgoConfig = { ...mathi, structureStop: false, maxHoldMinutes: 0 };
+  // No square-off either: these tests hold a trade to the session's end on purpose.
+  const noLineExit: AlgoConfig = { ...mathi, structureStop: false, maxHoldMinutes: 0, squareOff: undefined };
   /** Flat closes at `base` off the line; `moves` sets a candle's open and close (index → [open, close]). */
   function path(moves: Record<number, [number, number]>, base: (index: number) => number): Candle[] {
     const candles: Candle[] = [];

@@ -54,6 +54,8 @@ export type AlgoConfig = {
   entryCutoff: string;
   /** At the end of the entry window: keep an open position under its stop / target, or close it. */
   windowExit: "hold" | "close";
+  /** Mandatory end-of-day square-off (IST HH:MM): an open position is closed and no new entry starts from this time. */
+  squareOff?: string;
   /** "risk": lots sized from the index stop so one trade risks at most the risk per trade; "fixed": `lots`;
    * "capital" (Algo - Primary Strategy): the most whole lots the capital allocation and available cash buy. */
   sizing: "risk" | "fixed" | "capital";
@@ -102,7 +104,18 @@ export type AlgoConfig = {
     /** No-chase: skip a signal when the last this-many completed candles all moved in the trade's direction (a stretched
      * move usually pulls back first; 0 or absent = off). */
     noChaseCandles?: number;
+    /** The breakout candle must close beyond the line by at least this many 14-minute ATRs of NIFTY (0 or absent = off). */
+    breakoutAtrMultiple?: number;
+    /** Skip an over-extended break: the breakout candle's range above this many 14-minute ATRs (0 or absent = off). */
+    maxBreakoutCandleAtr?: number;
+    /** Skip while the session VWAP has moved against the trade over the last 10 minutes by more than this many ATRs
+     * (e.g. 0.45 skips a CALL when VWAP fell 0.45 × ATR or more; absent = off). */
+    maxVwapSlopeAgainstAtr?: number;
+    /** Skip while the 9 EMA is this many ATRs or more on the wrong side of the 21 EMA (absent = off). */
+    maxEmaGapAgainstAtr?: number;
   };
+  /** Strikes in the money from ATM for the bought option (0 or absent = ATM; 1 = one listed strike ITM). */
+  itmSteps?: number;
   /** Line exit: how many consecutive completed closes back through the broken level close the trade (1 = the first one). */
   structureStopCloses?: number;
   /** NIFTY reversal stop: exit once a completed NIFTY close is this many points against the trade from its entry (0 or absent = off). */
@@ -178,6 +191,7 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   // Mathi Strategy: no entry cutoff — entries until the session's close (15:30).
   entryCutoff: "15:30",
   windowExit: "hold",
+  squareOff: "15:20",
   sizing: "capital",
   allocation: ALLOCATION_DEFAULTS,
   risk: RISK_DEFAULTS,
@@ -239,6 +253,12 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
   confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" },
 };
 
+/**
+ * Mathi 5%: a separate copy of Mathi Strategy v18 — the same engine, lines, confirmation, regime switch, exits and
+ * 3 trades a session — with only the target changed, +5% on the executed option premium.
+ */
+export const MATHI5_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, target: { mode: "percent", value: 5 } };
+
 export const TICK = 0.05;
 
 export type AlgoStatus =
@@ -273,6 +293,10 @@ export type OpenPosition = {
   lowest?: number;
   /** The highest option premium seen while open: the maximum favourable move. */
   highest?: number;
+  /** Paper monitoring: the latest option candle (start time) already checked for the target / stop. */
+  checkedThrough?: number | null;
+  /** Paper monitoring: the time of the latest quote used; an older quote arriving later is ignored. */
+  lastQuoteAt?: number | null;
   /** Trend exit management: the highest premium since the time checkpoint (for the trailing stop). */
   checkpointHigh?: number | null;
   /** Trend exit management: the latest hold reason logged (logged again only when it changes). */
@@ -334,6 +358,8 @@ export type AlgoState = {
   regime?: { history: number[] };
   /** Today's realized P&L of shadow trades (no money; counted only toward the strategy's own daily loss limit). */
   shadowToday?: number;
+  /** Monitoring status of the latest check (paper trading). */
+  monitor?: MonitorStatus | null;
 };
 
 export function initialState(sessionDate: string): AlgoState {
@@ -346,7 +372,37 @@ export type Fill =
   | { status: "REJECTED"; reason: string }
   | { status: "UNKNOWN"; reason: string };
 
-export type Mark = { bid: number | null; ask: number | null; candle: { open: number; high: number; low: number; close: number } | null; asOf: number };
+export type Mark = {
+  bid: number | null;
+  ask: number | null;
+  candle: { open: number; high: number; low: number; close: number } | null;
+  asOf: number;
+  /** Paper: the option's own 1-minute candles today, so a target or stop reached between two checks is still seen
+   * (only completed candles after the entry minute and after the last checked one are used). */
+  candles?: Candle[];
+};
+
+/** A resting target limit counts as filled only when the option traded at least this many ticks above it (a trade
+ * above the limit means every sell at the limit was filled first; a touch of the limit alone does not prove a fill). */
+export const TARGET_THROUGH_TICKS = 1;
+
+/** What the server-side monitor last saw for the session and its open position. */
+export type MonitorStatus = {
+  /** When the session was last checked, and what triggered the check. */
+  checkedAt: number;
+  source?: "scheduler" | "browser" | "replay";
+  /** The latest option quote used for the open position, and its own time. */
+  quoteAt: number | null;
+  bid: number | null;
+  /** The open position's option candles are checked through this minute (candle start). */
+  candlesThrough: number | null;
+  /** The target check of the latest pass. */
+  target: { level: number; best: number | null; hit: boolean } | null;
+  /** Why the latest check could not use the market data (missing, stale, out of order), or null. */
+  problem: string | null;
+  /** Consecutive checks of an open position without usable market data. */
+  failures: number;
+};
 
 /** One implementation each for paper trading, historical replay and live execution. */
 export interface ExecutionAdapter {
@@ -537,6 +593,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   if (evaluation.time + 60 < observationEnd) reasons.push(`Observation period: the first ${config.observationMinutes} minutes (to ${istClock(observationEnd)} IST) are analysis only; no new entries.`);
   else if (clock < (config.entryStart ?? "09:15")) reasons.push(`Before the entry window (${config.entryStart}–${config.entryCutoff} IST).`);
   else if (clock > config.entryCutoff) reasons.push(`Trading window closed at ${config.entryCutoff} IST: no new entries.`);
+  else if (config.squareOff && clock >= config.squareOff) reasons.push(`End-of-day square-off at ${config.squareOff} IST: no new entries.`);
   // A daily profit target that stops entries is Algo - Primary Strategy's rule only; Mathi Strategy's target is per trade.
   if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (sizing !== "risk") {
@@ -552,9 +609,40 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     if (fast != null && slow != null && (side === "CALL" ? fast <= slow : fast >= slow)) reasons.push(`Momentum against the signal (9 EMA ${fast.toFixed(2)} ${side === "CALL" ? "≤" : "≥"} 21 EMA ${slow.toFixed(2)}).`);
   }
   // Optional entry filters (each off unless set), from completed candles up to the signal candle only.
-  if (filters.vwapAlign || filters.momentum5 || (filters.minAtrPoints ?? 0) > 0 || (filters.maxLineCrossings ?? 0) > 0 || (filters.minAdx ?? 0) > 0 || filters.supertrend || (filters.noChaseCandles ?? 0) > 0) {
+  if (filters.vwapAlign || filters.momentum5 || (filters.minAtrPoints ?? 0) > 0 || (filters.maxLineCrossings ?? 0) > 0 || (filters.minAdx ?? 0) > 0 || filters.supertrend || (filters.noChaseCandles ?? 0) > 0 || (filters.breakoutAtrMultiple ?? 0) > 0 || (filters.maxBreakoutCandleAtr ?? 0) > 0 || filters.maxVwapSlopeAgainstAtr != null || filters.maxEmaGapAgainstAtr != null) {
     const upTo = input.candles.filter((candle) => candle.time <= evaluation.time && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time);
     const last = upTo.at(-1);
+    // Trend against the trade, in 14-minute ATRs of the completed candles: the VWAP's 10-minute slope and the 9 / 21 EMA gap.
+    if ((filters.maxVwapSlopeAgainstAtr != null || filters.maxEmaGapAgainstAtr != null) && last && upTo.length >= 22) {
+      const recent = upTo.slice(-15);
+      const atr = recent.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - recent[i].close), Math.abs(c.low - recent[i].close))).reduce((a, b) => a + b, 0) / 14;
+      const sign = side === "CALL" ? 1 : -1;
+      const typical = (c: Candle) => (c.high + c.low + c.close) / 3;
+      const vwapOf = (cs: Candle[]) => { const volume = cs.reduce((s, c) => s + (c.volume ?? 0), 0); return volume > 0 ? cs.reduce((s, c) => s + typical(c) * (c.volume ?? 0), 0) / volume : cs.reduce((s, c) => s + typical(c), 0) / cs.length; };
+      if (atr > 0 && filters.maxVwapSlopeAgainstAtr != null) {
+        const slope = ((vwapOf(upTo) - vwapOf(upTo.slice(0, -10))) * sign) / atr;
+        if (slope < -filters.maxVwapSlopeAgainstAtr) reasons.push(`VWAP SLOPE AGAINST — VWAP moved ${(-slope).toFixed(2)} × ATR against the ${side} over 10 minutes (limit ${filters.maxVwapSlopeAgainstAtr}).`);
+      }
+      if (atr > 0 && filters.maxEmaGapAgainstAtr != null) {
+        const closes = upTo.map((c) => c.close);
+        const gap = (((ema(closes, 9).at(-1) ?? 0) - (ema(closes, 21).at(-1) ?? 0)) * sign) / atr;
+        if (gap < -filters.maxEmaGapAgainstAtr) reasons.push(`EMA GAP AGAINST — 9 EMA is ${(-gap).toFixed(2)} × ATR on the wrong side of the 21 EMA for a ${side} (limit ${filters.maxEmaGapAgainstAtr}).`);
+      }
+    }
+    // Breakout strength against volatility: the breakout candle (the crossing, before any retest) measured in 14-minute ATRs
+    // of the completed candles before it.
+    if (((filters.breakoutAtrMultiple ?? 0) > 0 || (filters.maxBreakoutCandleAtr ?? 0) > 0)) {
+      const broke = evaluation.breakout?.candle ?? evaluation.candle;
+      const before = upTo.filter((candle) => candle.time <= broke.time).slice(-15);
+      const level = (evaluation.strategies ?? []).find((item) => item.direction === side)?.level ?? evaluation.events?.[0]?.price ?? null;
+      if (before.length >= 15 && level != null) {
+        const ranges = before.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - before[i].close), Math.abs(c.low - before[i].close)));
+        const atr = ranges.reduce((a, b) => a + b, 0) / ranges.length;
+        const beyond = side === "CALL" ? broke.close - level : level - broke.close;
+        if ((filters.breakoutAtrMultiple ?? 0) > 0 && beyond < filters.breakoutAtrMultiple! * atr) reasons.push(`Weak break: closed ${beyond.toFixed(1)} points beyond ${level.toFixed(2)}, under ${filters.breakoutAtrMultiple} × ATR (${(filters.breakoutAtrMultiple! * atr).toFixed(1)} points).`);
+        if ((filters.maxBreakoutCandleAtr ?? 0) > 0 && broke.high - broke.low > filters.maxBreakoutCandleAtr! * atr) reasons.push(`Over-extended break: the breakout candle's range ${(broke.high - broke.low).toFixed(1)} points is above ${filters.maxBreakoutCandleAtr} × ATR (${(filters.maxBreakoutCandleAtr! * atr).toFixed(1)} points).`);
+      }
+    }
     if (last && filters.vwapAlign) {
       const volume = upTo.reduce((sum, c) => sum + (c.volume ?? 0), 0);
       const typical = (c: Candle) => (c.high + c.low + c.close) / 3;
@@ -624,7 +712,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   } catch (error) {
     return reject(state, evaluation.time, key, [`Option chain unavailable: ${error instanceof Error ? error.message : "unknown error"}.`], log);
   }
-  const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent }, new Date(now * 1000));
+  const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
   if (!atm.ok) return reject(state, evaluation.time, key, [atm.reason], log);
   const contract = atm.contract;
   const price = money(contract.ask + config.slippageTicks * TICK);
@@ -798,17 +886,71 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   const position = state.position;
   if (!position || position.exit) return;
   const mark = await input.adapter.mark(position.contract, input.now).catch(() => null);
+  const monitor: MonitorStatus = { ...(state.monitor ?? { failures: 0 }), checkedAt: input.now, quoteAt: state.monitor?.quoteAt ?? null, bid: null, candlesThrough: position.checkedThrough ?? null, target: null, problem: null, failures: state.monitor?.failures ?? 0 };
+  state.monitor = monitor;
   if (!mark) {
+    monitor.failures += 1;
+    monitor.problem = "No quote and no option candles: the target and stop could not be checked.";
     log({ key: `no-quote:${position.entryKey}:${Math.floor(input.now / 60)}`, kind: "ERROR", message: "No quote for the open option: the stop-loss and target could not be checked this minute." });
     return;
   }
-  const seen = mark.candle ? mark.candle.low : mark.bid;
+  // Paper / live: a quote older than one already used (out of order) is never used for a decision. (A replay reuses the
+  // last traded premium for a minute without trades, which is not an out-of-order quote.)
+  let bid = mark.bid;
+  if (input.adapter.kind === "replay") {
+    // unchanged replay behaviour
+  } else if (bid != null && position.lastQuoteAt != null && mark.asOf < position.lastQuoteAt) {
+    monitor.problem = `Quote from ${istClock(mark.asOf)} arrived after a newer one (${istClock(position.lastQuoteAt)}): ignored.`;
+    bid = null;
+  } else if (bid != null) {
+    position.lastQuoteAt = mark.asOf;
+    monitor.quoteAt = mark.asOf;
+    monitor.bid = bid;
+  }
+  // Paper: the option's completed 1-minute candles since the last check, in time order, so a target reached between
+  // two checks is not missed. The entry minute is skipped (its high may come from before the fill) and the forming
+  // minute is left to the quote. The target is a resting limit: it fills at the target once the option traded above it.
+  if (mark.candles) {
+    const entryMinute = Math.floor(position.openedAt / 60) * 60;
+    const after = Math.max(entryMinute, position.checkedThrough ?? entryMinute);
+    const fresh = mark.candles.filter((candle) => candle.time > after && candle.time + 60 <= input.now).sort((a, b) => a.time - b.time);
+    if (fresh.length || bid != null) monitor.failures = 0;
+    const through = money(position.target + TARGET_THROUGH_TICKS * TICK);
+    for (const candle of fresh) {
+      position.lowest = Math.min(position.lowest ?? position.avg, candle.low);
+      position.highest = Math.max(position.highest ?? position.avg, candle.high);
+      position.checkedThrough = candle.time;
+      monitor.candlesThrough = candle.time;
+      const hit = candleExit(candle, position.stop, through);
+      if (hit) {
+        monitor.target = { level: position.target, best: candle.high, hit: hit.reason === "TARGET" };
+        const note = hit.reason === "TARGET"
+          ? `Target reached between checks: the option traded up to ₹${candle.high} in the ${istClock(candle.time)} minute, above the ₹${position.target} target (simulated resting target order)`
+          : `${hit.note} Option candle ${istClock(candle.time)}.`;
+        await startExit(state, input, hit.reason, { price: hit.reason === "TARGET" ? position.target : hit.price, note, at: candle.time + 60 }, log);
+        return;
+      }
+    }
+    if (!fresh.length && bid == null) {
+      monitor.failures += 1;
+      monitor.problem ??= "No fresh quote or option candle since the last check.";
+    }
+  }
+  if (bid != null || mark.candle) monitor.failures = 0;
+  const seen = mark.candle ? mark.candle.low : bid;
   if (seen != null) position.lowest = Math.min(position.lowest ?? position.avg, seen);
-  const best = mark.candle ? mark.candle.high : mark.bid;
+  const best = mark.candle ? mark.candle.high : bid;
   if (best != null) position.highest = Math.max(position.highest ?? position.avg, best);
-  const trigger = mark.candle ? candleExit(mark.candle, position.stop, position.target) : mark.bid != null ? quoteExit(mark.bid, position.stop, position.target) : null;
+  const trigger = mark.candle ? candleExit(mark.candle, position.stop, position.target) : bid != null ? quoteExit(bid, position.stop, position.target) : null;
+  monitor.target = { level: position.target, best: best ?? null, hit: trigger?.reason === "TARGET" };
   if (trigger) {
     await startExit(state, input, trigger.reason, trigger, log);
+    return;
+  }
+  // Mandatory end-of-day square-off: nothing is carried past it.
+  const squareOff = input.config.squareOff;
+  if (squareOff && istClock(input.now) >= squareOff && bid != null) {
+    await startExit(state, input, "SQUARE_OFF", { price: bid, note: `End-of-day square-off at ${squareOff} IST` }, log);
     return;
   }
   // Time limit: still short of the target this long after the entry, the trade exits at the premium. With trend exit
@@ -817,18 +959,18 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   const hold = input.config.maxHoldMinutes ?? 0;
   const manage = { ...EXIT_MANAGEMENT_DEFAULTS, ...input.config.exitManagement };
   const elapsed = (input.now - position.openedAt) / 60;
-  if (manage.mode === "trend" && hold > 0 && mark.bid != null && (elapsed >= hold || manage.reversalBeforeCheckpoint)) {
+  if (manage.mode === "trend" && hold > 0 && bid != null && (elapsed >= hold || manage.reversalBeforeCheckpoint)) {
     const open = dayStart(input.sessionDate);
     const completed = input.candles.filter((candle) => candle.time + 60 <= input.now && sameSession(candle.time, open));
-    if (elapsed >= hold) position.checkpointHigh = Math.max(position.checkpointHigh ?? mark.bid, mark.candle?.high ?? mark.bid);
-    const unrealized = (mark.bid - position.avg) * position.quantity - position.entryCharges;
+    if (elapsed >= hold) position.checkpointHigh = Math.max(position.checkpointHigh ?? bid, mark.candle?.high ?? bid);
+    const unrealized = (bid - position.avg) * position.quantity - position.entryCharges;
     const decision = trendExitDecision({
       settings: manage, side: position.side, elapsedMinutes: elapsed, checkpointMinutes: hold, verdict: trendVerdict(completed, position.side, open),
-      premium: mark.bid, entry: position.avg, chargesPerUnit: position.quantity ? (position.entryCharges * 2) / position.quantity : 0,
+      premium: bid, entry: position.avg, chargesPerUnit: position.quantity ? (position.entryCharges * 2) / position.quantity : 0,
       highestSinceCheckpoint: position.checkpointHigh ?? null, dailyLossExceeded: manage.maxLossRupees > 0 && state.realizedToday + unrealized < -manage.maxLossRupees,
     });
     if (decision.action === "exit") {
-      await startExit(state, input, decision.reason!, { price: mark.bid, note: decision.note }, log);
+      await startExit(state, input, decision.reason!, { price: bid, note: decision.note }, log);
       return;
     }
     // The hold is logged at the checkpoint and again only when the trend checks change (not every minute).
@@ -836,18 +978,18 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
       position.holdNote = decision.note;
       log({ key: `extend:${position.entryKey}:${Math.floor(input.now / 60)}`, kind: "INFO", message: decision.note });
     }
-  } else if (hold > 0 && elapsed >= hold && mark.bid != null) {
-    await startExit(state, input, "TIME", { price: mark.bid, note: `No target ${hold} minutes after the entry` }, log);
+  } else if (hold > 0 && elapsed >= hold && bid != null) {
+    await startExit(state, input, "TIME", { price: bid, note: `No target ${hold} minutes after the entry` }, log);
     return;
   }
   const setup = position.setup;
   // The end of the entry window with "close": the position is closed at the window's end.
   const cutoff = dayStart(input.sessionDate) + minutesOf(input.config.entryCutoff) - minutesOf("09:15");
-  if (input.config.windowExit === "close" && input.now >= cutoff && mark.bid != null) {
-    await startExit(state, input, "WINDOW_END", { price: mark.bid, note: `Entry window closed at ${input.config.entryCutoff} IST` }, log);
+  if (input.config.windowExit === "close" && input.now >= cutoff && bid != null) {
+    await startExit(state, input, "WINDOW_END", { price: bid, note: `Entry window closed at ${input.config.entryCutoff} IST` }, log);
     return;
   }
-  if (!setup || mark.bid == null) return;
+  if (!setup || bid == null) return;
   const last = input.candles.filter((candle) => candle.time + 60 <= input.now && candle.time + 60 > setup.entryTime && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).at(-1);
   if (!last) return;
   const bull = setup.direction === "CALL";
@@ -863,11 +1005,11 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   }
   // Risk sizing: the index stop (on a close through it) and the index target (on a touch).
   if (setup.stopIndex != null && (bull ? last.close <= setup.stopIndex : last.close >= setup.stopIndex)) {
-    await startExit(state, input, "STOP", { price: mark.bid, note: `Index closed at ${last.close.toFixed(2)}, through the stop ${setup.stopIndex.toFixed(2)}` }, log);
+    await startExit(state, input, "STOP", { price: bid, note: `Index closed at ${last.close.toFixed(2)}, through the stop ${setup.stopIndex.toFixed(2)}` }, log);
     return;
   }
   if (!setup.trail && setup.targetIndex != null && (bull ? last.high >= setup.targetIndex : last.low <= setup.targetIndex)) {
-    await startExit(state, input, "TARGET", { price: mark.bid, note: `Index reached the target ${setup.targetIndex.toFixed(2)}` }, log);
+    await startExit(state, input, "TARGET", { price: bid, note: `Index reached the target ${setup.targetIndex.toFixed(2)}` }, log);
     return;
   }
   // NIFTY reversal stop: the index has closed this many points against the trade since the entry.
@@ -875,7 +1017,7 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   if (indexStop > 0) {
     const moved = bull ? setup.underlyingEntry - last.close : last.close - setup.underlyingEntry;
     if (moved >= indexStop) {
-      await startExit(state, input, "INDEX_STOP", { price: mark.bid, note: `NIFTY closed at ${last.close.toFixed(2)}, ${moved.toFixed(1)} points against the trade (limit ${indexStop})` }, log);
+      await startExit(state, input, "INDEX_STOP", { price: bid, note: `NIFTY closed at ${last.close.toFixed(2)}, ${moved.toFixed(1)} points against the trade (limit ${indexStop})` }, log);
       return;
     }
   }
@@ -885,7 +1027,7 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
   const needed = Math.max(1, input.config.structureStopCloses ?? 1);
   const since = input.candles.filter((candle) => candle.time + 60 <= input.now && candle.time + 60 > setup.entryTime && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).slice(-needed);
   const back = since.length === needed && since.every((candle) => (bull ? candle.close < setup.level : candle.close > setup.level));
-  if (back) await startExit(state, input, "STRUCTURE", { price: mark.bid, note: `Index closed at ${last.close.toFixed(2)}, back ${bull ? "below" : "above"} the broken level ${setup.level.toFixed(2)}` }, log);
+  if (back) await startExit(state, input, "STRUCTURE", { price: bid, note: `Index closed at ${last.close.toFixed(2)}, back ${bull ? "below" : "above"} the broken level ${setup.level.toFixed(2)}` }, log);
 }
 
 /** Seconds since midnight for an HH:MM time. */
@@ -913,7 +1055,7 @@ function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, e
 }
 
 /** Exits the remaining open quantity (stop, target, a manual exit, an opposite signal or an emergency). */
-export async function startExit(state: AlgoState, input: AdvanceInput, reason: string, trigger: { price: number; note: string } | null, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void) {
+export async function startExit(state: AlgoState, input: AdvanceInput, reason: string, trigger: { price: number; note: string; at?: number } | null, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void) {
   const position = state.position;
   if (!position || position.exit) return;
   const { adapter, now, config } = input;
@@ -933,7 +1075,7 @@ export async function startExit(state: AlgoState, input: AdvanceInput, reason: s
   }
   if (fill.status === "FILLED" || fill.status === "PARTIAL") {
     position.exit = { key, reason, attempt: position.exitAttempts, uncertain: false };
-    settleExit(state, input, fill, reason, log, trigger?.note);
+    settleExit(state, input, fill, reason, log, trigger?.note, trigger?.at);
   } else if (fill.status === "PENDING" || fill.status === "UNKNOWN") {
     position.exit = { key, reason, attempt: position.exitAttempts, uncertain: fill.status === "UNKNOWN" };
     if (fill.status === "UNKNOWN") state.recovery = `The exit may or may not have been placed (${fill.reason}). It is being reconciled; it will not be re-sent.`;
@@ -944,7 +1086,8 @@ export async function startExit(state: AlgoState, input: AdvanceInput, reason: s
   }
 }
 
-function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, { quantity: number }>, reason: string, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void, note?: string) {
+/** `at`: when the exit actually happened, if earlier than this check (a resting target filled between checks). */
+function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, { quantity: number }>, reason: string, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void, note?: string, at?: number) {
   const position = state.position!;
   const quantity = Math.min(fill.quantity, position.quantity);
   const share = position.quantity ? quantity / position.quantity : 1;
@@ -960,7 +1103,7 @@ function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, {
   position.entryCharges -= entryCharges;
   const key = position.exit?.key ?? `${position.entryKey}:exit:${position.exitAttempts}`;
   const message = `${position.shadow ? "SHADOW " : ""}Exit (${reason}) ${quantity} @ ₹${fill.price}${note ? `: ${note.replace(/\.$/, "")}` : ""}. ${position.shadow ? "Shadow result (no money)" : "Realized"} ₹${pnl} (gross ₹${gross}, charges ₹${charges})${position.quantity > 0 ? `; ${position.quantity} still open` : ""}.`;
-  log({ key: `exit:${key}`, kind: "EXIT", message, contract: position.contract, side: position.side, ...(position.shadow ? { shadow: true } : {}), order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, gross, adverse: money(Math.max(0, position.avg - Math.min(position.lowest ?? position.avg, fill.price))), favorable: money(Math.max(0, Math.max(position.highest ?? position.avg, fill.price) - position.avg)), stop: position.stop, target: position.target });
+  log({ key: `exit:${key}`, ...(at != null ? { time: at } : {}), kind: "EXIT", message, contract: position.contract, side: position.side, ...(position.shadow ? { shadow: true } : {}), order: { key, status: fill.status, quantity, price: fill.price, charges: fill.charges }, pnl, gross, adverse: money(Math.max(0, position.avg - Math.min(position.lowest ?? position.avg, fill.price))), favorable: money(Math.max(0, Math.max(position.highest ?? position.avg, fill.price) - position.avg)), stop: position.stop, target: position.target });
   state.lastOrder = { time: input.now, status: position.quantity > 0 ? "PARTIAL" : "COMPLETED", message };
   if (position.quantity > 0) {
     // Partially closed: the rest is exited again on the next check (a new key: the first exit is known).

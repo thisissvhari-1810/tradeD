@@ -14,6 +14,7 @@ import { LiveMathiSession } from "@/components/algo/algo-live-session";
 import { ALGO_VIEW_EVENT, algoPanelTicker, broadcastAlgoView } from "@/components/algo/algo-start-button";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
+import { Mathi5Panel } from "@/components/algo/algo-mathi5";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import { EXIT_MANAGEMENT_DEFAULTS } from "@/lib/algo/trend-exit";
 import { confirmationMode, type AlgoConfig, type AlgoStatus, type ConfirmationMode } from "@/lib/algo/runner";
@@ -162,6 +163,15 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const istMinute = checkedAt == null ? null : Math.floor(((checkedAt + 19_800) % 86_400) / 60);
   const marketHours = istMinute != null && istMinute >= 9 * 60 + 16 && istMinute <= 15 * 60 + 30;
   const feedStale = Boolean(checkedAt != null && marketHours && state.running && state.lastCandle != null && checkedAt - (state.lastCandle + 60) > 180);
+
+  if (selected === "MATHI_5") {
+    return (
+      <div className="space-y-3">
+        <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
+        <Mathi5Panel data={data} onData={apply} />
+      </div>
+    );
+  }
 
   if (selected === "PRIMARY_STRATEGY") {
     return (
@@ -477,7 +487,7 @@ function ReplaySummary({ events, onOpen }: { events: AlgoData["events"]; onOpen:
 }
 
 /** A consequential action needs a second press within a few seconds. */
-function Confirm({ label, confirm, onConfirm, disabled, danger }: { label: React.ReactNode; confirm: string; onConfirm: () => void; disabled?: boolean; danger?: boolean }) {
+export function Confirm({ label, confirm, onConfirm, disabled, danger }: { label: React.ReactNode; confirm: string; onConfirm: () => void; disabled?: boolean; danger?: boolean }) {
   const [armed, setArmed] = useState(false);
   useEffect(() => {
     if (!armed) return;

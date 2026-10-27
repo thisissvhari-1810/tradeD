@@ -10,11 +10,11 @@ import { createReplayAdapter, simulateSession } from "@/lib/algo/replay-adapter"
 import { expiredChain, expiredTape, weeklyExpiries } from "@/lib/algo/expired-options";
 import { backtestTotals, backtestTrades, missedSignals, type BacktestDay } from "@/lib/algo/backtest";
 import type { AlgoRequest } from "@/lib/algo/request";
-import { dhanExpiredOptions } from "@/server/dhan-market";
+import { dhanExpiredOptions, dhanOptionSession } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity } from "@/lib/algo/exclusive";
-import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -24,6 +24,7 @@ import { checkReplayClock, sessionTape } from "@/server/option-replay";
 import { ensurePracticeAccount } from "@/server/practice-account";
 import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
+import { runScheduledChecks, type ScheduledCheck } from "@/lib/algo/monitor";
 import { activationSummary, activationTrades, afterLiveTick, beforeLiveTick, endActivation, feedIsStale, liveStatus, startActivation } from "@/lib/algo/live-session";
 import { randomBytes } from "node:crypto";
 import { algoTrades, EXIT_LABEL, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
@@ -49,7 +50,7 @@ const rupees = (value: bigint) => Number(value) / 100;
 const contractKeyOf = (contract: Pick<ContractRef, "underlying" | "expiry" | "strike" | "right">) => `${contract.underlying}|${contract.expiry}|${contract.strike}|${contract.right}`;
 const todayIst = () => kolkataParts(new Date()).dateKey;
 /** A readable activation session id: MS-<date>-<IST time>-<random>. */
-const activationId = (now: number) => `MS-${new Date((now + 19_800) * 1000).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-")}-${randomBytes(2).toString("hex").toUpperCase()}`;
+const activationId = (now: number, prefix = "MS") => `${prefix}-${new Date((now + 19_800) * 1000).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-")}-${randomBytes(2).toString("hex").toUpperCase()}`;
 const LEASE_MS = 45_000;
 
 function assertAllowed(user: SessionUser) {
@@ -114,10 +115,10 @@ async function ownerActivity(sessionId: string, owner: AlgoStrategy): Promise<Ow
     activity.position ||= Boolean(state.position);
     activity.pending ||= Boolean(state.pending);
   }
-  if (owner === "EXISTING_ALGO") {
+  if (owner === "EXISTING_ALGO" || owner === "MATHI_5") {
     const session = await prisma.algoSession.findUnique({ where: { id: sessionId } });
     if (session) {
-      const state = stateOf(session);
+      const state = owner === "MATHI_5" ? mathi5StateOf(session) : stateOf(session);
       activity.running ||= state.running;
       activity.position ||= Boolean(state.position);
       activity.pending ||= Boolean(state.pending);
@@ -137,7 +138,8 @@ async function stopStrategy(user: SessionUser, sessionId: string, strategy: Algo
   const now = Math.floor(Date.now() / 1000);
   const runs = await prisma.algoRun.findMany({ where: { sessionId, strategy, status: "ACTIVE" } });
   const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
-  const paper = strategy === "EXISTING_ALGO" ? stateOf(session) : null;
+  const m5 = strategy === "MATHI_5";
+  const paper = strategy === "EXISTING_ALGO" ? stateOf(session) : m5 ? mathi5StateOf(session) : null;
   const pending = runs.some((run) => runStateOf(run).pending) || Boolean(paper?.pending);
   if (pending) throw new AppError(`${STRATEGY_NAME[strategy]} has a pending order that is still being reconciled. Wait for it to settle, then stop it.`, 409, "ORDER_PENDING");
   const open = runs.some((run) => runStateOf(run).position) || Boolean(paper?.position);
@@ -162,13 +164,16 @@ async function stopStrategy(user: SessionUser, sessionId: string, strategy: Algo
     await saveChartRun(run, { armed: false, state: state as unknown as Prisma.InputJsonValue }, events);
   }
   if (paper && (paper.running || paper.position)) {
-    const config = readAlgoConfig(session.config);
+    const config = m5 ? mathi5ConfigOf(session) : readAlgoConfig(session.config);
     const events: AlgoEvent[] = [];
-    if (paper.position && !paper.position.exit) await startExit(paper, { sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
-    events.push(...endActivation(paper, now, "STOPPED"));
+    if (paper.position && !paper.position.exit) await startExit(paper, { sessionId: m5 ? mathi5Key(sessionId) : sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
+    events.push(...endActivation(paper, now, "STOPPED", m5 ? STRATEGY_NAME.MATHI_5 : undefined));
     paper.status = paper.recovery ? "RECOVERY_REQUIRED" : paper.position ? "POSITION_OPEN" : "DISABLED";
     events.push({ key: `switch-stop:${now}`, time: now, kind: "INFO", message: "Session stopped to switch strategies." });
-    await saveRun(sessionId, paper, events, "PAPER");
+    if (m5) {
+      await tagClosedTrades(user.id, paper, events, config, STRATEGY_NAME.MATHI_5);
+      await saveMathi5(sessionId, paper, events);
+    } else await saveRun(sessionId, paper, events, "PAPER");
   }
   const released = await freeLock(sessionId, strategy);
   if (!released && lockOwnerOf((await prisma.algoSession.findUnique({ where: { id: sessionId }, select: { activeStrategy: true } }))?.activeStrategy) === strategy) {
@@ -193,7 +198,33 @@ function primaryConfigOf(session: { primaryConfig: Prisma.JsonValue | null }): A
   return { ...readAlgoConfig(saved), engine: "primary", mode: "REPLAY" };
 }
 
-function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null }, strategy: AlgoStrategy): AlgoConfig {
+/** Mathi 5%'s own saved settings (or its defaults: Mathi Strategy v18 with a +5% target); live paper trading. */
+function mathi5ConfigOf(session: { mathi5Config: Prisma.JsonValue | null }): AlgoConfig {
+  const saved = session.mathi5Config && typeof session.mathi5Config === "object" ? session.mathi5Config : MATHI5_DEFAULTS;
+  return { ...readAlgoConfig(saved), engine: "existing", mode: "PAPER" };
+}
+
+/** Mathi 5%'s live paper-trading state (its own, never Mathi Strategy's). */
+function mathi5StateOf(row: { mathi5State: Prisma.JsonValue }): AlgoState {
+  const raw = (row.mathi5State && typeof row.mathi5State === "object" ? row.mathi5State : {}) as Partial<AlgoState>;
+  return { ...initialState(todayIst()), ...raw };
+}
+
+/** Mathi 5%'s order keys, stored events and run id: its own, so they never meet Mathi Strategy's. */
+const mathi5Key = (sessionId: string) => `${sessionId}:M5`;
+const MATHI5_MODE = "MATHI_5";
+const MATHI5_RUN = "M5";
+
+async function saveMathi5(sessionId: string, state: AlgoState, events: AlgoEvent[]) {
+  await prisma.$transaction([
+    prisma.algoSession.update({ where: { id: sessionId }, data: { mathi5State: state as unknown as Prisma.InputJsonValue } }),
+    ...(events.length ? [prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode: MATHI5_MODE, runId: MATHI5_RUN, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true })] : []),
+  ]);
+}
+
+function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null; mathi5Config: Prisma.JsonValue | null }, strategy: AlgoStrategy): AlgoConfig {
+  // The chart replay (Demo) runs Mathi 5% with its own settings on the replay clock.
+  if (strategy === "MATHI_5") return { ...mathi5ConfigOf(session), mode: "REPLAY" };
   return strategy === "PRIMARY_STRATEGY" ? primaryConfigOf(session) : { ...readAlgoConfig(session.config), engine: "existing" };
 }
 
@@ -232,6 +263,21 @@ function chainInput(view: Awaited<ReturnType<typeof loadOptionChain>>): ChainInp
  * educational charges model. Cash, the order and the position change in one transaction, keyed by the
  * order's idempotency key, so a repeated request returns the first result.
  */
+const OPTION_MINUTES_TTL_MS = 15_000;
+const optionMinuteCache = new Map<string, { at: number; candles: Candle[] }>();
+
+/** Today's 1-minute candles of one listed option contract (cached briefly; one provider request per contract and 15 s). */
+async function optionMinutes(contract: ContractRef, now: number): Promise<Candle[]> {
+  const cached = optionMinuteCache.get(contract.securityId);
+  if (cached && Date.now() - cached.at < OPTION_MINUTES_TTL_MS) return cached.candles;
+  const bounds = sessionBounds(todayIst());
+  if (!bounds) return [];
+  const { open, close } = bounds;
+  const candles =(await dhanOptionSession(contract.securityId, findIndex(contract.underlying) ? "index" : "equity", open, close)).filter((candle) => candle.time >= open && candle.time < close && candle.time <= now);
+  optionMinuteCache.set(contract.securityId, { at: Date.now(), candles });
+  return candles;
+}
+
 export function paperAdapter(userId: string, config: AlgoConfig): ExecutionAdapter {
   let accountId: string | null = null;
   const account = async () => (accountId ??= await paperAccountId(userId));
@@ -250,13 +296,16 @@ export function paperAdapter(userId: string, config: AlgoConfig): ExecutionAdapt
     async chain(_right: Right, expiry: string) {
       return chainInput(await loadOptionChain(config.underlying, expiry === "nearest" ? null : expiry));
     },
-    async mark(contract) {
-      const view = await loadOptionChain(contract.underlying, contract.expiry);
-      const row = view.strikes.find((item) => item.strike === contract.strike);
+    async mark(contract, now) {
+      // The live quote (option chain snapshot) and the option's own completed 1-minute candles: the candles let the
+      // monitor see a target or stop reached between two checks; either one alone is still used.
+      const [view, candles] = await Promise.all([loadOptionChain(contract.underlying, contract.expiry).catch(() => null), optionMinutes(contract, now).catch(() => null)]);
+      const row = view?.strikes.find((item) => item.strike === contract.strike);
       const side = contract.right === "CE" ? row?.ce : row?.pe;
-      const age = (Date.now() - new Date(view.asOf).getTime()) / 1000;
-      if (!side || side.bid == null || age > config.maxQuoteAgeSeconds) return null;
-      return { bid: side.bid, ask: side.ask, candle: null, asOf: Math.floor(new Date(view.asOf).getTime() / 1000) } satisfies Mark;
+      const age = view ? (Date.now() - new Date(view.asOf).getTime()) / 1000 : Infinity;
+      const quote = side && side.bid != null && age <= config.maxQuoteAgeSeconds ? side : null;
+      if (!quote && !candles?.length) return null;
+      return { bid: quote?.bid ?? null, ask: quote?.ask ?? null, candle: null, asOf: view && quote ? Math.floor(new Date(view.asOf).getTime() / 1000) : now, ...(candles ? { candles } : {}) } satisfies Mark;
     },
     async enter(order) {
       const id = await account();
@@ -411,6 +460,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   const latestRun = replays[0]?.runId ?? null;
   const primaryConfig = primaryConfigOf(session);
   const liveSession = await liveSessionView(session.id, config, state, unrealized);
+  const mathi5 = await mathi5View(user, session);
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
@@ -429,6 +479,8 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
     /** Live demo: the Mathi Strategy activation session, its trades and status, and the earlier sessions. */
     liveSession,
+    /** Mathi 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
+    mathi5,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
@@ -440,13 +492,13 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
  * The live demo monitor: the current (or latest) activation session with its status, entries used, the trades
  * entered in it (from the stored order events — the source of truth) and its P&L, plus the earlier sessions.
  */
-async function liveSessionView(sessionId: string, config: AlgoConfig, state: AlgoState, unrealized: number | null) {
+async function liveSessionView(sessionId: string, config: AlgoConfig, state: AlgoState, unrealized: number | null, source: { mode: string; runId: string } = { mode: "PAPER", runId: "" }) {
   const now = Math.floor(Date.now() / 1000);
   const current = state.activation ?? null;
   const earlier = (state.activations ?? []).filter((item) => item.id !== current?.id).slice(0, 5);
   const shown = [...(current ? [current] : []), ...earlier];
   const since = shown.length ? Math.min(...shown.map((item) => item.startedAt)) : null;
-  const rows = since == null ? [] : await prisma.algoEvent.findMany({ where: { sessionId, mode: "PAPER", time: { gte: since - 300 } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 5_000 });
+  const rows = since == null ? [] : await prisma.algoEvent.findMany({ where: { sessionId, mode: source.mode, runId: source.runId, time: { gte: since - 300 } }, orderBy: [{ time: "asc" }, { createdAt: "asc" }], take: 5_000 });
   const events = rows.map((event) => event.payload as unknown as AlgoEvent);
   // When each entry was recorded (stored), which places it in the activation that made it.
   const recordedAt = new Map(rows.flatMap((row, index) => (events[index].kind === "ENTRY" && events[index].order ? [[events[index].order!.key, Math.floor(row.createdAt.getTime() / 1000)] as const] : [])));
@@ -473,6 +525,24 @@ async function liveSessionView(sessionId: string, config: AlgoConfig, state: Alg
   };
 }
 
+/** The Mathi 5% panel: settings, the live paper session (status, regime, trades, P&L) and the open trade's premium. */
+async function mathi5View(user: SessionUser, session: Prisma.AlgoSessionGetPayload<object>) {
+  const config = mathi5ConfigOf(session);
+  const state = mathi5StateOf(session);
+  let mark: Mark | null = null;
+  if (state.position) mark = await paperAdapter(user.id, config).mark(state.position.contract, Math.floor(Date.now() / 1000)).catch(() => null);
+  const unrealized = state.position && mark?.bid != null ? Math.round(((mark.bid - state.position.avg) * state.position.quantity - state.position.entryCharges) * 100) / 100 : null;
+  const events = await prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: MATHI5_MODE, runId: MATHI5_RUN }, orderBy: [{ time: "desc" }, { createdAt: "desc" }], take: 150 });
+  return {
+    config,
+    problems: algoConfigProblems(config),
+    state,
+    position: state.position ? { ...state.position, bid: mark?.bid ?? null, ask: mark?.ask ?? null, unrealized, markedAt: mark?.asOf ?? null } : null,
+    liveSession: await liveSessionView(session.id, config, state, unrealized, { mode: MATHI5_MODE, runId: MATHI5_RUN }),
+    events: events.map((event) => event.payload as unknown as AlgoEvent),
+  };
+}
+
 /* ---------------- commands ---------------- */
 
 export type AlgoCommand =
@@ -487,6 +557,7 @@ export type AlgoCommand =
   | { action: "chartMode" }
   | { action: "stopStrategy"; strategy: AlgoStrategy; exit: boolean }
   | { action: "replay"; date: string }
+  | { action: "mathi5"; op: "start" | "stop" | "tick" | "exit" }
   | ChartCommand;
 
 /** The Algo inside the chart's replay (see chartCommand). */
@@ -510,14 +581,29 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
     await withLease(session.id, () => chartCommandLocked(user, session, command));
     return algoView(user, command.session);
   }
+  if (command.action === "mathi5") {
+    await withLease(session.id, () => mathi5Command(user, session.id, command.op));
+    return algoView(user);
+  }
   await withLease(session.id, async () => {
-    const config = readAlgoConfig(session.config);
-    const state = stateOf(session);
+    // Read again under the lease: a scheduler check may have changed the session since it was loaded above.
+    const current = await prisma.algoSession.findUniqueOrThrow({ where: { id: session.id } });
+    const config = readAlgoConfig(current.config);
+    const state = stateOf(current);
     const events: AlgoEvent[] = [];
     const now = Math.floor(Date.now() / 1000);
     const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
     switch (command.action) {
       case "save": {
+        if (command.strategy === "MATHI_5") {
+          const next: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing", mode: "PAPER" };
+          const problems = algoConfigProblems(next);
+          if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+          if (mathi5StateOf(current).position && next.underlying !== mathi5ConfigOf(current).underlying) throw new AppError("Exit the open Mathi 5% position before changing the underlying.", 409);
+          await prisma.algoSession.update({ where: { id: session.id }, data: { mathi5Config: next as unknown as Prisma.InputJsonValue } });
+          note("settings-m5", "Mathi 5% settings saved.");
+          break;
+        }
         if (command.strategy === "PRIMARY_STRATEGY") {
           const primary: AlgoConfig = { ...readAlgoConfig(command.config), engine: "primary", mode: "REPLAY" };
           const problems = algoConfigProblems(primary);
@@ -610,7 +696,7 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
 }
 
 /** One paper tick: today's strategy levels and 1-minute candles through the runner. */
-async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState) {
+async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState, source: CheckSource = "browser") {
   if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
   const today = todayIst();
   const now = Math.floor(Date.now() / 1000);
@@ -642,6 +728,7 @@ async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig,
   // The activation's entry count and its limit (entries stop at the limit; it ends once nothing is open).
   const after = afterLiveTick(result.state, config, now);
   await tagClosedTrades(user.id, result.state, result.events, config);
+  stampCheck(result.state, now, source);
   return { state: result.state, events: [...before, ...lockEvents, ...result.events, ...after] };
 }
 
@@ -650,7 +737,7 @@ async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig,
  * exit fill). The record is tagged with the algo session, the strategy and version, the exit reason and the paper
  * mode. Shadow trades (regime switch off) place no order, so they never reach Trade History.
  */
-async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEvent[], config: AlgoConfig) {
+async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEvent[], config: AlgoConfig, name = "Mathi Strategy") {
   const exits = events.filter((event) => event.kind === "EXIT" && !event.shadow && event.order?.key);
   if (!exits.length) return;
   const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "ALGO") });
@@ -662,8 +749,85 @@ async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEve
     const code = exit.message.match(/Exit \((\w+)\)/)?.[1] ?? "";
     const reason = EXIT_LABEL[code] ?? code;
     const session = state.activation?.id ?? "—";
-    await prisma.closedTrade.updateMany({ where: { exitExecutionId: execution.id }, data: { note: `Mathi Strategy v${config.settingsVersion} · algo session ${session} · exit: ${reason} · paper trading (live demo)` } });
+    await prisma.closedTrade.updateMany({ where: { exitExecutionId: execution.id }, data: { note: `${name} v${config.settingsVersion}${name === "Mathi Strategy" ? "" : ` (+${config.target.value}% target)`} · algo session ${session} · exit: ${reason} · paper trading (live demo)` } });
   }
+}
+
+/**
+ * Mathi 5% in live paper trading: Start opens a new session (a fresh ₹1,00,000 Algo-wallet period, 0 / 3 trades)
+ * evaluated from the latest completed candle; Stop ends new entries (an open trade stays managed to its exit);
+ * each check runs the same engine as Mathi Strategy on today's live candles, with Mathi 5%'s own settings and state.
+ */
+async function mathi5Command(user: SessionUser, sessionId: string, op: "start" | "stop" | "tick" | "exit") {
+  const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
+  const config = mathi5ConfigOf(session);
+  const state = mathi5StateOf(session);
+  const events: AlgoEvent[] = [];
+  const now = Math.floor(Date.now() / 1000);
+  const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
+  const name = STRATEGY_NAME.MATHI_5;
+  switch (op) {
+    case "start": {
+      const problems = algoConfigProblems(config);
+      if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
+      // A double click or a retried request never starts a second session.
+      if (state.running && state.activation && state.activation.endedAt == null) break;
+      await takeLock(sessionId, "MATHI_5");
+      if (state.position || state.pending) throw new AppError(`A ${name} trade from the previous session is still open. Let it reach its exit (or exit it) before starting a new session.`, 409, "POSITION_OPEN");
+      const period = await startAlgoPeriod(user.id, `${name} live paper session started`);
+      events.push(...startActivation(state, now, activationId(now, "M5"), todayIst(), config.maxTrades, name));
+      state.activation = { ...state.activation!, periodId: period.periodId, capital: Number(period.cashPaise) / 100 };
+      break;
+    }
+    case "stop":
+      events.push(...endActivation(state, now, "STOPPED", name));
+      note("m5-stop", state.position ? `${name} stopped — POSITION OPEN: no new entries; the open position stays managed until it exits.` : `${name} stopped: no new entries.`);
+      break;
+    case "exit":
+      if (!state.position) throw new AppError(`There is no open ${name} position.`, 409);
+      await startExit(state, { sessionId: mathi5Key(sessionId), sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, state) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
+      await tagClosedTrades(user.id, state, events, config, name);
+      break;
+    case "tick":
+      break;
+  }
+  if (op === "tick" || op === "start") {
+    const ran = await runMathi5Tick(user, sessionId, config, state);
+    await saveMathi5(sessionId, ran.state, [...events, ...ran.events]);
+  } else {
+    state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : state.running ? (state.entries ? "MONITORING" : "READY") : "DISABLED";
+    await saveMathi5(sessionId, state, events);
+  }
+  // A stopped session with nothing open releases the execution lock.
+  await freeLock(sessionId, "MATHI_5");
+}
+
+/** One Mathi 5% live paper check: Mathi Strategy's engine on today's levels and completed 1-minute candles. */
+async function runMathi5Tick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState, source: CheckSource = "browser") {
+  if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
+  const name = STRATEGY_NAME.MATHI_5;
+  const today = todayIst();
+  const now = Math.floor(Date.now() / 1000);
+  const before = beforeLiveTick(state, today, now, name);
+  if (!state.running && !state.position && !state.pending) return { state, events: before };
+  const data = await getS1Data(config.underlying);
+  // Before today's session (or on a closed day) the levels belong to an earlier day: nothing is evaluated.
+  const candles = data.date === today ? await sessionMinuteTape(config.underlying, today) : [];
+  const lines = data.date === today ? strategyLines(data, config.custom) : [];
+  const lockEvents: AlgoEvent[] = [];
+  if (state.running && state.entries) {
+    const got = await acquireLock(lockStore(sessionId), "MATHI_5", (owner) => ownerActivity(sessionId, owner));
+    if (!got.ok) {
+      state.entries = false;
+      lockEvents.push({ key: `lock-lost:${now}`, time: now, kind: "REJECTED", message: `New entries stopped: ${got.reason}` });
+    }
+  }
+  const result = await advance(state, { sessionId: mathi5Key(sessionId), sessionDate: today, config, candles, lines, now, adapter: adapterFor(user, config, state) });
+  tagWallet(result.state, false);
+  const after = afterLiveTick(result.state, config, now, undefined, name);
+  await tagClosedTrades(user.id, result.state, result.events, config, name);
+  stampCheck(result.state, now, source);
+  return { state: result.state, events: [...before, ...lockEvents, ...result.events, ...after] };
 }
 
 /** Keeps a legacy paper position's stored stop and target equal to the runner's. */
@@ -675,27 +839,41 @@ async function syncPaperLevels(userId: string, state: AlgoState) {
   await prisma.optionPaperPosition.updateMany({ where: { accountId: account.id, source: "algo", status: "OPEN", contractKey: contractKeyOf(position.contract) }, data: { stopPremiumPaise: paise(position.stop), targetPremiumPaise: paise(position.target) } });
 }
 
-/** Ticks every running paper session (for a server scheduler; see /api/algo/cron). */
-export async function tickAllSessions() {
-  const sessions = await prisma.algoSession.findMany({ include: { user: { include: { subscriptions: { where: { status: "ACTIVE" }, orderBy: { endsAt: "desc" }, take: 5 } } } } });
-  let ran = 0;
-  for (const session of sessions) {
-    const state = stateOf(session);
-    if (!state.running && !state.position) continue;
-    try {
-      await withLease(session.id, async () => {
-        const row = session.user;
-        const user: SessionUser = { id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt };
-        const result = await runTick(user, session.id, readAlgoConfig(session.config), state);
-        await saveRun(session.id, result.state, result.events, "PAPER");
-        await syncPaperLevels(session.userId, result.state);
-      });
-      ran += 1;
-    } catch {
-      // A busy or failing session is retried on the next run.
-    }
-  }
-  return { ran };
+export type CheckSource = "scheduler" | "browser";
+
+/** Records when the session was last checked and by what (the open position's details are set by the runner). */
+function stampCheck(state: AlgoState, now: number, source: CheckSource) {
+  state.monitor = { quoteAt: null, bid: null, candlesThrough: null, target: null, problem: null, failures: 0, ...(state.monitor ?? {}), checkedAt: now, source };
+  if (!state.position) Object.assign(state.monitor, { quoteAt: null, bid: null, candlesThrough: null, target: null, problem: null, failures: 0 });
+}
+
+/**
+ * Checks every active paper session from the server, whether or not anyone has the page open (called by a scheduler; see
+ * /api/algo/cron and docs/paper-monitoring.md). The pass itself is in runScheduledChecks: lease, read again, check.
+ */
+export async function tickAllSessions(): Promise<{ ran: number; checks: ScheduledCheck[] }> {
+  const include = { user: { include: { subscriptions: { where: { status: "ACTIVE" as const }, orderBy: { endsAt: "desc" as const }, take: 5 } } } };
+  const sessions = await prisma.algoSession.findMany({ include });
+  type Row = (typeof sessions)[number];
+  const userOf = (row: Row["user"]): SessionUser => ({ id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt });
+  return runScheduledChecks<Row>(sessions, {
+    id: (session) => session.id,
+    strategies: ["MATHI_5", "MATHI"],
+    stateOf: (session, strategy) => (strategy === "MATHI_5" ? mathi5StateOf(session) : stateOf(session)),
+    withLease,
+    reload: (id) => prisma.algoSession.findUniqueOrThrow({ where: { id }, include }),
+    check: async (session, strategy, state) => {
+      if (strategy === "MATHI_5") {
+        const result = await runMathi5Tick(userOf(session.user), session.id, mathi5ConfigOf(session), state, "scheduler");
+        await saveMathi5(session.id, result.state, result.events);
+        return result.state;
+      }
+      const result = await runTick(userOf(session.user), session.id, readAlgoConfig(session.config), state, "scheduler");
+      await saveRun(session.id, result.state, result.events, "PAPER");
+      await syncPaperLevels(session.userId, result.state);
+      return result.state;
+    },
+  });
 }
 
 /* ---------------- historical replay ---------------- */

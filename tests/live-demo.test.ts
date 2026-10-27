@@ -313,8 +313,9 @@ describe("live demo: Mathi Strategy activation sessions (3 entries each)", () =>
     // Only paper (simulated) sessions start; live broker trading is refused.
     expect(server).toMatch(/if \(config\.mode !== "PAPER"\) throw new AppError/);
     expect(server).toMatch(/if \(next\.mode === "LIVE"\) throw new AppError/);
-    // Every command and tick runs under the session's lease (no two process the same candle at once).
-    expect(server).toMatch(/await withLease\(session\.id, async \(\) => \{\s*const config = readAlgoConfig\(session\.config\);/);
+    // Every command and tick runs under the session's lease (no two process the same candle at once), on the session read
+    // again under that lease (a scheduler check that ran in between is never overwritten).
+    expect(server).toMatch(/await withLease\(session\.id, async \(\) => \{\s*\/\/[^\n]*\n\s*const current = await prisma\.algoSession\.findUniqueOrThrow\(\{ where: \{ id: session\.id \} \}\);\s*const config = readAlgoConfig\(current\.config\);/);
     // The chart's market data stream does not depend on the algo.
     expect(readFileSync(join(process.cwd(), "src/app/api/market/stream/route.ts"), "utf8")).not.toMatch(/algo/i);
     // The panel only shows the server's figures and sends ON / OFF through the Algo panel.

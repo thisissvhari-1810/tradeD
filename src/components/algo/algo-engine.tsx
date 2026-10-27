@@ -166,6 +166,7 @@ export function MathiStatus({ state, config, mode, now, signal: latest = null }:
         <Cell label="Confirmation" value={{ single: "Single candle", hold: "Breakout hold", retest: "Retest" }[confirmationMode(config)]} />
         <Cell label="Entry" value={blocked ? `Blocked — ${blocked}` : "Enabled"} tone={blocked ? "text-warning" : "text-profit"} />
       </dl>
+      {state?.monitor ? <MonitorLine monitor={state.monitor} open={Boolean(state.position)} now={now} /> : null}
       {latest ? (
         <div className="border-t border-border-soft px-3 py-2 text-xs">
           <p className="flex items-center gap-2"><span className={cx("rounded-pill px-2 py-0.5 font-semibold", latest.result.startsWith("REJECTED") || latest.result.startsWith("FALSE BREAKOUT") || latest.result.startsWith("SIGNAL EXPIRED") ? "bg-loss-soft text-loss" : latest.result.startsWith("ORDER") ? "bg-profit-soft text-profit" : "bg-warning-soft text-warning")}>{latest.result.split(" — ")[0]}</span><span className={cx("font-semibold", latest.side === "CALL" ? "text-profit" : "text-loss")}>{latest.side === "CALL" ? "CALL (ATM CE)" : "PUT (ATM PE)"}</span><span className="num ml-auto text-muted">{ist(latest.time)}–{ist(latest.time + 60)}</span></p>
@@ -174,6 +175,24 @@ export function MathiStatus({ state, config, mode, now, signal: latest = null }:
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** What the server-side monitor last checked: when, by what, the quote and option candles used, and any data problem. */
+function MonitorLine({ monitor, open, now }: { monitor: NonNullable<AlgoState["monitor"]>; open: boolean; now: number | null }) {
+  const behind = now != null ? Math.floor((now - monitor.checkedAt) / 60) : 0;
+  const late = open && behind >= 3;
+  const warning = late ? `No check for ${behind} min while a position is open — the scheduler may not be running.` : monitor.problem;
+  return (
+    <div className="border-t border-border-soft px-3 py-1.5 text-xs" aria-label="Monitoring status">
+      <p className="text-text-2">
+        Checked {ist(monitor.checkedAt)} ({monitor.source === "scheduler" ? "server scheduler" : "this browser"})
+        {open && monitor.quoteAt != null ? ` · quote ₹${monitor.bid} at ${ist(monitor.quoteAt)}` : ""}
+        {open && monitor.candlesThrough != null ? ` · option candles to ${ist(monitor.candlesThrough + 60)}` : ""}
+        {open && monitor.target ? ` · target ₹${monitor.target.level}${monitor.target.best != null ? `, best ₹${monitor.target.best}` : ""}` : ""}
+      </p>
+      {warning ? <p className="mt-0.5 font-semibold text-warning" role="alert">{warning}</p> : null}
+    </div>
   );
 }
 

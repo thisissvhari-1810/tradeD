@@ -94,6 +94,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     entryStart: time(row.entryStart, ALGO_DEFAULTS.entryStart),
     entryCutoff: !v8 ? ALGO_DEFAULTS.entryCutoff : early ? cutoff : mathi ? ALGO_DEFAULTS.entryCutoff : "12:00",
     windowExit: row.windowExit === "close" ? "close" : "hold",
+    squareOff: time(row.squareOff, ALGO_DEFAULTS.squareOff!),
     sizing: !v7 ? "capital" : !early ? "risk" : row.sizing === "fixed" ? "fixed" : row.sizing === "capital" ? "capital" : "risk",
     allocation: allocationOf(row.allocation),
     risk: ((risk) => ({ ...risk, perTradePercent: kept(risk.perTradePercent, 0.5, RISK_DEFAULTS.perTradePercent), dailyTarget: kept(risk.dailyTarget, 5_000, RISK_DEFAULTS.dailyTarget) }))(riskOf(row.risk)),
@@ -108,6 +109,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     filters: ((filters) => ({ ...(v13 ? filters : { ...filters, momentum: false }), ...(mathi ? (v17 ? {} : { maxEntryPremium: ALGO_DEFAULTS.filters.maxEntryPremium }) : { maxEntryPremium: 0 }) }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
     structureStop: !v13 ? false : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
     indexStopPoints: Number.isFinite(num(row.indexStopPoints)) && num(row.indexStopPoints) >= 0 ? num(row.indexStopPoints) : 0,
+    itmSteps: Number.isInteger(num(row.itmSteps)) && num(row.itmSteps) >= 0 && num(row.itmSteps) <= 3 ? num(row.itmSteps) : 0,
     structureStopCloses: Number.isInteger(num(row.structureStopCloses)) && num(row.structureStopCloses) >= 1 && num(row.structureStopCloses) <= 10 ? num(row.structureStopCloses) : 1,
     maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? (!v16 && num(row.maxHoldMinutes) === 30 ? ALGO_DEFAULTS.maxHoldMinutes : num(row.maxHoldMinutes)) : ALGO_DEFAULTS.maxHoldMinutes,
     regime: !mathi ? { enabled: false, lookback: 30 } : v18 ? regimeOf(row.regime) : { ...ALGO_DEFAULTS.regime! },
@@ -189,6 +191,10 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
     minAdx: Number.isFinite(num(row.minAdx)) ? num(row.minAdx) : (fallback.minAdx ?? 0),
     supertrend: typeof row.supertrend === "boolean" ? row.supertrend : (fallback.supertrend ?? false),
     noChaseCandles: Number.isInteger(num(row.noChaseCandles)) && num(row.noChaseCandles) >= 0 && num(row.noChaseCandles) <= 10 ? num(row.noChaseCandles) : (fallback.noChaseCandles ?? 0),
+    breakoutAtrMultiple: num(row.breakoutAtrMultiple) >= 0 && num(row.breakoutAtrMultiple) <= 5 ? num(row.breakoutAtrMultiple) : (fallback.breakoutAtrMultiple ?? 0),
+    maxBreakoutCandleAtr: num(row.maxBreakoutCandleAtr) >= 0 && num(row.maxBreakoutCandleAtr) <= 20 ? num(row.maxBreakoutCandleAtr) : (fallback.maxBreakoutCandleAtr ?? 0),
+    ...(num(row.maxVwapSlopeAgainstAtr) >= 0 && num(row.maxVwapSlopeAgainstAtr) <= 10 ? { maxVwapSlopeAgainstAtr: num(row.maxVwapSlopeAgainstAtr) } : {}),
+    ...(num(row.maxEmaGapAgainstAtr) >= 0 && num(row.maxEmaGapAgainstAtr) <= 10 ? { maxEmaGapAgainstAtr: num(row.maxEmaGapAgainstAtr) } : {}),
   };
 }
 

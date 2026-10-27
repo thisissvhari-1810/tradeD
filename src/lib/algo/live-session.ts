@@ -47,15 +47,15 @@ const KEEP = 30;
 const istDay = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOString().slice(0, 10);
 
 /** Switches the strategy ON: a new activation with no entries used. The daily loss lock and an open position stay. */
-export function startActivation(state: AlgoState, now: number, id: string, sessionDate: string, max: number): AlgoEvent[] {
-  const events = state.activation && state.activation.endedAt == null ? endActivation(state, now, "STOPPED") : [];
+export function startActivation(state: AlgoState, now: number, id: string, sessionDate: string, max: number, label = "Algo"): AlgoEvent[] {
+  const events = state.activation && state.activation.endedAt == null ? endActivation(state, now, "STOPPED", label === "Algo" ? undefined : label) : [];
   // A new trading day starts the day's realized P&L and loss lock again (the engine resets them on the day change,
   // which a start on the new day would otherwise skip).
   if (state.sessionDate !== sessionDate) Object.assign(state, { realizedToday: 0, shadowToday: 0, riskLocked: false, lastEntryAt: null, blockedLevels: [] });
   state.activation = { id, startedAt: now, endedAt: null, end: null, entries: 0 };
   // Only the entry count is per activation; the realized loss (daily loss lock) is per day and is kept.
   Object.assign(state, { running: true, entries: true, sessionDate, tradesToday: 0, lastCandle: null, awaiting: null, formingEntry: null });
-  events.push({ key: `activation:${id}`, time: now, kind: "INFO", message: `Algo started — session ${id}. Completed trades 0 / ${max}; evaluating completed 1-minute candles from now (no earlier candle is traded; no trade until a new valid signal).` });
+  events.push({ key: `activation:${id}`, time: now, kind: "INFO", message: `${label} started — session ${id}. Completed trades 0 / ${max}; evaluating completed 1-minute candles from now (no earlier candle is traded; no trade until a new valid signal).` });
   return events;
 }
 
@@ -63,7 +63,7 @@ export function startActivation(state: AlgoState, now: number, id: string, sessi
  * Ends the current activation: no new entries from now (a waiting breakout is dropped). An open position is not
  * closed: TradeD keeps managing it to its exit, and it stays on the panel.
  */
-export function endActivation(state: AlgoState, now: number, end: ActivationEnd): AlgoEvent[] {
+export function endActivation(state: AlgoState, now: number, end: ActivationEnd, label = "Mathi Strategy"): AlgoEvent[] {
   const activation = state.activation;
   Object.assign(state, { running: false, entries: false, awaiting: null });
   if (!activation || activation.endedAt != null) return [];
@@ -71,7 +71,7 @@ export function endActivation(state: AlgoState, now: number, end: ActivationEnd)
   activation.end = end;
   state.activations = [{ ...activation }, ...(state.activations ?? [])].slice(0, KEEP);
   const why = end === "LIMIT" ? `${activation.entries} trades completed (stopped automatically)` : end === "DAY_END" ? "the market day ended" : "Stop Algo was pressed";
-  return [{ key: `activation-end:${activation.id}`, time: now, kind: "INFO", message: `Mathi Strategy session ${activation.id} ended: ${why}. Entries used ${activation.entries}.${state.position ? " The open position stays managed by its exit rules until it closes." : ""}` }];
+  return [{ key: `activation-end:${activation.id}`, time: now, kind: "INFO", message: `${label} session ${activation.id} ended: ${why}. Entries used ${activation.entries}.${state.position ? " The open position stays managed by its exit rules until it closes." : ""}` }];
 }
 
 /**
@@ -79,7 +79,7 @@ export function endActivation(state: AlgoState, now: number, end: ActivationEnd)
  * entries at once (an open trade is still managed), and with nothing left open the activation ends as LIMIT
  * REACHED with its notice logged once.
  */
-export function afterLiveTick(state: AlgoState, config: Pick<AlgoConfig, "maxTrades">, now: number): AlgoEvent[] {
+export function afterLiveTick(state: AlgoState, config: Pick<AlgoConfig, "maxTrades">, now: number, notice: (max: number) => string = LIMIT_NOTICE, label?: string): AlgoEvent[] {
   const activation = state.activation;
   if (!activation || activation.endedAt != null) return [];
   activation.entries = Math.max(activation.entries, state.tradesToday);
@@ -89,19 +89,19 @@ export function afterLiveTick(state: AlgoState, config: Pick<AlgoConfig, "maxTra
   const events: AlgoEvent[] = [];
   if (!activation.limitNotified) {
     activation.limitNotified = true;
-    events.push({ key: `limit:${activation.id}`, time: now, kind: "INFO", message: LIMIT_NOTICE(config.maxTrades) });
+    events.push({ key: `limit:${activation.id}`, time: now, kind: "INFO", message: notice(config.maxTrades) });
   }
-  return [...events, ...endActivation(state, now, "LIMIT")];
+  return [...events, ...endActivation(state, now, "LIMIT", label)];
 }
 
 /**
  * Before a live tick: an activation from an earlier market day ends (its allowance is for one session; switch
  * the strategy ON again for a new one), so a new day never trades on yesterday's switch.
  */
-export function beforeLiveTick(state: AlgoState, today: string, now: number): AlgoEvent[] {
+export function beforeLiveTick(state: AlgoState, today: string, now: number, label?: string): AlgoEvent[] {
   const activation = state.activation;
   if (!activation || activation.endedAt != null || istDay(activation.startedAt) === today) return [];
-  return endActivation(state, now, "DAY_END");
+  return endActivation(state, now, "DAY_END", label);
 }
 
 /** The panel's status: the state machine, from the stored state and the feed. */

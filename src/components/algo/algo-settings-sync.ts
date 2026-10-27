@@ -49,7 +49,8 @@ const SELECTED = "td-algo-strategy-change";
 
 export function readSelectedStrategy(): AlgoStrategy {
   try {
-    return localStorage.getItem(SELECTED_KEY) === "PRIMARY_STRATEGY" ? "PRIMARY_STRATEGY" : "EXISTING_ALGO";
+    const saved = localStorage.getItem(SELECTED_KEY);
+    return saved === "PRIMARY_STRATEGY" || saved === "MATHI_5" ? saved : "EXISTING_ALGO";
   } catch {
     return "EXISTING_ALGO";
   }
