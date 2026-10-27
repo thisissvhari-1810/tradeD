@@ -321,4 +321,36 @@ describe("live demo: Mathi Strategy activation sessions (3 entries each)", () =>
     const panel = readFileSync(join(process.cwd(), "src/components/algo/algo-live-session.tsx"), "utf8");
     expect(panel).not.toMatch(/api\(|fetch\(/);
   });
+
+  it("the auto-stop notice reads as the spec asks", () => {
+    expect(LIMIT_NOTICE(3)).toBe("3 trades completed. Algo stopped automatically.");
+  });
+
+  it("every Start Algo gets its own ₹1,00,000 ledger; completed trades are tagged in Trade History", () => {
+    const server = readFileSync(join(process.cwd(), "src/server/algo.ts"), "utf8");
+    const start = server.slice(server.indexOf('case "start": {'), server.indexOf('case "stop":'));
+    // The double-click guard comes before anything is allocated, so a retried start never opens a second ledger.
+    expect(start.indexOf("endedAt == null) break;")).toBeLessThan(start.indexOf("startAlgoPeriod("));
+    // A trade still open from the previous session must close first: it belongs to that session's ledger.
+    expect(start).toMatch(/if \(state\.position \|\| state\.pending\) throw new AppError\(.*, 409, "POSITION_OPEN"\);/);
+    expect(start.indexOf('"POSITION_OPEN"')).toBeLessThan(start.indexOf("startAlgoPeriod("));
+    expect(start).toMatch(/const period = await startAlgoPeriod\(user\.id,/);
+    expect(start).toMatch(/periodId: period\.periodId, capital: Number\(period\.cashPaise\) \/ 100/);
+    // Every tick tags the closed trades of its non-shadow exits (once per exit fill: updateMany by exitExecutionId).
+    expect(server).toMatch(/const after = afterLiveTick\(result\.state, config, now\);\s*await tagClosedTrades\(/);
+    expect(server).toMatch(/event\.kind === "EXIT" && !event\.shadow/);
+    expect(server).toMatch(/closedTrade\.updateMany\(\{ where: \{ exitExecutionId: execution\.id \}/);
+    expect(server).toMatch(/paper trading \(live demo\)/);
+  });
+
+  it("the chart's Start / Stop Algo button only sends start / stop (paper mode) and shares the panel's view", () => {
+    const button = readFileSync(join(process.cwd(), "src/components/algo/algo-start-button.tsx"), "utf8");
+    expect(button).toMatch(/action: running \? "stop" : "start"/);
+    expect(button).toMatch(/if \(data && data\.config\.mode !== "PAPER"\) return null;/);
+    expect(button).not.toMatch(/dhan|placeOrder|"LIVE"/i);
+    const panel = readFileSync(join(process.cwd(), "src/components/algo/algo-panel.tsx"), "utf8");
+    expect(panel).toMatch(/broadcastAlgoView\(next\)/);
+    expect(panel).toMatch(/algoPanelTicker\.mounted \+= 1/);
+    expect(readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8")).toMatch(/live \|\| replay\.active \? null : <AlgoStartButton/);
+  });
 });

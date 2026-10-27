@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Play, Square } from "lucide-react";
 import { cx } from "@/components/ui";
 import { LIMIT_NOTICE, LIVE_STATUS_LABEL, type LiveStatus } from "@/lib/algo/live-session";
+import { tone } from "@/components/algo/algo-account";
 import type { AlgoData } from "@/components/algo/algo-panel";
 
 const TONE: Record<LiveStatus, string> = {
@@ -37,6 +38,7 @@ function currentSignal(data: AlgoData, running: boolean): string {
  */
 export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }: { data: AlgoData; busy: boolean; disabled: boolean; now: number | null; onStart: () => void; onStop: () => void }) {
   const live = data.liveSession;
+  const account = data.account;
   const { activation, summary, trades } = live;
   const running = Boolean(activation && activation.endedAt == null && data.state.running);
   const position = data.position;
@@ -77,12 +79,12 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
           type="button"
           role="switch"
           aria-checked={running}
-          aria-label="Mathi Strategy on or off"
+          aria-label="Start or stop the algo"
           disabled={busy || (!running && disabled)}
           onClick={running ? onStop : onStart}
           className={cx("ml-auto inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-3 font-semibold disabled:opacity-50", running ? "border border-border hover:bg-hover" : "bg-primary text-on-primary hover:bg-primary-hover")}
         >
-          {running ? <><Square className="h-3.5 w-3.5" aria-hidden />Stop Strategy</> : <><Play className="h-3.5 w-3.5" aria-hidden />Turn ON</>}
+          {running ? <><Square className="h-3.5 w-3.5" aria-hidden />Stop Algo</> : <><Play className="h-3.5 w-3.5" aria-hidden />Start Algo</>}
         </button>
       </div>
 
@@ -99,20 +101,31 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
       </p>
       {live.carriedPosition ? <p className="text-micro text-warning">A position from an earlier session is still open and managed. New entries wait until it is closed (one position at a time).</p> : null}
 
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Session capital">
+        <p className="eyebrow col-span-2">Session capital (virtual)</p>
+        <Item label="Initial capital" value={activation?.capital != null ? inr(activation.capital) : account.startingCapital} />
+        <Item label="Available buying power" value={account.cashAvailable} />
+        <Item label="Reserved for orders" value={account.cashReserved} />
+        <Item label="Open position value" value={account.holdingsValue} />
+        <Item label="Realized P&L" value={account.realized} tone={tone(account.realized)} />
+        <Item label="Unrealized P&L" value={account.unrealized} tone={tone(account.unrealized)} />
+        <Item label="Total session P&L" value={account.netPnl} tone={tone(account.netPnl)} />
+        <Item label="Equity" value={account.equity} />
+      </dl>
+
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Session summary">
+        <p className="eyebrow col-span-2">Session</p>
         <Item label="Session" value={activation?.id ?? "—"} />
         <Item label="Started" value={activation ? clock(activation.startedAt) : "—"} />
-        <Item label="Entries used" value={`${summary.entriesUsed} / ${summary.max}`} tone={summary.entriesUsed >= summary.max ? "text-warning" : undefined} />
-        <Item label="Completed · open" value={`${summary.completed} · ${summary.open}`} />
+        <Item label="Completed trades" value={`${summary.completed} / ${summary.max}`} tone={summary.completed >= summary.max ? "text-warning" : undefined} />
+        <Item label="Open trade" value={summary.open ? "1 open" : "None"} />
         <Item label="Wins · losses" value={`${summary.wins} · ${summary.losses}`} />
+        <Item label="Win rate" value={summary.completed ? `${Math.round((summary.wins / summary.completed) * 100)}%` : "—"} />
         <Item label="Current signal" value={currentSignal(data, running)} />
         <Item label="Last signal" value={live.lastSignal ? `${clock(live.lastSignal.time)} · ${live.lastSignal.decision}` : "None yet"} />
         <Item label="Last candle" value={clock(live.lastCandle)} />
-        <Item label="Realized P&L" value={inr(summary.realized)} tone={pnlTone(summary.realized)} />
-        <Item label="Unrealized P&L" value={inr(summary.unrealized)} tone={pnlTone(summary.unrealized)} />
-        <Item label="Session P&L" value={inr(summary.total)} tone={pnlTone(summary.total)} />
         {summary.shadowTrades ? <Item label="Shadow trades (no money)" value={`${summary.shadowTrades} · ${inr(summary.shadowResult)}`} tone={pnlTone(summary.shadowResult)} /> : null}
-        {activation?.endedAt ? <Item label="Ended" value={`${clock(activation.endedAt)} · ${activation.end === "LIMIT" ? "limit reached" : activation.end === "DAY_END" ? "day ended" : "stopped"}`} /> : null}
+        {activation?.endedAt ? <Item label="Stopped" value={`${clock(activation.endedAt)} · ${activation.end === "LIMIT" ? "3 trades completed" : activation.end === "DAY_END" ? "market day ended" : "Stop Algo"}`} /> : null}
       </dl>
 
       {position && openTrade ? (
@@ -120,6 +133,10 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
           <p className="font-semibold">Trade {openTrade.number} of {summary.max} · <span className={openTrade.side === "CALL" ? "text-profit" : "text-loss"}>BUY {openTrade.side}</span>{openTrade.shadow ? <span className="ml-1 rounded-pill bg-warning-soft px-1.5 text-micro text-warning">SHADOW · no money</span> : null}</p>
           <p className="text-micro text-text-2">{openTrade.contract} <span className="text-muted">(simulated)</span></p>
           <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
+            <Item label="Underlying" value={position.contract.underlying} />
+            <Item label="ATM strike · type" value={`${position.contract.strike} ${position.contract.right}`} />
+            <Item label="Expiry" value={position.contract.expiry} />
+            <Item label="Lot size · lots" value={`${position.contract.lotSize} · ${position.lots}`} />
             <Item label="Entry" value={`${inr(position.avg)} · ${clock(position.openedAt)}`} />
             <Item label="Latest price" value={inr(position.bid)} />
             <Item label="Quantity" value={`${position.quantity} (${position.lots} × ${position.lots ? position.quantity / position.lots : "—"})`} />
@@ -131,7 +148,7 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
           </dl>
         </div>
       ) : running && !position ? (
-        <p className="rounded-md border border-border-soft px-2 py-1.5 text-micro font-semibold text-text-2" role="status">{summary.entriesUsed >= summary.max ? "Entry limit reached: no new entries in this session." : "WAITING FOR VALID SIGNAL"}</p>
+        <p className="rounded-md border border-border-soft px-2 py-1.5 text-micro font-semibold text-text-2" role="status">{summary.entriesUsed >= summary.max ? "3 trades taken in this session: no new entries; the algo stops when the last one closes." : "WAITING FOR VALID SIGNAL"}</p>
       ) : null}
 
       <div className="rounded-md border border-border-soft p-2" aria-label="Completed trades">
@@ -171,15 +188,25 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
 
       {live.previous.length ? (
         <details className="rounded-md border border-border-soft text-micro">
-          <summary className="cursor-pointer px-2 py-1.5 font-medium text-text-2">Earlier sessions ({live.previous.length})</summary>
-          <ul className="space-y-1 border-t border-border-soft p-2">
-            {live.previous.map(({ activation: item, summary: past }) => (
-              <li key={item.id} className="flex flex-wrap justify-between gap-x-2">
-                <span>{item.id} · {clock(item.startedAt)}–{clock(item.endedAt)}</span>
-                <span>{past.entriesUsed}/{past.max} entries · <span className={pnlTone(past.realized)}>{inr(past.realized)}</span></span>
-              </li>
-            ))}
-          </ul>
+          <summary className="cursor-pointer px-2 py-1.5 font-medium text-text-2">Session history ({live.previous.length})</summary>
+          <div className="overflow-x-auto border-t border-border-soft p-2">
+            <table className="w-full text-micro">
+              <thead className="text-muted"><tr className="text-left"><th className="pr-2 font-medium">Session</th><th className="pr-2 font-medium">Start – stop</th><th className="pr-2 font-medium">Trades</th><th className="pr-2 font-medium">W · L</th><th className="pr-2 text-right font-medium">Realized P&amp;L</th><th className="font-medium">Ended</th></tr></thead>
+              <tbody>
+                {live.previous.map(({ activation: item, summary: past }) => (
+                  <tr key={item.id} className="border-t border-border-soft">
+                    <td className="pr-2">{item.id}</td>
+                    <td className="whitespace-nowrap pr-2">{clock(item.startedAt)} – {clock(item.endedAt)}</td>
+                    <td className="pr-2">{past.completed}/{past.max}</td>
+                    <td className="pr-2">{past.wins} · {past.losses}</td>
+                    <td className={cx("pr-2 text-right", pnlTone(past.realized))}>{inr(past.realized)}</td>
+                    <td>{item.end === "LIMIT" ? "3 trades done" : item.end === "DAY_END" ? "Day ended" : "Stopped"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-1 text-muted">Every completed trade is also in Trade History (Algo wallet), tagged with its session.</p>
+          </div>
         </details>
       ) : null}
     </div>

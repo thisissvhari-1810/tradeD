@@ -21,6 +21,7 @@ import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
+import { AlgoStartButton } from "@/components/algo/algo-start-button";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { algoChartMarkers } from "@/components/algo/algo-markers";
 import { algoAnalysisDrawings, algoPivotMarkers } from "@/components/algo/algo-drawings";
@@ -1429,6 +1430,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             Strategy
             {strategyOn ? <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", strategyDot)} /> : null}
           </button>
+          {live || replay.active ? null : <AlgoStartButton allowed={strategyAllowed} onUpgrade={() => setUpgradeFor("strategy")} />}
           {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input", !replay.active && "max-lg:hidden", " px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
           {replay.active && replay.date ? <span className="num hidden shrink-0 whitespace-nowrap rounded-full bg-demo-soft px-2.5 py-1 text-micro font-medium text-demo xl:inline" title="Replay date and time (IST)">{replayChipLabel(replay.date, replay.cursor)}</span> : null}
           <button type="button" aria-label="Option chain" aria-pressed={chainOpen} className={cx("h-8 shrink-0 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", chainOpen ? "bg-primary text-on-primary" : "border border-primary/40 text-primary hover:bg-primary/10")} onClick={() => setChainOpen((value) => !value)}>Option chain</button>

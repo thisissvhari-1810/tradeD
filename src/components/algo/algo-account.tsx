@@ -20,7 +20,7 @@ export type AlgoAccount = {
 };
 type AlgoSide = { trades: number; wins: number; losses: number; realized: string; open: number; unrealized: string; openValue: string };
 
-const tone = (signed: string) => (signed.startsWith("+") && !/^\+₹0\.00$/.test(signed) ? "text-profit" : signed.startsWith("-") || signed.startsWith("−") ? "text-loss" : "text-text");
+export const tone = (signed: string) => (signed.startsWith("+") && !/^\+₹0\.00$/.test(signed) ? "text-profit" : signed.startsWith("-") || signed.startsWith("−") ? "text-loss" : "text-text");
 
 /**
  * Initial capital, available cash, reserved funds, open-position value, unrealized and realized P&L and

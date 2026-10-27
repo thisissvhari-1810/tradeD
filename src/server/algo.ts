@@ -26,8 +26,9 @@ import { replaySessionDate, sessionBounds } from "@/lib/options/replay-premium";
 import { findIndex } from "@/lib/market/indices";
 import { activationSummary, activationTrades, afterLiveTick, beforeLiveTick, endActivation, feedIsStale, liveStatus, startActivation } from "@/lib/algo/live-session";
 import { randomBytes } from "node:crypto";
-import { algoTrades, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
+import { algoTrades, EXIT_LABEL, panelEvents, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals } from "@/lib/algo/chart-replay";
 import { exitChartRun, stepChartRun, walletPaperAdapter, type ChartRunInput } from "@/server/algo-replay";
+import { walletKey } from "@/server/practice-account";
 import { startAlgoPeriod } from "@/server/trading";
 import { ALGO_STARTING_CAPITAL_PAISE } from "@/lib/algo/capital";
 import { featuresOf } from "@/lib/auth/features";
@@ -542,10 +543,17 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
         if (state.running && state.activation && state.activation.endedAt == null) break;
         // Only one algo feature may place orders: the lock is taken before any candle is evaluated.
         await takeLock(session.id, "EXISTING_ALGO");
+        // Each session has its own ₹1,00,000 ledger: a trade still open from the previous session must close first
+        // (it belongs to that session's ledger), so a new session never starts beside it.
+        if (state.position || state.pending) throw new AppError("A trade from the previous session is still open. Let it reach its exit (or use Exit position) before starting a new session with fresh capital.", 409, "POSITION_OPEN");
+        // A fresh ₹1,00,000 virtual ledger for this session (a new Algo-wallet period; earlier periods and their trades
+        // are kept). An unused period is reused, so a retried start never allocates twice.
+        const period = await startAlgoPeriod(user.id, "Live demo algo session started");
         // A new activation session with a fresh entry allowance. Starting mid-session never trades history:
-        // evaluation begins from the latest completed candle. An open position from an earlier activation stays
-        // managed, and blocks a new entry until it is flat (one position at a time).
-        events.push(...startActivation(state, now, activationId(now), todayIst(), config.maxTrades));
+        // evaluation begins from the latest completed candle.
+        const id = activationId(now);
+        events.push(...startActivation(state, now, id, todayIst(), config.maxTrades));
+        state.activation = { ...state.activation!, periodId: period.periodId, capital: Number(period.cashPaise) / 100 };
         break;
       }
       case "stop":
@@ -633,7 +641,29 @@ async function runTick(user: SessionUser, sessionId: string, config: AlgoConfig,
   tagWallet(result.state, legacy);
   // The activation's entry count and its limit (entries stop at the limit; it ends once nothing is open).
   const after = afterLiveTick(result.state, config, now);
+  await tagClosedTrades(user.id, result.state, result.events, config);
   return { state: result.state, events: [...before, ...lockEvents, ...result.events, ...after] };
+}
+
+/**
+ * Trade History: the Algo wallet records each completed live-demo trade (its exit fill closes the position, once per
+ * exit fill). The record is tagged with the algo session, the strategy and version, the exit reason and the paper
+ * mode. Shadow trades (regime switch off) place no order, so they never reach Trade History.
+ */
+async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEvent[], config: AlgoConfig) {
+  const exits = events.filter((event) => event.kind === "EXIT" && !event.shadow && event.order?.key);
+  if (!exits.length) return;
+  const account = await prisma.virtualAccount.findUnique({ where: walletKey(userId, "ALGO") });
+  if (!account) return;
+  for (const exit of exits) {
+    const order = await prisma.order.findUnique({ where: { accountId_idempotencyKey: { accountId: account.id, idempotencyKey: `option:${exit.order!.key}` } }, include: { executions: true } });
+    const execution = order?.executions.at(-1);
+    if (!execution) continue;
+    const code = exit.message.match(/Exit \((\w+)\)/)?.[1] ?? "";
+    const reason = EXIT_LABEL[code] ?? code;
+    const session = state.activation?.id ?? "—";
+    await prisma.closedTrade.updateMany({ where: { exitExecutionId: execution.id }, data: { note: `Mathi Strategy v${config.settingsVersion} · algo session ${session} · exit: ${reason} · paper trading (live demo)` } });
+  }
 }
 
 /** Keeps a legacy paper position's stored stop and target equal to the runner's. */

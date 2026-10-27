@@ -10,6 +10,7 @@ import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage }
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
 import { LiveMathiSession } from "@/components/algo/algo-live-session";
+import { ALGO_VIEW_EVENT, algoPanelTicker, broadcastAlgoView } from "@/components/algo/algo-start-button";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
@@ -63,11 +64,22 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
-  const apply = useCallback((next: AlgoData) => {
+  const apply = useCallback((next: AlgoData, broadcast = true) => {
     if (!live.current) return;
     setData(next);
     setDraft((current) => current ?? next.config);
+    // The chart's Start / Stop Algo button shows the same session.
+    if (broadcast) broadcastAlgoView(next);
   }, []);
+  useEffect(() => {
+    algoPanelTicker.mounted += 1;
+    return () => { algoPanelTicker.mounted -= 1; };
+  }, []);
+  useEffect(() => {
+    const onView = (event: Event) => apply((event as CustomEvent<AlgoData>).detail, false);
+    window.addEventListener(ALGO_VIEW_EVENT, onView);
+    return () => window.removeEventListener(ALGO_VIEW_EVENT, onView);
+  }, [apply]);
 
   const run = useCallback(async (label: string, body: unknown) => {
     setBusy(label);
@@ -101,6 +113,19 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [active, apply]);
+
+  // While a trade is open its latest premium and P&L are refreshed every 5 seconds (a read only: orders and exits
+  // are decided by the 15-second server check above).
+  const holding = Boolean(data?.state.position);
+  useEffect(() => {
+    if (!holding) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden) return;
+      setCheckedAt(Math.floor(Date.now() / 1000));
+      api<AlgoData>("/api/algo").then(apply).catch(() => undefined);
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [holding, apply]);
 
   const unsaved = Boolean(data && draft && JSON.stringify(draft) !== JSON.stringify(data.config));
   useEffect(() => {

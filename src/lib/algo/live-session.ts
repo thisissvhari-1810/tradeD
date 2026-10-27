@@ -22,6 +22,9 @@ export type Activation = {
   entries: number;
   /** The "3 trades completed" notice was logged (once per activation). */
   limitNotified?: boolean;
+  /** The session's own virtual ledger (an Algo-wallet practice period) and its starting capital (₹1,00,000). */
+  periodId?: string;
+  capital?: number;
 };
 
 export type LiveStatus = "STOPPED" | "RUNNING" | "POSITION_OPEN" | "POSITION_OPEN_STOPPED" | "LIMIT_REACHED" | "WAITING_FOR_DATA" | "ERROR";
@@ -31,12 +34,12 @@ export const LIVE_STATUS_LABEL: Record<LiveStatus, string> = {
   RUNNING: "RUNNING",
   POSITION_OPEN: "POSITION OPEN",
   POSITION_OPEN_STOPPED: "POSITION OPEN — STRATEGY STOPPED",
-  LIMIT_REACHED: "LIMIT REACHED",
+  LIMIT_REACHED: "COMPLETED — 3 trades done",
   WAITING_FOR_DATA: "WAITING FOR DATA",
   ERROR: "ERROR",
 };
 
-export const LIMIT_NOTICE = (max: number) => `Mathi Strategy: ${max} trades completed. New entries stopped.`;
+export const LIMIT_NOTICE = (max: number) => `${max} trades completed. Algo stopped automatically.`;
 
 /** Earlier activations kept in the state (newest first); their orders and trades stay in the event log. */
 const KEEP = 30;
@@ -46,10 +49,13 @@ const istDay = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOStr
 /** Switches the strategy ON: a new activation with no entries used. The daily loss lock and an open position stay. */
 export function startActivation(state: AlgoState, now: number, id: string, sessionDate: string, max: number): AlgoEvent[] {
   const events = state.activation && state.activation.endedAt == null ? endActivation(state, now, "STOPPED") : [];
+  // A new trading day starts the day's realized P&L and loss lock again (the engine resets them on the day change,
+  // which a start on the new day would otherwise skip).
+  if (state.sessionDate !== sessionDate) Object.assign(state, { realizedToday: 0, shadowToday: 0, riskLocked: false, lastEntryAt: null, blockedLevels: [] });
   state.activation = { id, startedAt: now, endedAt: null, end: null, entries: 0 };
   // Only the entry count is per activation; the realized loss (daily loss lock) is per day and is kept.
   Object.assign(state, { running: true, entries: true, sessionDate, tradesToday: 0, lastCandle: null, awaiting: null, formingEntry: null });
-  events.push({ key: `activation:${id}`, time: now, kind: "INFO", message: `Mathi Strategy ON — session ${id} started. Entries used 0 / ${max}; evaluating completed 1-minute candles from now (no earlier candle is traded).` });
+  events.push({ key: `activation:${id}`, time: now, kind: "INFO", message: `Algo started — session ${id}. Completed trades 0 / ${max}; evaluating completed 1-minute candles from now (no earlier candle is traded; no trade until a new valid signal).` });
   return events;
 }
 
@@ -64,7 +70,7 @@ export function endActivation(state: AlgoState, now: number, end: ActivationEnd)
   activation.endedAt = now;
   activation.end = end;
   state.activations = [{ ...activation }, ...(state.activations ?? [])].slice(0, KEEP);
-  const why = end === "LIMIT" ? "the entry limit was reached" : end === "DAY_END" ? "the market day ended" : "it was switched off";
+  const why = end === "LIMIT" ? `${activation.entries} trades completed (stopped automatically)` : end === "DAY_END" ? "the market day ended" : "Stop Algo was pressed";
   return [{ key: `activation-end:${activation.id}`, time: now, kind: "INFO", message: `Mathi Strategy session ${activation.id} ended: ${why}. Entries used ${activation.entries}.${state.position ? " The open position stays managed by its exit rules until it closes." : ""}` }];
 }
 
