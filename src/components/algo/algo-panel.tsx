@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { History, OctagonX, Plus, Trash2 } from "lucide-react";
 import { api } from "@/components/api";
+import { useDesk } from "@/components/shell";
 import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
@@ -127,6 +128,21 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     return () => window.clearInterval(timer);
   }, [holding, apply]);
 
+  // The execution mode follows the app mode: Live → paper trading on live prices, Demo → chart replay on the demo
+  // wallet (there is no live broker trading). It switches once nothing is running or open.
+  const desk = useDesk();
+  const wantedMode: AlgoConfig["mode"] = desk.mode === "live" ? "PAPER" : "REPLAY";
+  const switchable = Boolean(data && data.config.mode !== wantedMode && !data.state.running && !data.state.position && !data.state.pending);
+  useEffect(() => {
+    if (!switchable || !data) return;
+    api<AlgoData>("/api/algo", { action: "save", config: { ...data.config, mode: wantedMode } })
+      .then((next) => {
+        apply(next);
+        setDraft((current) => (current ? { ...current, mode: next.config.mode } : next.config));
+      })
+      .catch(() => undefined);
+  }, [switchable, wantedMode, data, apply]);
+
   const unsaved = Boolean(data && draft && JSON.stringify(draft) !== JSON.stringify(data.config));
   useEffect(() => {
     announceUnsaved(unsaved);
@@ -177,16 +193,9 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       <div className="grid gap-1.5 rounded-md border border-border-soft bg-sunken/50 p-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-muted">Execution mode</span>
-          <select className="compact-field w-[9.5rem]" aria-label="Execution mode" value={draft.mode} disabled={state.running} onChange={(event) => set({ mode: event.target.value as AlgoConfig["mode"] })}>
-            <option value="PAPER">Paper trading</option>
-            <option value="REPLAY">Chart replay (demo wallet)</option>
-            <option value="LIVE" disabled>Live trading (unavailable)</option>
-          </select>
+          <span className="font-semibold text-text" aria-label="Execution mode">{draft.mode === "PAPER" ? "Paper trading" : "Chart replay (demo wallet)"}</span>
         </div>
-        <details className="text-micro text-muted">
-          <summary className="cursor-pointer">Why is live trading unavailable?</summary>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4">{data.live.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-        </details>
+        <p className="text-micro text-muted">{wantedMode === "PAPER" ? "Live mode: simulated orders on live prices (no real orders)." : "Demo mode: the algo runs on chart replay with the demo wallet."}{draft.mode !== wantedMode ? " It switches once the running session and any open trade have finished." : ""}</p>
         {paper ? (
           <div className="flex flex-wrap gap-1.5 pt-1">
             {position ? <Confirm label="Exit position" confirm="Confirm exit" disabled={Boolean(busy) || Boolean(position.exit)} onConfirm={() => void run("exit", { action: "exit" })} /> : null}

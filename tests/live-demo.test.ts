@@ -351,6 +351,6 @@ describe("live demo: Mathi Strategy activation sessions (3 entries each)", () =>
     const panel = readFileSync(join(process.cwd(), "src/components/algo/algo-panel.tsx"), "utf8");
     expect(panel).toMatch(/broadcastAlgoView\(next\)/);
     expect(panel).toMatch(/algoPanelTicker\.mounted \+= 1/);
-    expect(readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8")).toMatch(/live \|\| replay\.active \? null : <AlgoStartButton/);
+    expect(readFileSync(join(process.cwd(), "src/components/chart-desk.tsx"), "utf8")).toMatch(/!live \|\| replay\.active \? null : <AlgoStartButton/);
   });
 });
