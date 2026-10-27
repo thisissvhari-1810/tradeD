@@ -14,7 +14,7 @@ import { dhanExpiredOptions } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity } from "@/lib/algo/exclusive";
-import { advance, initialState, startExit, ALGO_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -458,6 +458,8 @@ async function liveSessionView(sessionId: string, config: AlgoConfig, state: Alg
   const openHere = currentTrades.some((trade) => trade.status !== "COMPLETED");
   return {
     status: liveStatus(state, config, feedStale),
+    /** Regime switch: real entries (on) or shadow trades only (off), with the reason. */
+    regime: regimeStatus(state, config),
     feedStale,
     lastCandle: state.lastCandle,
     lastSignal: state.lastSignal ? { time: state.lastSignal.time, decision: state.lastSignal.decision } : null,

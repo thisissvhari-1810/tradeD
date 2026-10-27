@@ -61,6 +61,12 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // Version 16: the time checkpoint moves from 30 to 45 minutes (3-month backtest: both halves better); a saved 30 (the old
   // default) moves once, any other choice is kept.
   const v16 = num(row.settingsVersion) >= 16;
+  // Version 17 added an optional premium limit (off by default since version 18: the ATM option is bought at any premium);
+  // a saved choice is kept.
+  const v17 = num(row.settingsVersion) >= 17;
+  // Version 18: Mathi Strategy's regime switch (real entries only while the last 30 trades made money); saved Mathi
+  // settings move to it once, a later choice is kept. Algo - Primary Strategy has none.
+  const v18 = num(row.settingsVersion) >= 18;
   return {
     ...ALGO_DEFAULTS,
     underlying: typeof row.underlying === "string" && /^[A-Z0-9&_-]{1,20}$/.test(row.underlying.trim().toUpperCase()) ? row.underlying.trim().toUpperCase() : ALGO_DEFAULTS.underlying,
@@ -99,9 +105,12 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
-    filters: ((filters) => (v13 ? filters : { ...filters, momentum: false }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
+    filters: ((filters) => ({ ...(v13 ? filters : { ...filters, momentum: false }), ...(mathi ? (v17 ? {} : { maxEntryPremium: ALGO_DEFAULTS.filters.maxEntryPremium }) : { maxEntryPremium: 0 }) }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
     structureStop: !v13 ? false : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
+    indexStopPoints: Number.isFinite(num(row.indexStopPoints)) && num(row.indexStopPoints) >= 0 ? num(row.indexStopPoints) : 0,
+    structureStopCloses: Number.isInteger(num(row.structureStopCloses)) && num(row.structureStopCloses) >= 1 && num(row.structureStopCloses) <= 10 ? num(row.structureStopCloses) : 1,
     maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? (!v16 && num(row.maxHoldMinutes) === 30 ? ALGO_DEFAULTS.maxHoldMinutes : num(row.maxHoldMinutes)) : ALGO_DEFAULTS.maxHoldMinutes,
+    regime: !mathi ? { enabled: false, lookback: 30 } : v18 ? regimeOf(row.regime) : { ...ALGO_DEFAULTS.regime! },
     exitManagement: !mathi ? { ...EXIT_MANAGEMENT_DEFAULTS } : v15 ? exitManagementOf(row.exitManagement) : { ...exitManagementOf(row.exitManagement), mode: "trend" },
     crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
     crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
@@ -141,6 +150,13 @@ function riskOf(value: unknown): RiskSettings {
   };
 }
 
+/** The regime switch settings; unknown values fall back to the defaults. */
+function regimeOf(value: unknown): NonNullable<AlgoConfig["regime"]> {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const fallback = ALGO_DEFAULTS.regime!;
+  return { enabled: typeof row.enabled === "boolean" ? row.enabled : fallback.enabled, lookback: Number.isInteger(num(row.lookback)) ? num(row.lookback) : fallback.lookback };
+}
+
 /** Trend exit management (off unless chosen); unknown values fall back to the defaults. */
 function exitManagementOf(value: unknown): ExitManagement {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
@@ -165,6 +181,14 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
     breakoutBufferPercent: Number.isFinite(num(row.breakoutBufferPercent)) ? num(row.breakoutBufferPercent) : fallback.breakoutBufferPercent,
     secondCandle: typeof row.secondCandle === "boolean" ? row.secondCandle : fallback.secondCandle,
     momentum: typeof row.momentum === "boolean" ? row.momentum : fallback.momentum,
+    maxEntryPremium: Number.isFinite(num(row.maxEntryPremium)) ? num(row.maxEntryPremium) : (fallback.maxEntryPremium ?? 0),
+    vwapAlign: typeof row.vwapAlign === "boolean" ? row.vwapAlign : (fallback.vwapAlign ?? false),
+    momentum5: typeof row.momentum5 === "boolean" ? row.momentum5 : (fallback.momentum5 ?? false),
+    minAtrPoints: Number.isFinite(num(row.minAtrPoints)) ? num(row.minAtrPoints) : (fallback.minAtrPoints ?? 0),
+    maxLineCrossings: Number.isFinite(num(row.maxLineCrossings)) ? num(row.maxLineCrossings) : (fallback.maxLineCrossings ?? 0),
+    minAdx: Number.isFinite(num(row.minAdx)) ? num(row.minAdx) : (fallback.minAdx ?? 0),
+    supertrend: typeof row.supertrend === "boolean" ? row.supertrend : (fallback.supertrend ?? false),
+    noChaseCandles: Number.isInteger(num(row.noChaseCandles)) && num(row.noChaseCandles) >= 0 && num(row.noChaseCandles) <= 10 ? num(row.noChaseCandles) : (fallback.noChaseCandles ?? 0),
   };
 }
 
@@ -294,6 +318,9 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(pattern.bufferValue >= 0 && pattern.bufferValue <= bufferLimit)) problems.push(`The trendline breakout buffer must be 0 to ${bufferLimit}${pattern.bufferMode === "points" ? " points" : pattern.bufferMode === "atr" ? "× the average range" : "%"}.`);
   if (pattern.breakMode === "intrabar" && config.mode === "LIVE") problems.push("Intrabar breakout detection is for paper trading and replay only; live trading needs candle-close confirmation.");
   if (!Number.isInteger(config.filters.levelBlockMinutes) || config.filters.levelBlockMinutes < 0 || config.filters.levelBlockMinutes > 240) problems.push("The level block after a stop must be 0 to 240 minutes.");
+  const premiumLimit = config.filters.maxEntryPremium ?? 0;
+  if (!(premiumLimit >= 0) || premiumLimit > 100_000) problems.push("The maximum entry premium must be 0 (off) or a positive amount.");
+  if (config.regime?.enabled && (!Number.isInteger(config.regime.lookback) || config.regime.lookback < 3 || config.regime.lookback > 100)) problems.push("The regime switch look-back must be 3 to 100 trades.");
   if (!(config.filters.breakoutBufferPercent >= 0 && config.filters.breakoutBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
   return problems;
 }

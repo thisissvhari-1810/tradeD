@@ -94,6 +94,9 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
       ) : null}
       {live.status === "POSITION_OPEN_STOPPED" ? <p className="rounded-md bg-warning-soft px-2 py-1.5 text-micro font-semibold text-warning" role="alert">POSITION OPEN — STRATEGY STOPPED. No new entries; the open position is still managed by its exit rules until it closes. Use Exit position to close it now.</p> : null}
       {live.status === "WAITING_FOR_DATA" ? <p className="rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning" role="status">Waiting for market data: no new completed 1-minute candle for over 3 minutes. No entry is made from stale data.</p> : null}
+      <p className={cx("rounded-md px-2 py-1.5 text-micro", live.regime.on ? "bg-profit-soft/60 text-profit" : "bg-warning-soft text-warning")} role="status">
+        <strong>Regime switch {live.regime.on ? "ON — trading" : "OFF — shadow trades only"}.</strong> {live.regime.reason}
+      </p>
       {live.carriedPosition ? <p className="text-micro text-warning">A position from an earlier session is still open and managed. New entries wait until it is closed (one position at a time).</p> : null}
 
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Session summary">
@@ -108,12 +111,13 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
         <Item label="Realized P&L" value={inr(summary.realized)} tone={pnlTone(summary.realized)} />
         <Item label="Unrealized P&L" value={inr(summary.unrealized)} tone={pnlTone(summary.unrealized)} />
         <Item label="Session P&L" value={inr(summary.total)} tone={pnlTone(summary.total)} />
+        {summary.shadowTrades ? <Item label="Shadow trades (no money)" value={`${summary.shadowTrades} · ${inr(summary.shadowResult)}`} tone={pnlTone(summary.shadowResult)} /> : null}
         {activation?.endedAt ? <Item label="Ended" value={`${clock(activation.endedAt)} · ${activation.end === "LIMIT" ? "limit reached" : activation.end === "DAY_END" ? "day ended" : "stopped"}`} /> : null}
       </dl>
 
       {position && openTrade ? (
         <div className="rounded-md border border-profit/30 bg-profit-soft/40 p-2" aria-label="Active trade">
-          <p className="font-semibold">Trade {openTrade.number} of {summary.max} · <span className={openTrade.side === "CALL" ? "text-profit" : "text-loss"}>BUY {openTrade.side}</span></p>
+          <p className="font-semibold">Trade {openTrade.number} of {summary.max} · <span className={openTrade.side === "CALL" ? "text-profit" : "text-loss"}>BUY {openTrade.side}</span>{openTrade.shadow ? <span className="ml-1 rounded-pill bg-warning-soft px-1.5 text-micro text-warning">SHADOW · no money</span> : null}</p>
           <p className="text-micro text-text-2">{openTrade.contract} <span className="text-muted">(simulated)</span></p>
           <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
             <Item label="Entry" value={`${inr(position.avg)} · ${clock(position.openedAt)}`} />
@@ -155,7 +159,7 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop }:
                       <td className="pr-2 text-right">{inr(costs)}</td>
                       <td className={cx("pr-2 text-right font-semibold", pnlTone(trade.realized))}>{inr(trade.realized)}</td>
                       <td className="pr-2">{trade.exitReason ?? "—"}</td>
-                      <td className={cx("font-semibold", pnlTone(trade.realized))}>{result}</td>
+                      <td className={cx("font-semibold", pnlTone(trade.realized))}>{trade.shadow ? `SHADOW ${result}` : result}</td>
                     </tr>
                   );
                 })}

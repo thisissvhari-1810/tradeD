@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { readAlgoConfig, algoConfigProblems } from "@/lib/algo/config";
 import { ALL_LINE_TYPES, strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { atmStrike, candleExit, protectiveLevels, quoteExit, resolveAtm, strikeInterval, type ChainInput } from "@/lib/algo/options";
-import { advance, ALGO_DEFAULTS, initialState, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, ALGO_DEFAULTS, initialState, regimeStatus, startExit, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import { bodyCross, consolidate, evaluateCandle } from "@/lib/algo/signals";
 import type { S1Data } from "@/lib/trading/s1";
 
@@ -542,5 +542,70 @@ describe("trend exit management at the time checkpoint", async () => {
     expect(readAlgoConfig({ settingsVersion: 14, exitManagement: { mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true } }).exitManagement).toMatchObject({ mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true, reversalBeforeCheckpoint: false });
     expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, maxHoldMinutes: 20 } })).toContain("The maximum holding time must be after the checkpoint and at most 375 minutes.");
     expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, minScore: 6 } })).toContain("The trend checks needed to hold must be 1 to 5.");
+  });
+});
+
+describe("optional premium limit: an ATM option above the limit is not bought", () => {
+  it("rejects the entry with the reason when the ATM premium is above the limit; 0 turns it off", async () => {
+    const [previous, candle] = crossing(lineOf("or-low").price, "DOWN");
+    const blocked = await step(running(), [previous, candle], fakeAdapter(), undefined, config({ filters: { ...config().filters, maxEntryPremium: 100 } }));
+    expect(blocked.state.position).toBeNull();
+    expect(blocked.events.find((event) => event.kind === "REJECTED")?.message).toMatch(/PREMIUM ABOVE LIMIT — ATM PE 24000 costs ₹101\.05, above the ₹100 limit/);
+    const allowed = await step(running(), [previous, candle], fakeAdapter(), undefined, config({ filters: { ...config().filters, maxEntryPremium: 0 } }));
+    expect(allowed.state.position).not.toBeNull();
+    const roomy = await step(running(), [previous, candle], fakeAdapter(), undefined, config({ filters: { ...config().filters, maxEntryPremium: 150 } }));
+    expect(roomy.state.position).not.toBeNull();
+  });
+
+  it("is off by default (any premium is bought); a saved limit is kept; Algo - Primary Strategy has none", () => {
+    expect(ALGO_DEFAULTS.filters.maxEntryPremium).toBe(0);
+    expect(readAlgoConfig({ settingsVersion: 16, filters: {} }).filters.maxEntryPremium).toBe(0);
+    expect(readAlgoConfig({ settingsVersion: 17, filters: { maxEntryPremium: 0 } }).filters.maxEntryPremium).toBe(0);
+    expect(readAlgoConfig({ settingsVersion: 17, filters: { maxEntryPremium: 200 } }).filters.maxEntryPremium).toBe(200);
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 16 }).filters.maxEntryPremium).toBe(0);
+  });
+});
+
+describe("regime switch (version 18): real entries only while the last trades made money", () => {
+  const [previous, candle] = crossing(lineOf("or-low").price, "DOWN");
+  const cfg = config({ regime: { enabled: true, lookback: 3 } });
+
+  it("with a losing record the signal is followed as a SHADOW trade: no order, no money, but its result is recorded", async () => {
+    const adapter = fakeAdapter();
+    const losing = await step(running({ regime: { history: [-5_000, 1_000, 1_000] } }), [previous, candle], adapter, undefined, cfg);
+    expect(adapter.calls.enter).toBe(0);
+    expect(losing.state.position).toMatchObject({ shadow: true, side: "PUT" });
+    const entry = losing.events.find((event) => event.kind === "ENTRY")!;
+    expect(entry.shadow).toBe(true);
+    expect(entry.message).toMatch(/^REGIME SWITCH OFF — The last 3 trades total ₹-3000 \(not positive\)/);
+    adapter.set({ bid: 150 });
+    const exited = await step(losing.state, [previous, candle, bar(32, 23_900, 23_910, 23_890, 23_905)], adapter, undefined, cfg);
+    expect(adapter.calls.exit).toBe(0);
+    const exit = exited.events.find((event) => event.kind === "EXIT")!;
+    expect(exit.shadow).toBe(true);
+    expect(exit.message).toMatch(/^SHADOW Exit \(TARGET\).*Shadow result \(no money\)/);
+    expect(exited.state.realizedToday).toBe(0);
+    expect(exited.state.shadowToday).toBeGreaterThan(0);
+    expect(exited.state.regime?.history.at(-1)).toBe(exit.pnl);
+  });
+
+  it("with a winning record (or fewer trades than the look-back) it trades for real", async () => {
+    const adapter = fakeAdapter();
+    const winning = await step(running({ regime: { history: [2_000, -1_000, 2_000] } }), [previous, candle], adapter, undefined, cfg);
+    expect(adapter.calls.enter).toBe(1);
+    expect(winning.state.position?.shadow).toBeUndefined();
+    const fresh = await step(running(), [previous, candle], fakeAdapter(), undefined, cfg);
+    expect(fresh.state.position?.shadow).toBeUndefined();
+    expect(regimeStatus({ regime: { history: [1, 2] } }, cfg)).toMatchObject({ on: true });
+    expect(regimeStatus({ regime: { history: [-1, -2, 1] } }, cfg)).toMatchObject({ on: false, total: -2 });
+    expect(regimeStatus({ regime: { history: [-9, -9, -9] } }, config({ regime: { enabled: false, lookback: 3 } }))).toMatchObject({ on: true });
+  });
+
+  it("is on (30 trades) by default for Mathi Strategy; saved settings move once; a later choice is kept; Primary has none", () => {
+    expect(ALGO_DEFAULTS.regime).toEqual({ enabled: true, lookback: 30 });
+    expect(readAlgoConfig({ settingsVersion: 17 }).regime).toEqual({ enabled: true, lookback: 30 });
+    expect(readAlgoConfig({ settingsVersion: 18, regime: { enabled: false, lookback: 20 } }).regime).toEqual({ enabled: false, lookback: 20 });
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 17 }).regime?.enabled).toBe(false);
+    expect(algoConfigProblems({ ...ALGO_DEFAULTS, regime: { enabled: true, lookback: 1 } })).toContain("The regime switch look-back must be 3 to 100 trades.");
   });
 });

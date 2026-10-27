@@ -106,9 +106,10 @@ export function createReplayAdapter(input: { candles: Candle[]; chain: ReplayCha
  * each completed minute in order, never a later candle; it stops once the session's trades are done or the
  * entry window has closed with nothing open, and an open position is closed at the session's last premium.
  */
-export async function simulateSession(input: { sessionId: string; date: string; config: AlgoConfig; candles: Candle[]; lines: AlgoLine[]; adapter: ExecutionAdapter & { setClock: (now: number) => void }; startNote: string }) {
+export async function simulateSession(input: { sessionId: string; date: string; config: AlgoConfig; candles: Candle[]; lines: AlgoLine[]; adapter: ExecutionAdapter & { setClock: (now: number) => void }; startNote: string; regime?: AlgoState["regime"] }) {
   const { sessionId, date, config, candles, lines, adapter } = input;
-  let state: AlgoState = { ...initialState(date), running: true, entries: true };
+  // The regime switch's record of earlier trades carries over from the previous sessions when given.
+  let state: AlgoState = { ...initialState(date), running: true, entries: true, ...(input.regime ? { regime: input.regime } : {}) };
   const events: AlgoEvent[] = [{ key: "start", time: candles[0].time, kind: "INFO", message: input.startNote }];
   for (const candle of candles) {
     const clock = candle.time + 60;

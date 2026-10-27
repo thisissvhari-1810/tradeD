@@ -114,6 +114,7 @@ export const EXIT_LABEL: Record<string, string> = {
   MAX_HOLD: "Maximum holding time",
   TRAIL: "Trailing stop",
   RECOVERY: "Recovery exit",
+  INDEX_STOP: "NIFTY reversal stop",
   WINDOW_END: "Window end",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
@@ -290,6 +291,8 @@ export function runDiagnostics(events: AlgoEvent[], enabledLines: number): RunDi
 export type AlgoTrade = {
   /** 1-based entry number in the session (only filled entries count toward the limit). */
   number: number;
+  /** A shadow trade (regime switch off): followed with the same rules and prices, no order and no money. */
+  shadow: boolean;
   entryKey: string;
   side: "CALL" | "PUT";
   contract: string;
@@ -348,6 +351,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
     const contract = event.contract;
     trades.push({
       number: trades.length + 1,
+      shadow: Boolean(event.shadow),
       entryKey: event.order.key,
       side: event.side,
       contract: contract ? `${contract.underlying} ${contract.strike} ${contract.right} · ${contract.expiry}` : "—",

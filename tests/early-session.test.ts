@@ -16,7 +16,7 @@ describe("defaults: the early session replaces the old all-day settings", () => 
   it("Mathi Strategy defaults: lines only, 50% of the body past the line, full ₹1,00,000 in whole lots, +3% on the premium, no stop-loss, 3 entries, no entry cutoff", () => {
     expect(ALGO_DEFAULTS).toMatchObject({ entryStart: "09:15", entryCutoff: "15:30", observationMinutes: 0, sizing: "capital", allocation: { percent: 100, maxCapital: 100_000 }, lots: 50, target: { mode: "percent", value: 3 }, stopLoss: false, crossRule: "body", crossPercent: 50, maxTrades: 3, stopAtLimit: false, maxDailyLoss: 2_000, risk: { dailyTarget: 3_000, stopAtTarget: true } });
     expect(ALGO_DEFAULTS.strategies).toEqual({ line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false });
-    expect(ALGO_DEFAULTS.filters).toEqual({ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false });
+    expect(ALGO_DEFAULTS.filters).toEqual({ levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false, maxEntryPremium: 0 });
     expect([ALGO_DEFAULTS.structureStop, ALGO_DEFAULTS.maxHoldMinutes]).toEqual([false, 45]);
     // Old saved settings (any version) move once; the other setups can never be switched on for Mathi.
     const migrated = readAlgoConfig({ settingsVersion: 6, sizing: "risk", lots: 10, strategies: { w: true, m: true, bounce: true }, filters: { secondCandle: true, momentum: true } });

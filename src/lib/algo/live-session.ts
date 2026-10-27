@@ -134,12 +134,18 @@ export type ActivationSummary = {
   realized: number;
   unrealized: number | null;
   total: number;
+  /** Shadow trades (regime switch off): followed, but no order and no money — not in the P&L above. */
+  shadowTrades: number;
+  shadowResult: number;
 };
 
 export function activationSummary(trades: AlgoTrade[], max: number, unrealized: number | null): ActivationSummary {
-  const done = trades.filter((trade) => trade.status === "COMPLETED" && trade.realized != null);
+  // Real money only: shadow trades (regime switch off) are counted separately and never in the P&L.
+  const shadows = trades.filter((trade) => trade.shadow);
+  const shadowDone = shadows.filter((trade) => trade.status === "COMPLETED" && trade.realized != null);
+  const done = trades.filter((trade) => !trade.shadow && trade.status === "COMPLETED" && trade.realized != null);
   const realized = Math.round(done.reduce((sum, trade) => sum + trade.realized!, 0) * 100) / 100;
-  const open = trades.length - done.length;
+  const open = trades.filter((trade) => !trade.shadow).length - done.length;
   return {
     entriesUsed: trades.length,
     max,
@@ -151,6 +157,8 @@ export function activationSummary(trades: AlgoTrade[], max: number, unrealized: 
     realized,
     unrealized: open ? unrealized : null,
     total: Math.round((realized + (open ? unrealized ?? 0 : 0)) * 100) / 100,
+    shadowTrades: shadows.length,
+    shadowResult: Math.round(shadowDone.reduce((sum, trade) => sum + trade.realized!, 0) * 100) / 100,
   };
 }
 
