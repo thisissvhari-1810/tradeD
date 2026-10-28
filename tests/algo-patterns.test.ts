@@ -266,9 +266,10 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     expect(panel).toMatch(/confirmations=\{position && position\.entryKey === trade\.entryKey \? state\?\.confirmations \?\? null : null\}/);
     expect(panel).toMatch(/waitingMessage\(state\?\.analysis, trades\.length, max\)/);
     expect(readFileSync("src/components/algo/algo-trade-drawer.tsx", "utf8")).toMatch(/<ConfirmationList confirmations=\{run\.state\.confirmations \?\? null\} \/>/);
-    const strategyTab = readFileSync("src/components/algo/algo-panel.tsx", "utf8");
-    expect(strategyTab).toMatch(/<MarketAnalysisSection analysis=\{state\.analysis\}/);
-    expect(strategyTab).toMatch(/Stale: no new candle/);
+    // Live paper shows them in the Algo panel beside the chart; a stale feed is the server's WAITING FOR DATA.
+    const livePanel = readFileSync("src/components/algo/algo-live-panel.tsx", "utf8");
+    expect(livePanel).toMatch(/<MarketAnalysisSection analysis=\{state\.analysis\}/);
+    expect(readFileSync("src/components/algo/algo-live-session.tsx", "utf8")).toMatch(/live\.status === "WAITING_FOR_DATA"/);
     expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/algoRun\.state\.analysis/);
     // Nothing later than the replay time is drawn on the chart.
     expect(readFileSync("src/components/chart-desk.tsx", "utf8")).toMatch(/analysisNow\.asOf <= replay\.cursor \+ 60/);

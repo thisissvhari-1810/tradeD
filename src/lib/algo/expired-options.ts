@@ -15,10 +15,30 @@ export const ROLLING_OFFSETS = Array.from({ length: 21 }, (_, index) => index - 
 
 export type RollingSide = "CALL" | "PUT";
 
-/** The request body for one offset and side (`expiryCode` 1 = the nearest weekly expiry on each day). */
-export function rollingRequest(input: { underlyingSecurityId: number; offset: string; side: RollingSide; from: string; to: string }) {
+/** NSE index options: NIFTY keeps weekly expiries; BANKNIFTY and the other indices have monthly ones only (since Nov 2024). */
+export type ExpiryCycle = "WEEK" | "MONTH";
+export const expiryCycleOf = (symbol: string): ExpiryCycle => (symbol.trim().toUpperCase() === "NIFTY" ? "WEEK" : "MONTH");
+
+/**
+ * The monthly expiry a session trades: the month's last Tuesday (NSE, from September 2025; the last Thursday before),
+ * or next month's once that day has passed. Exchange holidays that move an expiry a day earlier are not known here.
+ */
+export function monthlyExpiry(date: string): string {
+  const lastWeekday = (year: number, month: number) => {
+    const weekday = Date.UTC(year, month, 1) >= Date.UTC(2025, 8, 1) ? 2 : 4;
+    const last = new Date(Date.UTC(year, month + 1, 0));
+    last.setUTCDate(last.getUTCDate() - ((last.getUTCDay() - weekday + 7) % 7));
+    return last.toISOString().slice(0, 10);
+  };
+  const [year, month] = date.split("-").map(Number);
+  const thisMonth = lastWeekday(year, month - 1);
+  return date <= thisMonth ? thisMonth : lastWeekday(month === 12 ? year + 1 : year, month % 12);
+}
+
+/** The request body for one offset and side (`expiryCode` 1 = the nearest weekly or monthly expiry on each day). */
+export function rollingRequest(input: { underlyingSecurityId: number; offset: string; side: RollingSide; from: string; to: string; cycle?: ExpiryCycle }) {
   return {
-    exchangeSegment: "NSE_FNO", interval: "1", securityId: input.underlyingSecurityId, instrument: "OPTIDX", expiryFlag: "WEEK", expiryCode: 1,
+    exchangeSegment: "NSE_FNO", interval: "1", securityId: input.underlyingSecurityId, instrument: "OPTIDX", expiryFlag: input.cycle ?? "WEEK", expiryCode: 1,
     strike: input.offset, drvOptionType: input.side, requiredData: ["open", "high", "low", "close", "volume", "strike", "spot"], fromDate: input.from, toDate: input.to,
   };
 }

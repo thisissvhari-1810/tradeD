@@ -7,7 +7,7 @@ import type { AlgoState } from "./runner";
  * exit is never decided twice; a session whose lease is held is reported busy and checked on the next pass.
  */
 
-export type MonitoredStrategy = "MATHI" | "MATHI_5";
+export type MonitoredStrategy = "MATHI" | "MATHI_5" | "MATHI_BANK";
 export type ScheduledCheck = { session: string; strategy: MonitoredStrategy; ok: boolean; open: boolean; problem: string | null };
 
 /** A strategy needs checking while it runs, holds a position or waits on an order to reconcile. */

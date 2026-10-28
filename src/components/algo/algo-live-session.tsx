@@ -4,10 +4,9 @@ import { useState } from "react";
 import { Play, Square } from "lucide-react";
 import { cx } from "@/components/ui";
 import { LIMIT_NOTICE, LIVE_STATUS_LABEL, type LiveStatus } from "@/lib/algo/live-session";
-import { tone } from "@/components/algo/algo-account";
 import type { AlgoData } from "@/components/algo/algo-panel";
 
-const TONE: Record<LiveStatus, string> = {
+export const LIVE_TONE: Record<LiveStatus, string> = {
   STOPPED: "bg-sunken text-muted",
   RUNNING: "bg-primary-soft text-primary",
   POSITION_OPEN: "bg-profit-soft text-profit",
@@ -21,6 +20,9 @@ const inr = (value: number | null | undefined) => (value == null ? "—" : `₹$
 const clock = (seconds: number | null | undefined) => (seconds ? new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000)) : "—");
 const pnlTone = (value: number | null | undefined) => (value == null || value === 0 ? undefined : value > 0 ? "text-profit" : "text-loss");
 
+/** Whether the live session is switched on (an open activation while the server's state runs). */
+export const liveRunning = (data: AlgoData) => Boolean(data.liveSession.activation && data.liveSession.activation.endedAt == null && data.state.running);
+
 /** The current signal: a breakout waiting for its confirming candle, the latest candle's CALL / PUT, or none. */
 function currentSignal(data: AlgoData, running: boolean): string {
   const { state } = data;
@@ -32,15 +34,44 @@ function currentSignal(data: AlgoData, running: boolean): string {
 }
 
 /**
- * Mathi Strategy in live demo mode: the ON / OFF switch, the activation session's summary, the open trade and
- * the completed trades. Every figure is the server's (its stored state and order events); this only shows them
- * and sends ON / OFF — it never decides an entry or counts trades itself.
+ * The Strategy panel's ON / OFF switch for a live session. The session's live updates (account, signal, open
+ * trade, completed trades) are in the Algo panel beside the chart, not here.
  */
-export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, title = "Mathi Strategy" }: { data: AlgoData; busy: boolean; disabled: boolean; now: number | null; onStart: () => void; onStop: () => void; title?: string }) {
+export function LiveSessionSwitch({ data, busy, disabled, onStart, onStop, title = "Mathi Strategy" }: { data: AlgoData; busy: boolean; disabled: boolean; onStart: () => void; onStop: () => void; title?: string }) {
+  const running = liveRunning(data);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2 rounded-md border border-border-soft bg-sunken/50 p-2">
+        <div className="min-w-0">
+          <p className="font-semibold">{title} <span className="text-micro font-normal text-muted">(live demo · simulated orders)</span></p>
+          <span className={cx("mt-0.5 inline-block whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", LIVE_TONE[data.liveSession.status])} role="status">{LIVE_STATUS_LABEL[data.liveSession.status]}</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={running}
+          aria-label="Start or stop the algo"
+          disabled={busy || (!running && disabled)}
+          onClick={running ? onStop : onStart}
+          className={cx("ml-auto inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-3 font-semibold disabled:opacity-50", running ? "border border-border hover:bg-hover" : "bg-primary text-on-primary hover:bg-primary-hover")}
+        >
+          {running ? <><Square className="h-3.5 w-3.5" aria-hidden />Stop Algo</> : <><Play className="h-3.5 w-3.5" aria-hidden />Start Algo</>}
+        </button>
+      </div>
+      <p className="text-micro text-muted">Live trade updates (account, signals, the open trade and this session&apos;s completed trades) are shown in the Algo panel to the right of the chart.</p>
+    </div>
+  );
+}
+
+/**
+ * A live session's updates for the Algo panel beside the chart: its notices, summary, the open trade and the
+ * completed trades of this session only (earlier sessions stay in Trade History). Every figure is the server's (its
+ * stored state and order events); this only shows them — it never decides an entry or counts trades itself.
+ */
+export function LiveMathiSession({ data, now }: { data: AlgoData; now: number | null }) {
   const live = data.liveSession;
-  const account = data.account;
   const { activation, summary, trades } = live;
-  const running = Boolean(activation && activation.endedAt == null && data.state.running);
+  const running = liveRunning(data);
   const position = data.position;
   const openTrade = trades.find((trade) => trade.status !== "COMPLETED") ?? null;
   const completed = trades.filter((trade) => trade.status === "COMPLETED");
@@ -69,25 +100,7 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, t
   };
 
   return (
-    <div className="space-y-2" aria-label={`${title} live demo`}>
-      <div className="flex items-center gap-2 rounded-md border border-border-soft bg-sunken/50 p-2">
-        <div className="min-w-0">
-          <p className="font-semibold">{title} <span className="text-micro font-normal text-muted">(live demo · simulated orders)</span></p>
-          <span className={cx("mt-0.5 inline-block whitespace-nowrap rounded-pill px-2 py-0.5 text-micro font-semibold", TONE[live.status])} role="status">{LIVE_STATUS_LABEL[live.status]}</span>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={running}
-          aria-label="Start or stop the algo"
-          disabled={busy || (!running && disabled)}
-          onClick={running ? onStop : onStart}
-          className={cx("ml-auto inline-flex h-8 shrink-0 items-center gap-1 rounded-md px-3 font-semibold disabled:opacity-50", running ? "border border-border hover:bg-hover" : "bg-primary text-on-primary hover:bg-primary-hover")}
-        >
-          {running ? <><Square className="h-3.5 w-3.5" aria-hidden />Stop Algo</> : <><Play className="h-3.5 w-3.5" aria-hidden />Start Algo</>}
-        </button>
-      </div>
-
+    <div className="space-y-2">
       {showNotice ? (
         <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro text-warning" role="status">
           <p className="flex-1 font-semibold">{LIMIT_NOTICE(summary.max)}</p>
@@ -101,20 +114,8 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, t
       </p>
       {live.carriedPosition ? <p className="text-micro text-warning">A position from an earlier session is still open and managed. New entries wait until it is closed (one position at a time).</p> : null}
 
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Session capital">
-        <p className="eyebrow col-span-2">Session capital (virtual)</p>
-        <Item label="Initial capital" value={activation?.capital != null ? inr(activation.capital) : account.startingCapital} />
-        <Item label="Available buying power" value={account.cashAvailable} />
-        <Item label="Reserved for orders" value={account.cashReserved} />
-        <Item label="Open position value" value={account.holdingsValue} />
-        <Item label="Realized P&L" value={account.realized} tone={tone(account.realized)} />
-        <Item label="Unrealized P&L" value={account.unrealized} tone={tone(account.unrealized)} />
-        <Item label="Total session P&L" value={account.netPnl} tone={tone(account.netPnl)} />
-        <Item label="Equity" value={account.equity} />
-      </dl>
-
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2" aria-label="Session summary">
-        <p className="eyebrow col-span-2">Session</p>
+        <p className="eyebrow col-span-2">This session</p>
         <Item label="Session" value={activation?.id ?? "—"} />
         <Item label="Started" value={activation ? clock(activation.startedAt) : "—"} />
         <Item label="Completed trades" value={`${summary.completed} / ${summary.max}`} tone={summary.completed >= summary.max ? "text-warning" : undefined} />
@@ -122,7 +123,6 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, t
         <Item label="Wins · losses" value={`${summary.wins} · ${summary.losses}`} />
         <Item label="Win rate" value={summary.completed ? `${Math.round((summary.wins / summary.completed) * 100)}%` : "—"} />
         <Item label="Current signal" value={currentSignal(data, running)} />
-        <Item label="Last signal" value={live.lastSignal ? `${clock(live.lastSignal.time)} · ${live.lastSignal.decision}` : "None yet"} />
         <Item label="Last candle" value={clock(live.lastCandle)} />
         {summary.shadowTrades ? <Item label="Shadow trades (no money)" value={`${summary.shadowTrades} · ${inr(summary.shadowResult)}`} tone={pnlTone(summary.shadowResult)} /> : null}
         {activation?.endedAt ? <Item label="Stopped" value={`${clock(activation.endedAt)} · ${activation.end === "LIMIT" ? "3 trades completed" : activation.end === "DAY_END" ? "market day ended" : "Stop Algo"}`} /> : null}
@@ -185,30 +185,6 @@ export function LiveMathiSession({ data, busy, disabled, now, onStart, onStop, t
           </div>
         ) : <p className="text-micro text-muted">None yet.</p>}
       </div>
-
-      {live.previous.length ? (
-        <details className="rounded-md border border-border-soft text-micro">
-          <summary className="cursor-pointer px-2 py-1.5 font-medium text-text-2">Session history ({live.previous.length})</summary>
-          <div className="overflow-x-auto border-t border-border-soft p-2">
-            <table className="w-full text-micro">
-              <thead className="text-muted"><tr className="text-left"><th className="pr-2 font-medium">Session</th><th className="pr-2 font-medium">Start – stop</th><th className="pr-2 font-medium">Trades</th><th className="pr-2 font-medium">W · L</th><th className="pr-2 text-right font-medium">Realized P&amp;L</th><th className="font-medium">Ended</th></tr></thead>
-              <tbody>
-                {live.previous.map(({ activation: item, summary: past }) => (
-                  <tr key={item.id} className="border-t border-border-soft">
-                    <td className="pr-2">{item.id}</td>
-                    <td className="whitespace-nowrap pr-2">{clock(item.startedAt)} – {clock(item.endedAt)}</td>
-                    <td className="pr-2">{past.completed}/{past.max}</td>
-                    <td className="pr-2">{past.wins} · {past.losses}</td>
-                    <td className={cx("pr-2 text-right", pnlTone(past.realized))}>{inr(past.realized)}</td>
-                    <td>{item.end === "LIMIT" ? "3 trades done" : item.end === "DAY_END" ? "Day ended" : "Stopped"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="mt-1 text-muted">Every completed trade is also in Trade History (Algo wallet), tagged with its session.</p>
-          </div>
-        </details>
-      ) : null}
     </div>
   );
 }

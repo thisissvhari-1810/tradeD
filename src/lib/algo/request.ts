@@ -7,7 +7,7 @@ export const ALGO_SESSION_ID = /^\d{4}-\d{2}-\d{2}\.[a-z0-9]{4,32}$/;
 const session = z.string().regex(ALGO_SESSION_ID);
 // The chart's replay clock advances in fractions of a second; like the other replay routes, the replay
 // time is taken to the whole second (a timestamp, not a quantity: no fractional value is meaningful).
-const strategy = z.enum(["EXISTING_ALGO", "PRIMARY_STRATEGY", "MATHI_5"]);
+const strategy = z.enum(["EXISTING_ALGO", "PRIMARY_STRATEGY", "MATHI_5", "MATHI_BANK"]);
 const cursor = z.number({ invalid_type_error: "The replay time (cursor) is missing." }).finite("The replay time (cursor) is not a number.").positive("The replay time (cursor) must be positive.").transform((value) => Math.floor(value));
 
 export const algoRequest = z.discriminatedUnion("action", [
@@ -29,6 +29,7 @@ export const algoRequest = z.discriminatedUnion("action", [
   z.object({ action: z.literal("chartFinalize"), session }).strict(),
   z.object({ action: z.literal("stopStrategy"), strategy, exit: z.boolean() }).strict(),
   z.object({ action: z.literal("mathi5"), op: z.enum(["start", "stop", "tick", "exit"]) }).strict(),
+  z.object({ action: z.literal("variant"), strategy: z.enum(["MATHI_5", "MATHI_BANK"]), op: z.enum(["start", "stop", "tick", "exit"]) }).strict(),
   z.object({ action: z.literal("backtestDay"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), variant: z.union([z.enum(["saved", "baseline"]), z.string().regex(/^(score:\d{1,3}|confirm:(single|hold|retest))$/)]), strategy: strategy.optional(), capital: z.number().min(1_000).max(100_000_000).optional(), slippageTicks: z.number().int().min(0).max(20).optional() }).strict(),
   // Saved backtests: the browser sends the days it ran; the server recomputes every total from them.
   z.object({

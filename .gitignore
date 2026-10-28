@@ -46,3 +46,7 @@ next-env.d.ts
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# backtest data cache and results (reproducible from scripts/backtest-indices.ts)
+/.backtest-cache/
+/.backtests/

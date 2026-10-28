@@ -7,7 +7,7 @@ import { daysBefore, intradayEnds } from "@/lib/market/dhan-ranges";
 import { classifyProviderFailure, timeoutFailure, withRetries, type ProviderFailure } from "@/lib/market/provider-errors";
 import nseEquity from "@/lib/market/nse-eq.json";
 import { findIndex } from "@/lib/market/indices";
-import { mergeRolling, rollingRequest, ROLLING_OFFSETS, type ExpiredTapes, type RollingSide } from "@/lib/algo/expired-options";
+import { mergeRolling, rollingRequest, ROLLING_OFFSETS, type ExpiredTapes, type ExpiryCycle, type RollingSide } from "@/lib/algo/expired-options";
 import { DEFAULT_CHARGES } from "@/lib/trading/settings";
 import { getDhanAccessToken, getDhanClientId } from "@/server/settings";
 import { aggregateCount, aggregateMinutes, aggregatePeriod, type ChartSpan } from "@/lib/market/spans";
@@ -601,14 +601,14 @@ export function rankFeed(items: Array<{ symbol: string; name: string; id: string
  * a few requests at a time for the data API's rate limit. Offsets with no history are skipped; if every
  * request fails, the first failure is raised (an expired or missing token, no data permission).
  */
-export async function dhanExpiredOptions(underlyingId: number, from: string, to: string, offsets: string[] = ROLLING_OFFSETS): Promise<ExpiredTapes> {
+export async function dhanExpiredOptions(underlyingId: number, from: string, to: string, offsets: string[] = ROLLING_OFFSETS, cycle: ExpiryCycle = "WEEK"): Promise<ExpiredTapes> {
   const jobs = offsets.flatMap((offset) => (["CALL", "PUT"] as const).map((side) => ({ offset, side })));
   const responses: Array<{ side: RollingSide; data: unknown }> = [];
   let failure: unknown = null;
   for (let index = 0; index < jobs.length; index += 4) {
     const batch = await Promise.all(jobs.slice(index, index + 4).map(async (job) => {
       try {
-        return { side: job.side, data: await dhanPost("/charts/rollingoption", rollingRequest({ underlyingSecurityId: underlyingId, offset: job.offset, side: job.side, from, to })) as unknown };
+        return { side: job.side, data: await dhanPost("/charts/rollingoption", rollingRequest({ underlyingSecurityId: underlyingId, offset: job.offset, side: job.side, from, to, cycle })) as unknown };
       } catch (error) {
         failure ??= error;
         return null;

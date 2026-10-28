@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "db:deploy": "prisma migrate deploy",
     "db:setup": "tsx scripts/db-setup.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "backtest:indices": "tsx scripts/backtest-indices.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

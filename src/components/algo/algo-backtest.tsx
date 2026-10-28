@@ -18,7 +18,7 @@ const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : var
  * days are split in time order into training / validation / out-of-sample parts; a variant is chosen on the
  * training days only and then reported on the other two.
  */
-export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { disabled: string | null; strategy?: "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" }) {
+export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { disabled: string | null; strategy?: "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" | "MATHI_BANK" }) {
   const [range] = useState(() => lastTradingDays(todayIst(), 20));
   const [from, setFrom] = useState(range[0]);
   const [to, setTo] = useState(range.at(-1)!);
@@ -31,7 +31,7 @@ export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { dis
   const cancel = useRef(false);
 
   const scoreVariants = [...new Set(scores.split(/[\s,]+/).filter(Boolean).map(Number).filter((value) => Number.isInteger(value) && value >= 0 && value <= 100))].slice(0, 4).map((value) => `score:${value}`);
-  const mathi = strategy === "EXISTING_ALGO" || strategy === "MATHI_5";
+  const mathi = strategy === "EXISTING_ALGO" || strategy === "MATHI_5" || strategy === "MATHI_BANK";
   // Mathi Strategy: the same saved settings with each breakout confirmation mode, side by side.
   const confirmVariants = mathi && confirmModes ? ["confirm:single", "confirm:hold", "confirm:retest"] : [];
   const planned: BacktestVariant[] = confirmVariants.length ? confirmVariants : ["saved", ...(compare ? ["baseline"] : []), ...scoreVariants];

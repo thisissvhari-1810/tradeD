@@ -7,14 +7,14 @@ import { useDesk } from "@/components/shell";
 import { cx } from "@/components/ui";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoAccountFigures } from "@/components/algo/algo-account";
-import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage } from "@/components/algo/algo-analysis";
+import { ConfirmationList } from "@/components/algo/algo-analysis";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
-import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
-import { LiveMathiSession } from "@/components/algo/algo-live-session";
-import { ALGO_VIEW_EVENT, algoPanelTicker, broadcastAlgoView } from "@/components/algo/algo-start-button";
+import { LiveSessionSwitch } from "@/components/algo/algo-live-session";
+import { ALGO_VIEW_EVENT, algoLivePanel, algoPanelTicker, broadcastAlgoView } from "@/components/algo/algo-start-button";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
-import { Mathi5Panel } from "@/components/algo/algo-mathi5";
+import { VariantPanel } from "@/components/algo/algo-variant";
+import { isVariantStrategy } from "@/lib/algo/exclusive";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
 import { EXIT_MANAGEMENT_DEFAULTS } from "@/lib/algo/trend-exit";
 import { confirmationMode, type AlgoConfig, type AlgoStatus, type ConfirmationMode } from "@/lib/algo/runner";
@@ -59,10 +59,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const [error, setError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [replayDate, setReplayDate] = useState("");
-  // The time of the last tick (for the feed's staleness); set by the tick, never read from the clock while rendering.
-  const [checkedAt, setCheckedAt] = useState<number | null>(null);
   const [yesterday] = useState(() => new Date(Date.now() + 19_800_000 - 86_400_000).toISOString().slice(0, 10));
-  const [today] = useState(() => new Date(Date.now() + 19_800_000).toISOString().slice(0, 10));
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
@@ -110,20 +107,18 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
     if (!active) return;
     const timer = window.setInterval(() => {
       if (document.hidden) return;
-      setCheckedAt(Math.floor(Date.now() / 1000));
       api<AlgoData>("/api/algo", { action: "tick" }).then(apply).catch(() => undefined);
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [active, apply]);
 
   // While a trade is open its latest premium and P&L are refreshed every 5 seconds (a read only: orders and exits
-  // are decided by the 15-second server check above).
+  // are decided by the 15-second server check above). The live Algo panel beside the chart reads it instead while shown.
   const holding = Boolean(data?.state.position);
   useEffect(() => {
     if (!holding) return;
     const timer = window.setInterval(() => {
-      if (document.hidden) return;
-      setCheckedAt(Math.floor(Date.now() / 1000));
+      if (document.hidden || algoLivePanel.mounted > 0) return;
       api<AlgoData>("/api/algo").then(apply).catch(() => undefined);
     }, 5_000);
     return () => window.clearInterval(timer);
@@ -159,16 +154,12 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
   const dirty = JSON.stringify(draft) !== JSON.stringify(data.config);
   const position = data.position;
   const paper = draft.mode === "PAPER";
-  // During market hours a running session should see a new completed candle every minute.
-  const istMinute = checkedAt == null ? null : Math.floor(((checkedAt + 19_800) % 86_400) / 60);
-  const marketHours = istMinute != null && istMinute >= 9 * 60 + 16 && istMinute <= 15 * 60 + 30;
-  const feedStale = Boolean(checkedAt != null && marketHours && state.running && state.lastCandle != null && checkedAt - (state.lastCandle + 60) > 180);
 
-  if (selected === "MATHI_5") {
+  if (isVariantStrategy(selected)) {
     return (
       <div className="space-y-3">
         <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
-        <Mathi5Panel data={data} onData={apply} />
+        <VariantPanel data={data} onData={apply} strategy={selected} />
       </div>
     );
   }
@@ -216,38 +207,29 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
         {paper ? <p className="text-micro leading-snug text-muted">{data.monitoring}</p> : null}
       </div>
 
-      {/* Live demo: Mathi Strategy ON / OFF, its activation session, the open trade and the completed trades. */}
-      {paper ? <LiveMathiSession data={data} busy={Boolean(busy)} disabled={dirty || data.problems.length > 0} now={checkedAt} onStart={() => void run("start", { action: "start" })} onStop={() => void run("stop", { action: "stop" })} /> : null}
+      {/* Live demo: Mathi Strategy ON / OFF. Its live updates are in the Algo panel beside the chart. */}
+      {paper ? <LiveSessionSwitch data={data} busy={Boolean(busy)} disabled={dirty || data.problems.length > 0} onStart={() => void run("start", { action: "start" })} onStop={() => void run("stop", { action: "stop" })} /> : null}
+      {paper && data.account.legacyPosition ? <p className="text-micro text-warning">An earlier algo position is still on the options paper account. It is protected and closed there; new entries start on this account once it is flat.</p> : null}
 
-      {/* Live readouts */}
-      <div className="rounded-md border border-border-soft bg-sunken/50 p-2">
-        <p className="eyebrow mb-1">Algo account</p>
-        <AlgoAccountFigures account={data.account} compact extra={[[paper ? "Entries this session" : "Entries today", `${state.tradesToday} / ${data.config.maxTrades}`]]} />
-        {data.account.legacyPosition ? <p className="mt-1 text-micro text-warning">An earlier algo position is still on the options paper account. It is protected and closed there; new entries start on this account once it is flat.</p> : null}
-      </div>
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
-        <Info label="Last candle" text={clock(state.lastCandle)} />
-        {paper && state.running ? <Info label="Feed" text={feedStale ? "Stale: no new candle" : "Updating"} tone={feedStale ? "text-warning" : "text-profit"} /> : null}
-        <div className="col-span-2 min-w-0">
-          <dt className="text-micro text-muted">Last signal</dt>
-          <dd className="text-data leading-snug text-text-2">{state.lastSignal ? `${clock(state.lastSignal.time)} · ${state.lastSignal.explanation}` : "None yet"}</dd>
-        </div>
-        <div className="col-span-2 min-w-0">
-          <dt className="text-micro text-muted">Last order</dt>
-          <dd className="text-data leading-snug text-text-2">{state.lastOrder ? state.lastOrder.message : "None yet"}</dd>
-        </div>
-      </dl>
-
-      {paper ? <MarketPlanSection date={today} /> : null}
-
-      {/* Live paper: the same market analysis, strategies and confirmations as the replay dashboard. */}
-      {paper && (state.running || state.analysis) ? (
+      {/* Replay readouts (live paper shows them in the Algo panel beside the chart) */}
+      {!paper ? (
         <>
-          <MathiStatus state={state} config={data.config} mode="Live-price paper trading" now={checkedAt ?? state.analysis?.asOf ?? null} />
-          <EngineCard state={state} config={data.config} date={state.sessionDate} now={checkedAt ?? state.analysis?.asOf ?? null} unrealized={data.position?.unrealized ?? null} />
-          <MarketAnalysisSection analysis={state.analysis} symbol={data.config.underlying} time={state.analysis?.asOf ?? null} />
-          <StrategyRows analysis={state.analysis} />
-          {!position ? <p className="text-micro font-semibold text-text-2" role="status">{waitingMessage(state.analysis, state.tradesToday, data.config.maxTrades)}</p> : null}
+          <div className="rounded-md border border-border-soft bg-sunken/50 p-2">
+            <p className="eyebrow mb-1">Algo account</p>
+            <AlgoAccountFigures account={data.account} compact extra={[["Entries today", `${state.tradesToday} / ${data.config.maxTrades}`]]} />
+            {data.account.legacyPosition ? <p className="mt-1 text-micro text-warning">An earlier algo position is still on the options paper account. It is protected and closed there; new entries start on this account once it is flat.</p> : null}
+          </div>
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
+            <Info label="Last candle" text={clock(state.lastCandle)} />
+            <div className="col-span-2 min-w-0">
+              <dt className="text-micro text-muted">Last signal</dt>
+              <dd className="text-data leading-snug text-text-2">{state.lastSignal ? `${clock(state.lastSignal.time)} · ${state.lastSignal.explanation}` : "None yet"}</dd>
+            </div>
+            <div className="col-span-2 min-w-0">
+              <dt className="text-micro text-muted">Last order</dt>
+              <dd className="text-data leading-snug text-text-2">{state.lastOrder ? state.lastOrder.message : "None yet"}</dd>
+            </div>
+          </dl>
         </>
       ) : null}
 

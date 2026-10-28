@@ -40,7 +40,7 @@ describe("Mathi 5%: a separate copy of Mathi Strategy v18", () => {
   });
 
   it("is its own strategy under the exclusive lock: never trades while Mathi Strategy runs", async () => {
-    expect(ALGO_STRATEGIES).toEqual(["EXISTING_ALGO", "MATHI_5", "PRIMARY_STRATEGY"]);
+    expect(ALGO_STRATEGIES).toEqual(["EXISTING_ALGO", "MATHI_5", "MATHI_BANK", "PRIMARY_STRATEGY"]);
     expect(isAlgoStrategy("MATHI_5")).toBe(true);
     expect(STRATEGY_NAME.MATHI_5).toBe("Mathi 5%");
     const mathi = memoryStore("EXISTING_ALGO");

@@ -259,6 +259,13 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
  */
 export const MATHI5_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, target: { mode: "percent", value: 5 } };
 
+/**
+ * Mathi Bank Strategy: Mathi Strategy v18 (the +3% version) on BANKNIFTY, with the ATM CE / PE of the nearest monthly
+ * BANKNIFTY expiry (BANKNIFTY has no weekly options). Its own settings, live paper state, trades and results; any value
+ * that differs from Mathi Strategy was chosen on BANKNIFTY history (see docs/mathi-bank-strategy.md).
+ */
+export const MATHI_BANK_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, underlying: "BANKNIFTY" };
+
 export const TICK = 0.05;
 
 export type AlgoStatus =

@@ -22,6 +22,7 @@ import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } f
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
 import { AlgoHistory } from "@/components/algo/algo-history";
 import { AlgoStartButton } from "@/components/algo/algo-start-button";
+import { AlgoLivePanel } from "@/components/algo/algo-live-panel";
 import { tradeMarkers } from "@/lib/algo/chart-replay";
 import { algoChartMarkers } from "@/components/algo/algo-markers";
 import { algoAnalysisDrawings, algoPivotMarkers } from "@/components/algo/algo-drawings";
@@ -1603,6 +1604,8 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             ) : null}
           </div>
         {algoAllowed ? <AlgoReplayPanel algo={algo} cursor={replay.cursor} chartSymbol={symbol} onHistory={() => setAlgoHistory(true)} selectedTrade={selectedTrade} onOpenTrade={showTrade} onRetrade={retrade} /> : null}
+        {/* Live paper trading: the running session's live updates, beside the chart as the replay's Algo panel is. */}
+        {live && !replay.active && strategyAllowed ? <AlgoLivePanel /> : null}
         </div>
       {replay.active ? (
         <ReplayBar

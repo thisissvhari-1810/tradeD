@@ -7,14 +7,14 @@ import { optionCharges } from "@/lib/options/engine";
 import { algoConfigProblems, readAlgoConfig, switchToChartReplay } from "@/lib/algo/config";
 import { strategyLines, type AlgoLine, type Candle } from "@/lib/algo/lines";
 import { createReplayAdapter, simulateSession } from "@/lib/algo/replay-adapter";
-import { expiredChain, expiredTape, weeklyExpiries } from "@/lib/algo/expired-options";
+import { expiredChain, expiredTape, expiryCycleOf, monthlyExpiry, weeklyExpiries } from "@/lib/algo/expired-options";
 import { backtestTotals, backtestTrades, missedSignals, type BacktestDay } from "@/lib/algo/backtest";
 import type { AlgoRequest } from "@/lib/algo/request";
 import { dhanExpiredOptions, dhanOptionSession } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
-import { acquireLock, isAlgoStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity } from "@/lib/algo/exclusive";
-import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { acquireLock, isAlgoStrategy, isVariantStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity, type VariantStrategy } from "@/lib/algo/exclusive";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, MATHI_BANK_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -115,10 +115,10 @@ async function ownerActivity(sessionId: string, owner: AlgoStrategy): Promise<Ow
     activity.position ||= Boolean(state.position);
     activity.pending ||= Boolean(state.pending);
   }
-  if (owner === "EXISTING_ALGO" || owner === "MATHI_5") {
+  if (owner === "EXISTING_ALGO" || isVariantStrategy(owner)) {
     const session = await prisma.algoSession.findUnique({ where: { id: sessionId } });
     if (session) {
-      const state = owner === "MATHI_5" ? mathi5StateOf(session) : stateOf(session);
+      const state = isVariantStrategy(owner) ? variantStateOf(session, owner) : stateOf(session);
       activity.running ||= state.running;
       activity.position ||= Boolean(state.position);
       activity.pending ||= Boolean(state.pending);
@@ -138,8 +138,8 @@ async function stopStrategy(user: SessionUser, sessionId: string, strategy: Algo
   const now = Math.floor(Date.now() / 1000);
   const runs = await prisma.algoRun.findMany({ where: { sessionId, strategy, status: "ACTIVE" } });
   const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
-  const m5 = strategy === "MATHI_5";
-  const paper = strategy === "EXISTING_ALGO" ? stateOf(session) : m5 ? mathi5StateOf(session) : null;
+  const variant = isVariantStrategy(strategy) ? strategy : null;
+  const paper = strategy === "EXISTING_ALGO" ? stateOf(session) : variant ? variantStateOf(session, variant) : null;
   const pending = runs.some((run) => runStateOf(run).pending) || Boolean(paper?.pending);
   if (pending) throw new AppError(`${STRATEGY_NAME[strategy]} has a pending order that is still being reconciled. Wait for it to settle, then stop it.`, 409, "ORDER_PENDING");
   const open = runs.some((run) => runStateOf(run).position) || Boolean(paper?.position);
@@ -164,15 +164,15 @@ async function stopStrategy(user: SessionUser, sessionId: string, strategy: Algo
     await saveChartRun(run, { armed: false, state: state as unknown as Prisma.InputJsonValue }, events);
   }
   if (paper && (paper.running || paper.position)) {
-    const config = m5 ? mathi5ConfigOf(session) : readAlgoConfig(session.config);
+    const config = variant ? variantConfigOf(session, variant) : readAlgoConfig(session.config);
     const events: AlgoEvent[] = [];
-    if (paper.position && !paper.position.exit) await startExit(paper, { sessionId: m5 ? mathi5Key(sessionId) : sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
-    events.push(...endActivation(paper, now, "STOPPED", m5 ? STRATEGY_NAME.MATHI_5 : undefined));
+    if (paper.position && !paper.position.exit) await startExit(paper, { sessionId: variant ? variantKey(sessionId, variant) : sessionId, sessionDate: paper.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, paper) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
+    events.push(...endActivation(paper, now, "STOPPED", variant ? STRATEGY_NAME[variant] : undefined));
     paper.status = paper.recovery ? "RECOVERY_REQUIRED" : paper.position ? "POSITION_OPEN" : "DISABLED";
     events.push({ key: `switch-stop:${now}`, time: now, kind: "INFO", message: "Session stopped to switch strategies." });
-    if (m5) {
-      await tagClosedTrades(user.id, paper, events, config, STRATEGY_NAME.MATHI_5);
-      await saveMathi5(sessionId, paper, events);
+    if (variant) {
+      await tagClosedTrades(user.id, paper, events, config, STRATEGY_NAME[variant]);
+      await saveVariant(sessionId, variant, paper, events);
     } else await saveRun(sessionId, paper, events, "PAPER");
   }
   const released = await freeLock(sessionId, strategy);
@@ -198,33 +198,44 @@ function primaryConfigOf(session: { primaryConfig: Prisma.JsonValue | null }): A
   return { ...readAlgoConfig(saved), engine: "primary", mode: "REPLAY" };
 }
 
-/** Mathi 5%'s own saved settings (or its defaults: Mathi Strategy v18 with a +5% target); live paper trading. */
-function mathi5ConfigOf(session: { mathi5Config: Prisma.JsonValue | null }): AlgoConfig {
-  const saved = session.mathi5Config && typeof session.mathi5Config === "object" ? session.mathi5Config : MATHI5_DEFAULTS;
-  return { ...readAlgoConfig(saved), engine: "existing", mode: "PAPER" };
+/**
+ * Strategies run by Mathi Strategy's engine with their own settings, live paper state, order keys and stored events
+ * (never Mathi Strategy's): Mathi 5% (+5% target) and Mathi Bank Strategy (Mathi 3% on BANKNIFTY).
+ */
+const VARIANTS = {
+  MATHI_5: { defaults: MATHI5_DEFAULTS, config: "mathi5Config", state: "mathi5State", mode: "MATHI_5", run: "M5" },
+  MATHI_BANK: { defaults: MATHI_BANK_DEFAULTS, config: "mathiBankConfig", state: "mathiBankState", mode: "MATHI_BANK", run: "MB" },
+} as const satisfies Record<VariantStrategy, { defaults: AlgoConfig; config: string; state: string; mode: string; run: string }>;
+type VariantColumns = { mathi5Config: Prisma.JsonValue | null; mathi5State: Prisma.JsonValue | null; mathiBankConfig: Prisma.JsonValue | null; mathiBankState: Prisma.JsonValue | null };
+
+/** A variant's own saved settings (or its defaults); live paper trading. Mathi Bank Strategy always trades BANKNIFTY. */
+function variantConfigOf(session: VariantColumns, strategy: VariantStrategy): AlgoConfig {
+  const saved = session[VARIANTS[strategy].config];
+  const config: AlgoConfig = { ...readAlgoConfig(saved && typeof saved === "object" ? saved : VARIANTS[strategy].defaults), engine: "existing", mode: "PAPER" };
+  return strategy === "MATHI_BANK" ? { ...config, underlying: "BANKNIFTY" } : config;
 }
 
-/** Mathi 5%'s live paper-trading state (its own, never Mathi Strategy's). */
-function mathi5StateOf(row: { mathi5State: Prisma.JsonValue }): AlgoState {
-  const raw = (row.mathi5State && typeof row.mathi5State === "object" ? row.mathi5State : {}) as Partial<AlgoState>;
+/** A variant's live paper-trading state (its own, never Mathi Strategy's). */
+function variantStateOf(row: VariantColumns, strategy: VariantStrategy): AlgoState {
+  const saved = row[VARIANTS[strategy].state];
+  const raw = (saved && typeof saved === "object" ? saved : {}) as Partial<AlgoState>;
   return { ...initialState(todayIst()), ...raw };
 }
 
-/** Mathi 5%'s order keys, stored events and run id: its own, so they never meet Mathi Strategy's. */
-const mathi5Key = (sessionId: string) => `${sessionId}:M5`;
-const MATHI5_MODE = "MATHI_5";
-const MATHI5_RUN = "M5";
+/** A variant's order keys: its own, so they never meet Mathi Strategy's (Mathi 5% keeps its original ":M5"). */
+const variantKey = (sessionId: string, strategy: VariantStrategy) => `${sessionId}:${VARIANTS[strategy].run}`;
 
-async function saveMathi5(sessionId: string, state: AlgoState, events: AlgoEvent[]) {
+async function saveVariant(sessionId: string, strategy: VariantStrategy, state: AlgoState, events: AlgoEvent[]) {
+  const { state: column, mode, run } = VARIANTS[strategy];
   await prisma.$transaction([
-    prisma.algoSession.update({ where: { id: sessionId }, data: { mathi5State: state as unknown as Prisma.InputJsonValue } }),
-    ...(events.length ? [prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode: MATHI5_MODE, runId: MATHI5_RUN, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true })] : []),
+    prisma.algoSession.update({ where: { id: sessionId }, data: { [column]: state as unknown as Prisma.InputJsonValue } }),
+    ...(events.length ? [prisma.algoEvent.createMany({ data: events.map((event) => ({ sessionId, mode, runId: run, key: event.key, time: Math.floor(event.time), kind: event.kind, payload: event as unknown as Prisma.InputJsonValue })), skipDuplicates: true })] : []),
   ]);
 }
 
-function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null; mathi5Config: Prisma.JsonValue | null }, strategy: AlgoStrategy): AlgoConfig {
-  // The chart replay (Demo) runs Mathi 5% with its own settings on the replay clock.
-  if (strategy === "MATHI_5") return { ...mathi5ConfigOf(session), mode: "REPLAY" };
+function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null } & VariantColumns, strategy: AlgoStrategy): AlgoConfig {
+  // The chart replay (Demo) runs a variant with its own settings on the replay clock.
+  if (isVariantStrategy(strategy)) return { ...variantConfigOf(session, strategy), mode: "REPLAY" };
   return strategy === "PRIMARY_STRATEGY" ? primaryConfigOf(session) : { ...readAlgoConfig(session.config), engine: "existing" };
 }
 
@@ -460,7 +471,8 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   const latestRun = replays[0]?.runId ?? null;
   const primaryConfig = primaryConfigOf(session);
   const liveSession = await liveSessionView(session.id, config, state, unrealized);
-  const mathi5 = await mathi5View(user, session);
+  const mathi5 = await variantView(user, session, "MATHI_5");
+  const mathiBank = await variantView(user, session, "MATHI_BANK");
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
@@ -481,6 +493,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     liveSession,
     /** Mathi 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
     mathi5,
+    mathiBank,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
@@ -526,19 +539,20 @@ async function liveSessionView(sessionId: string, config: AlgoConfig, state: Alg
 }
 
 /** The Mathi 5% panel: settings, the live paper session (status, regime, trades, P&L) and the open trade's premium. */
-async function mathi5View(user: SessionUser, session: Prisma.AlgoSessionGetPayload<object>) {
-  const config = mathi5ConfigOf(session);
-  const state = mathi5StateOf(session);
+async function variantView(user: SessionUser, session: Prisma.AlgoSessionGetPayload<object>, strategy: VariantStrategy) {
+  const config = variantConfigOf(session, strategy);
+  const state = variantStateOf(session, strategy);
+  const { mode, run } = VARIANTS[strategy];
   let mark: Mark | null = null;
   if (state.position) mark = await paperAdapter(user.id, config).mark(state.position.contract, Math.floor(Date.now() / 1000)).catch(() => null);
   const unrealized = state.position && mark?.bid != null ? Math.round(((mark.bid - state.position.avg) * state.position.quantity - state.position.entryCharges) * 100) / 100 : null;
-  const events = await prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: MATHI5_MODE, runId: MATHI5_RUN }, orderBy: [{ time: "desc" }, { createdAt: "desc" }], take: 150 });
+  const events = await prisma.algoEvent.findMany({ where: { sessionId: session.id, mode, runId: run }, orderBy: [{ time: "desc" }, { createdAt: "desc" }], take: 150 });
   return {
     config,
     problems: algoConfigProblems(config),
     state,
     position: state.position ? { ...state.position, bid: mark?.bid ?? null, ask: mark?.ask ?? null, unrealized, markedAt: mark?.asOf ?? null } : null,
-    liveSession: await liveSessionView(session.id, config, state, unrealized, { mode: MATHI5_MODE, runId: MATHI5_RUN }),
+    liveSession: await liveSessionView(session.id, config, state, unrealized, { mode, runId: run }),
     events: events.map((event) => event.payload as unknown as AlgoEvent),
   };
 }
@@ -558,6 +572,7 @@ export type AlgoCommand =
   | { action: "stopStrategy"; strategy: AlgoStrategy; exit: boolean }
   | { action: "replay"; date: string }
   | { action: "mathi5"; op: "start" | "stop" | "tick" | "exit" }
+  | { action: "variant"; strategy: VariantStrategy; op: "start" | "stop" | "tick" | "exit" }
   | ChartCommand;
 
 /** The Algo inside the chart's replay (see chartCommand). */
@@ -581,8 +596,9 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
     await withLease(session.id, () => chartCommandLocked(user, session, command));
     return algoView(user, command.session);
   }
-  if (command.action === "mathi5") {
-    await withLease(session.id, () => mathi5Command(user, session.id, command.op));
+  if (command.action === "mathi5" || command.action === "variant") {
+    const strategy = command.action === "mathi5" ? "MATHI_5" : command.strategy;
+    await withLease(session.id, () => variantCommand(user, session.id, strategy, command.op));
     return algoView(user);
   }
   await withLease(session.id, async () => {
@@ -595,13 +611,16 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
     const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
     switch (command.action) {
       case "save": {
-        if (command.strategy === "MATHI_5") {
-          const next: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing", mode: "PAPER" };
+        if (isVariantStrategy(command.strategy)) {
+          const strategy = command.strategy;
+          const read: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing", mode: "PAPER" };
+          // Mathi Bank Strategy always trades BANKNIFTY.
+          const next: AlgoConfig = strategy === "MATHI_BANK" ? { ...read, underlying: "BANKNIFTY" } : read;
           const problems = algoConfigProblems(next);
           if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
-          if (mathi5StateOf(current).position && next.underlying !== mathi5ConfigOf(current).underlying) throw new AppError("Exit the open Mathi 5% position before changing the underlying.", 409);
-          await prisma.algoSession.update({ where: { id: session.id }, data: { mathi5Config: next as unknown as Prisma.InputJsonValue } });
-          note("settings-m5", "Mathi 5% settings saved.");
+          if (variantStateOf(current, strategy).position && next.underlying !== variantConfigOf(current, strategy).underlying) throw new AppError(`Exit the open ${STRATEGY_NAME[strategy]} position before changing the underlying.`, 409);
+          await prisma.algoSession.update({ where: { id: session.id }, data: { [VARIANTS[strategy].config]: next as unknown as Prisma.InputJsonValue } });
+          note(`settings-${VARIANTS[strategy].run.toLowerCase()}`, `${STRATEGY_NAME[strategy]} settings saved.`);
           break;
         }
         if (command.strategy === "PRIMARY_STRATEGY") {
@@ -758,24 +777,24 @@ async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEve
  * evaluated from the latest completed candle; Stop ends new entries (an open trade stays managed to its exit);
  * each check runs the same engine as Mathi Strategy on today's live candles, with Mathi 5%'s own settings and state.
  */
-async function mathi5Command(user: SessionUser, sessionId: string, op: "start" | "stop" | "tick" | "exit") {
+async function variantCommand(user: SessionUser, sessionId: string, strategy: VariantStrategy, op: "start" | "stop" | "tick" | "exit") {
   const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
-  const config = mathi5ConfigOf(session);
-  const state = mathi5StateOf(session);
+  const config = variantConfigOf(session, strategy);
+  const state = variantStateOf(session, strategy);
   const events: AlgoEvent[] = [];
   const now = Math.floor(Date.now() / 1000);
   const note = (key: string, message: string, kind: AlgoEvent["kind"] = "INFO") => events.push({ key: `${key}:${now}`, time: now, kind, message });
-  const name = STRATEGY_NAME.MATHI_5;
+  const name = STRATEGY_NAME[strategy];
   switch (op) {
     case "start": {
       const problems = algoConfigProblems(config);
       if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
       // A double click or a retried request never starts a second session.
       if (state.running && state.activation && state.activation.endedAt == null) break;
-      await takeLock(sessionId, "MATHI_5");
+      await takeLock(sessionId, strategy);
       if (state.position || state.pending) throw new AppError(`A ${name} trade from the previous session is still open. Let it reach its exit (or exit it) before starting a new session.`, 409, "POSITION_OPEN");
       const period = await startAlgoPeriod(user.id, `${name} live paper session started`);
-      events.push(...startActivation(state, now, activationId(now, "M5"), todayIst(), config.maxTrades, name));
+      events.push(...startActivation(state, now, activationId(now, VARIANTS[strategy].run), todayIst(), config.maxTrades, name));
       state.activation = { ...state.activation!, periodId: period.periodId, capital: Number(period.cashPaise) / 100 };
       break;
     }
@@ -785,27 +804,27 @@ async function mathi5Command(user: SessionUser, sessionId: string, op: "start" |
       break;
     case "exit":
       if (!state.position) throw new AppError(`There is no open ${name} position.`, 409);
-      await startExit(state, { sessionId: mathi5Key(sessionId), sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, state) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
+      await startExit(state, { sessionId: variantKey(sessionId, strategy), sessionDate: state.sessionDate, config, candles: [], lines: [], now, adapter: adapterFor(user, config, state) }, "MANUAL", null, (event) => events.push({ time: now, ...event }));
       await tagClosedTrades(user.id, state, events, config, name);
       break;
     case "tick":
       break;
   }
   if (op === "tick" || op === "start") {
-    const ran = await runMathi5Tick(user, sessionId, config, state);
-    await saveMathi5(sessionId, ran.state, [...events, ...ran.events]);
+    const ran = await runVariantTick(user, sessionId, strategy, config, state);
+    await saveVariant(sessionId, strategy, ran.state, [...events, ...ran.events]);
   } else {
     state.status = state.recovery ? "RECOVERY_REQUIRED" : state.position ? "POSITION_OPEN" : state.running ? (state.entries ? "MONITORING" : "READY") : "DISABLED";
-    await saveMathi5(sessionId, state, events);
+    await saveVariant(sessionId, strategy, state, events);
   }
   // A stopped session with nothing open releases the execution lock.
-  await freeLock(sessionId, "MATHI_5");
+  await freeLock(sessionId, strategy);
 }
 
 /** One Mathi 5% live paper check: Mathi Strategy's engine on today's levels and completed 1-minute candles. */
-async function runMathi5Tick(user: SessionUser, sessionId: string, config: AlgoConfig, state: AlgoState, source: CheckSource = "browser") {
+async function runVariantTick(user: SessionUser, sessionId: string, strategy: VariantStrategy, config: AlgoConfig, state: AlgoState, source: CheckSource = "browser") {
   if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
-  const name = STRATEGY_NAME.MATHI_5;
+  const name = STRATEGY_NAME[strategy];
   const today = todayIst();
   const now = Math.floor(Date.now() / 1000);
   const before = beforeLiveTick(state, today, now, name);
@@ -816,13 +835,13 @@ async function runMathi5Tick(user: SessionUser, sessionId: string, config: AlgoC
   const lines = data.date === today ? strategyLines(data, config.custom) : [];
   const lockEvents: AlgoEvent[] = [];
   if (state.running && state.entries) {
-    const got = await acquireLock(lockStore(sessionId), "MATHI_5", (owner) => ownerActivity(sessionId, owner));
+    const got = await acquireLock(lockStore(sessionId), strategy, (owner) => ownerActivity(sessionId, owner));
     if (!got.ok) {
       state.entries = false;
       lockEvents.push({ key: `lock-lost:${now}`, time: now, kind: "REJECTED", message: `New entries stopped: ${got.reason}` });
     }
   }
-  const result = await advance(state, { sessionId: mathi5Key(sessionId), sessionDate: today, config, candles, lines, now, adapter: adapterFor(user, config, state) });
+  const result = await advance(state, { sessionId: variantKey(sessionId, strategy), sessionDate: today, config, candles, lines, now, adapter: adapterFor(user, config, state) });
   tagWallet(result.state, false);
   const after = afterLiveTick(result.state, config, now, undefined, name);
   await tagClosedTrades(user.id, result.state, result.events, config, name);
@@ -858,14 +877,14 @@ export async function tickAllSessions(): Promise<{ ran: number; checks: Schedule
   const userOf = (row: Row["user"]): SessionUser => ({ id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt });
   return runScheduledChecks<Row>(sessions, {
     id: (session) => session.id,
-    strategies: ["MATHI_5", "MATHI"],
-    stateOf: (session, strategy) => (strategy === "MATHI_5" ? mathi5StateOf(session) : stateOf(session)),
+    strategies: ["MATHI_5", "MATHI_BANK", "MATHI"],
+    stateOf: (session, strategy) => (strategy === "MATHI" ? stateOf(session) : variantStateOf(session, strategy)),
     withLease,
     reload: (id) => prisma.algoSession.findUniqueOrThrow({ where: { id }, include }),
     check: async (session, strategy, state) => {
-      if (strategy === "MATHI_5") {
-        const result = await runMathi5Tick(userOf(session.user), session.id, mathi5ConfigOf(session), state, "scheduler");
-        await saveMathi5(session.id, result.state, result.events);
+      if (strategy !== "MATHI") {
+        const result = await runVariantTick(userOf(session.user), session.id, strategy, variantConfigOf(session, strategy), state, "scheduler");
+        await saveVariant(session.id, strategy, result.state, result.events);
         return result.state;
       }
       const result = await runTick(userOf(session.user), session.id, readAlgoConfig(session.config), state, "scheduler");
@@ -901,7 +920,7 @@ async function simulateDay(sessionId: string, date: string, config: AlgoConfig, 
   if (expired && listed.lotSize) {
     const chain = expiredChain({ symbol: listed.symbol, date, expiry: expired.expiry, lotSize: listed.lotSize, tapes: expired.tapes });
     const adapter = createReplayAdapter({ candles, chain, config, capital, tapeOf: async (contract) => expiredTape(expired.tapes, contract.securityId) });
-    const { events, state } = await simulateSession({ sessionId, date, config, candles, lines, adapter, startNote: `Backtest of ${date}: the nearest weekly expiry that day (${expired.expiry ?? "after the tested range"}), real 1-minute premiums from the expired contracts' history; lot size ${listed.lotSize} (today's). Virtual account; no orders are sent anywhere.` });
+    const { events, state } = await simulateSession({ sessionId, date, config, candles, lines, adapter, startNote: `Backtest of ${date}: the nearest ${expiryCycleOf(config.underlying) === "MONTH" ? "monthly" : "weekly"} expiry that day (${expired.expiry ?? "after the tested range"}), real 1-minute premiums from the expired contracts' history; lot size ${listed.lotSize} (today's). Virtual account; no orders are sent anywhere.` });
     return { events, state, expiry: expired.expiry, source: "expired" as const, candles, lines };
   }
   const adapter = replayAdapter({ underlying: config.underlying, date, candles, chain: listed, config, capital });
@@ -924,9 +943,12 @@ function expiredSession(underlying: string, date: string) {
       const index = findIndex(underlying);
       if (!index) return null;
       const next = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-      const tapes = (await dhanExpiredOptions(Number(index.id), date, next(date, 1))).get(date);
+      // NIFTY has weekly options; BANKNIFTY and the other indices monthly ones only.
+      const cycle = expiryCycleOf(underlying);
+      const tapes = (await dhanExpiredOptions(Number(index.id), date, next(date, 1), undefined, cycle)).get(date);
       if (!tapes?.size) return null;
-      // The expiry: the first day from this one whose at-the-money options end with no time value.
+      if (cycle === "MONTH") return { tapes, expiry: monthlyExpiry(date) };
+      // The weekly expiry: the first day from this one whose at-the-money options end with no time value.
       const window = await dhanExpiredOptions(Number(index.id), date, next(date, 10), ["ATM"]).catch(() => null);
       return { tapes, expiry: window ? weeklyExpiries(window).get(date) ?? null : null };
     })().catch((error) => {

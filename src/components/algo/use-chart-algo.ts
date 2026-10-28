@@ -6,6 +6,7 @@ import { playGate, type PlayGate } from "@/lib/algo/chart-replay";
 import { newReplaySession } from "@/lib/options/replay-premium";
 import type { AlgoData } from "@/components/algo/algo-panel";
 import { readSelectedStrategy, useOnSettingsSaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
+import { isVariantStrategy } from "@/lib/algo/exclusive";
 
 export type ChartAlgo = ReturnType<typeof useChartAlgo>;
 
@@ -261,7 +262,7 @@ export function useChartAlgo(input: {
 
   // Ready to trade the replay: Algo Trade in chart-replay mode, or Algo - Primary Strategy (chart replay only).
   // Mathi 5% runs the same rules on the replay with its own settings (always chart replay there).
-  const replayReady = selected === "PRIMARY_STRATEGY" || selected === "MATHI_5" || run?.strategy === "PRIMARY_STRATEGY" || run?.strategy === "MATHI_5" || data?.config.mode === "REPLAY";
+  const replayReady = selected === "PRIMARY_STRATEGY" || isVariantStrategy(selected) || run?.strategy === "PRIMARY_STRATEGY" || isVariantStrategy(run?.strategy) || data?.config.mode === "REPLAY";
   const gate: PlayGate | null = cursor == null ? null : playGate({
     algoEnabled: enabled && replayReady,
     cursor,

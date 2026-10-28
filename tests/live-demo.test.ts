@@ -206,6 +206,13 @@ describe("live demo: Mathi Strategy activation sessions (3 entries each)", () =>
     const recorded = new Map(all.map((item) => [item.entryKey, item.entryTime]));
     expect(activationTrades(all, state.activations![0], recorded).map((item) => item.side)).toEqual(["PUT"]);
     expect(activationTrades(all, second.exited.state.activation!, recorded).map((item) => [item.number, item.side])).toEqual([[1, "CALL"]]);
+    // A new session shows nothing of the previous one: its last signal and last order are cleared.
+    const done = second.exited.state;
+    expect(done.lastSignal).not.toBeNull();
+    expect(done.lastOrder).not.toBeNull();
+    endActivation(done, at(60), "STOPPED");
+    switchedOn(61, done, "MS-D");
+    expect(done).toMatchObject({ lastSignal: null, lastOrder: null, confirmations: null });
     // The daily loss lock is not reset by a restart.
     const locked = { ...off(), realizedToday: -6_000, riskLocked: true };
     startActivation(locked, at(70), "MS-C", DATE, 3);

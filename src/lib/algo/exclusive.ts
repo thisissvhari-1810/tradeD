@@ -7,23 +7,37 @@
  * protected. A lock whose owner is no longer active at all (a crash, an archived run) can be taken over.
  */
 
-export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5";
+export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" | "MATHI_BANK";
 export type LockOwner = "NONE" | AlgoStrategy;
-export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_5", "PRIMARY_STRATEGY"];
+export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_5", "MATHI_BANK", "PRIMARY_STRATEGY"];
+
+/** Strategies run by Mathi Strategy's engine with their own settings, live paper session, state and trade history. */
+export type VariantStrategy = "MATHI_5" | "MATHI_BANK";
+export const VARIANT_STRATEGIES: VariantStrategy[] = ["MATHI_5", "MATHI_BANK"];
+export const isVariantStrategy = (value: unknown): value is VariantStrategy => value === "MATHI_5" || value === "MATHI_BANK";
 
 export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Mathi Strategy",
   PRIMARY_STRATEGY: "Algo - Primary Strategy",
   MATHI_5: "Mathi 5%",
+  MATHI_BANK: "Mathi Bank Strategy",
+};
+/** The short line after the name in the strategy selector. */
+export const STRATEGY_TAGLINE: Record<AlgoStrategy, string> = {
+  EXISTING_ALGO: "Existing Strategy",
+  PRIMARY_STRATEGY: "NIFTY ORB + VWAP",
+  MATHI_5: "Mathi v18 with +5% target",
+  MATHI_BANK: "Mathi 3% for BANKNIFTY",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE once 50% of a candle's body crosses an enabled line and the break holds on the next candle; +3% premium target, no stop-loss, 3 trades a session.",
   PRIMARY_STRATEGY: "NIFTY 50 options: opening-range breakout confirmed by session VWAP and the trend (9 / 21 EMA).",
   MATHI_5: "A separate copy of Mathi Strategy v18: the same lines, confirmation, exits and 3 trades a session, with a +5% premium target.",
+  MATHI_BANK: "Mathi Strategy (+3% version) on BANKNIFTY: the same strategy lines, 50% body break and retest, ATM CE / PE of the nearest monthly BANKNIFTY expiry, with its own settings, trades and results.",
 };
 
 export function isAlgoStrategy(value: unknown): value is AlgoStrategy {
-  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY" || value === "MATHI_5";
+  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY" || value === "MATHI_5" || value === "MATHI_BANK";
 }
 
 export function lockOwnerOf(value: unknown): LockOwner {

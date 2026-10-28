@@ -55,6 +55,8 @@ export function startActivation(state: AlgoState, now: number, id: string, sessi
   state.activation = { id, startedAt: now, endedAt: null, end: null, entries: 0 };
   // Only the entry count is per activation; the realized loss (daily loss lock) is per day and is kept.
   Object.assign(state, { running: true, entries: true, sessionDate, tradesToday: 0, lastCandle: null, awaiting: null, formingEntry: null });
+  // A new session shows nothing of the previous one: its last signal, last order and trade confirmations are cleared.
+  if (!state.position && !state.pending) Object.assign(state, { lastSignal: null, lastOrder: null, confirmations: null });
   events.push({ key: `activation:${id}`, time: now, kind: "INFO", message: `${label} started — session ${id}. Completed trades 0 / ${max}; evaluating completed 1-minute candles from now (no earlier candle is traded; no trade until a new valid signal).` });
   return events;
 }
