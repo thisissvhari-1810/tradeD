@@ -1,7 +1,7 @@
 /**
  * Mathi Strategy (+3%) backtest on FINNIFTY, MIDCPNIFTY and NIFTY NEXT 50 over one month, on each index's real
  * expired option contracts (Dhan v2 /charts/rollingoption, 1-minute). The strategy is the app's own: ALGO_DEFAULTS read
- * through readAlgoConfig with only the underlying changed (as Mathi Bank Strategy does for BANKNIFTY), simulated with
+ * through readAlgoConfig with only the underlying changed, simulated with
  * simulateSession / createReplayAdapter, exactly like the in-app backtest. Paper only: no order is sent anywhere.
  *
  *   DHAN_CLIENT_ID=… DHAN_ACCESS_TOKEN=… npm run backtest:indices -- [--to 2026-10-27] [--from 2026-09-28] [--indices FINNIFTY,MIDCPNIFTY,NIFTYNXT50] [--export ../../backtests]

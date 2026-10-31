@@ -1,6 +1,6 @@
 # Paper-trading monitoring
 
-How live paper positions (Mathi Strategy, Mathi 5%) are checked for their target and exits, with or without the app open.
+How live paper positions (Mathi Strategy, Mathi Hourly Zone Strategy) are checked for their target and exits, with or without the app open.
 
 ## What runs where
 - **Checks are server-side.** `GET /api/algo/cron` (`tickAllSessions` → `runScheduledChecks` in `src/lib/algo/monitor.ts`) checks every session that is running, holds a position or waits on an order. Each check takes the session's lease, reads the session again under it, runs the engine and saves. A second caller (another scheduler pass or the browser) waits for the lease or is reported busy; it never works on an old copy of the session, and exit orders are idempotent (`<entry>:exit:<n>` keys, unique per paper account).

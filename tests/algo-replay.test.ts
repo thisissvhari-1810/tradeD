@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
-import { ALGO_DEFAULTS, initialState, PRIMARY_DEFAULTS, STRONG_BREAKOUT_DEFAULTS, strongBreakoutCheck, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
+import { ALGO_DEFAULTS, initialState, STRONG_BREAKOUT_DEFAULTS, strongBreakoutCheck, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
 import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, panelEvents, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
 import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
@@ -1419,7 +1419,6 @@ describe("trade filters and the structure stop (against false breaks and whipsaw
     expect([v12.structureStop, v12.filters.momentum, v12.maxHoldMinutes]).toEqual([false, false, 45]);
     const v13 = readAlgoConfig({ settingsVersion: 13, structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
     expect([v13.structureStop, v13.filters.momentum, v13.maxHoldMinutes]).toEqual([true, true, 0]);
-    expect(readAlgoConfig({ engine: "primary", settingsVersion: 11, structureStop: true, filters: { momentum: true } })).toMatchObject({ structureStop: true, filters: { momentum: true }, maxHoldMinutes: 0 });
     // A saved "any crossing" (version 9) moves once to 50% of the body; a share chosen later is kept.
     expect(readAlgoConfig({ settingsVersion: 9, crossPercent: 0 }).crossPercent).toBe(50);
     expect(readAlgoConfig({ settingsVersion: 10, crossPercent: 30 }).crossPercent).toBe(30);
@@ -1464,7 +1463,7 @@ describe("session strategy: 09:15–12:00, risk-based sizing", () => {
   });
 
   it("no new entries after 12:00: the trading window is closed", async () => {
-    // The optional cutoff (Mathi Strategy has none by default; Algo - Primary Strategy uses 12:00).
+    // The optional cutoff (Mathi Strategy has none by default).
     const result = await run(crossing(170, 3), { cursor: m(172), config: { ...early, entryCutoff: "12:00" } });
     expect(buys()).toHaveLength(0);
     expect(result.events.some((event) => event.kind === "REJECTED" && event.message.includes("Trading window closed at 12:00 IST"))).toBe(true);
@@ -1510,133 +1509,6 @@ describe("trailing stop", () => {
     const moved = result.events.find((event) => event.message.startsWith("Trailing stop moved"));
     expect(moved?.message).toMatch(/from 23156\.94 to 23145\.94 \(beyond the swing high 23139\.00/);
     expect(result.state.position?.setup?.stopIndex).toBeLessThan(23_150);
-  });
-});
-
-describe("Algo - Primary Strategy in chart replay (capital sizing on the shared Algo account)", () => {
-  const primary: AlgoConfig = { ...PRIMARY_DEFAULTS, cooldownMinutes: 0 };
-  /** Opening range LINE ± 4 (09:15–09:30), a slow rise inside it, a breakout close at 25 (LINE + 15), then flat. */
-  function orb(): Candle[] {
-    const candles: Candle[] = [];
-    for (let index = 0; index < 375; index += 1) {
-      const close = index < 15 ? LINE + (index % 2 ? 3 : -3) : index < 25 ? LINE + (index - 15) * 0.3 : LINE + 15;
-      const open = index > 0 ? candles[index - 1].close : close;
-      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
-    }
-    return candles;
-  }
-  const entryOf = (events: Array<{ kind: string; message: string; setup?: { strategy?: string } }>) => events.find((event) => event.kind === "ENTRY");
-
-  it("buys the most whole lots ₹1,00,000 pays for (charges included), exits at +3% on the premium, and the cash reconciles", async () => {
-    feed.premiums = premiums((index) => (index >= 30 ? { low: 103.5, high: 104.5, close: 104 } : null));
-    const first = await run(orb(), { cursor: m(28), config: primary });
-    expect(buys()).toHaveLength(1);
-    const entry = entryOf(first.events)!;
-    expect(entry.setup?.strategy).toBe("primary");
-    expect(entry.message).toContain("Capital: ₹");
-    expect(entry.message).toMatch(/Option-premium target ₹103\.0\d/);
-    const quantity = Number(buys()[0].quantity);
-    expect(quantity % 75).toBe(0);
-    const committed = START - cash();
-    // Within the capital, and one more lot (≥ ₹100 × 75) would not have fitted.
-    expect(committed).toBeLessThanOrEqual(START);
-    expect(committed + 750_000n).toBeGreaterThan(START);
-    // The target is hit later: the exit's realized P&L is exactly what the cash gained back.
-    const second = await run(orb(), { cursor: m(40), config: primary, state: first.state, processedThrough: first.processedThrough });
-    expect(sells()).toHaveLength(1);
-    const exit = second.events.find((event) => event.kind === "EXIT")!;
-    expect(exit.message).toContain("Exit (TARGET)");
-    expect(Number(cash() - START)).toBeCloseTo(Math.round(exit.pnl! * 100), -1);
-    expect(exit.pnl!).toBeGreaterThan(0);
-  });
-
-  it("repeating a step (pause / resume, a re-sent request) never places a second order", async () => {
-    const first = await run(orb(), { cursor: m(28), config: primary });
-    const again = await run(orb(), { cursor: m(28), config: primary, state: first.state, processedThrough: first.processedThrough });
-    expect(buys()).toHaveLength(1);
-    expect(again.events.filter((event) => event.kind === "ENTRY")).toHaveLength(0);
-  });
-
-  it("less cash than the allocation: the affordable whole lots (reduce), or no trade with the reason", async () => {
-    db.state.accounts[0].cashAvailable = 4_000_000n; // ₹40,000
-    const reduced = await run(orb(), { cursor: m(28), config: primary });
-    expect(buys()).toHaveLength(1);
-    expect(Number(buys()[0].quantity) / 75).toBeLessThanOrEqual(5);
-    expect(entryOf(reduced.events)!.message).toContain("so the order is reduced to");
-    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
-    db.state.accounts[0].cashAvailable = 500_000n; // ₹5,000
-    const broke = await run(orb(), { cursor: m(28), config: { ...primary }, state: { ...initialState(DATE), running: true, entries: true } });
-    expect(buys()).toHaveLength(0);
-    expect(broke.events.some((event) => event.kind === "REJECTED" && event.message.includes("Insufficient buying power: one lot needs"))).toBe(true);
-  });
-
-  it("the existing Algo Trade on the same candles does not take the Primary Strategy's signal (separate engines)", async () => {
-    const existing = await run(orb(), { cursor: m(28), config: { ...config, strategies: { line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false } } });
-    expect(buys()).toHaveLength(0);
-    expect(existing.events.some((event) => event.evaluation?.strategies?.some((item) => item.strategy === "primary"))).toBe(false);
-  });
-});
-
-describe("Algo - Primary Strategy re-entries in chart replay", () => {
-  const primary: AlgoConfig = { ...PRIMARY_DEFAULTS, cooldownMinutes: 0, primary: { ...PRIMARY_DEFAULTS.primary, breakBufferPercent: 0 } };
-  // Range LINE−3..LINE+5 (closes −2 / +4), a rise inside it, a breakout, a pullback that stays above the range
-  // high but turns the 9 EMA below the 21 EMA, then a resumption (the EMA re-cross is the second setup).
-  const shape = [...Array.from({ length: 15 }, (_, index) => (index % 2 ? 4 : -2)), ...Array.from({ length: 10 }, (_, index) => index * 0.4), 10, 12, 14, 16, 18, 20, 18, 16, 14, 12, 10, 8, 7, 6.5, 6.2, 6, 8, 11, 14, 17, 20, 22, 23, 24, 25, 26];
-  function session(): Candle[] {
-    const candles: Candle[] = [];
-    for (let index = 0; index < 375; index += 1) {
-      const close = LINE + (shape[index] ?? 26);
-      const open = index > 0 ? candles[index - 1].close : close;
-      candles.push({ time: m(index), open, high: Math.max(open, close) + 1, low: Math.min(open, close) - 1, close, volume: 1000 });
-    }
-    return candles;
-  }
-
-  it("a second CALL after the first trade closed at its target, on a fresh setup — and only once", async () => {
-    // The first trade's premium trades through +3% at minute 28 (filled at the target, ≈ ₹2,900 after charges,
-    // below the ₹3,000 daily target); later premiums stay flat.
-    feed.premiums = premiums((index) => (index === 28 ? { low: 101.5, high: 104, close: 102 } : null));
-    const result = await run(session(), { cursor: m(70), config: primary });
-    const entries = result.events.filter((event) => event.kind === "ENTRY");
-    expect(entries).toHaveLength(2);
-    expect(result.events.find((event) => event.kind === "EXIT")?.message).toContain("Exit (TARGET)");
-    const second = result.events.find((event) => event.time === entries[1].time && event.evaluation?.audit)!.evaluation!.audit!;
-    expect(second.setup?.type).toMatch(/^(CONTINUATION|BREAKOUT)$/);
-    expect(second.setup?.direction).toBe("CALL");
-    expect(buys()).toHaveLength(2);
-    // Every evaluated candle has an audit; entries say ORDER PLACED.
-    const audits = result.events.filter((event) => event.kind !== "ENTRY" && event.evaluation?.audit).map((event) => event.evaluation!.audit!);
-    expect(audits.filter((audit) => audit.decision === "ENTER").map((audit) => audit.reason)).toEqual(["ORDER PLACED — CALL", "ORDER PLACED — CALL"]);
-  });
-
-  it("once the daily target is reached, the next valid setup is rejected with that reason", async () => {
-    // A gap through the target realizes more than ₹3,000.
-    feed.premiums = premiums((index) => (index >= 28 && index <= 29 ? { low: 103.5, high: 104.5, close: 104 } : null));
-    const result = await run(session(), { cursor: m(70), config: primary });
-    expect(buys()).toHaveLength(1);
-    const rejected = result.events.find((event) => event.kind === "REJECTED" && event.evaluation?.audit);
-    expect(rejected?.evaluation?.audit?.reason).toMatch(/^REJECTED — Daily target ₹3000 reached/);
-  });
-
-  it("the entry limit rejects a later valid signal with the reason in its audit (never a silent miss)", async () => {
-    // Flat premiums: the first trade is still open when the second setup appears.
-    const result = await run(session(), { cursor: m(70), config: { ...primary, maxTrades: 1 } });
-    expect(buys()).toHaveLength(1);
-    const rejected = result.events.find((event) => event.kind === "REJECTED" && event.evaluation?.audit?.decision === "REJECT");
-    expect(rejected?.evaluation?.audit?.reason).toMatch(/^REJECTED — .*(Daily trade limit reached \(1\)|A position in this direction is already open)/);
-  });
-
-  it("replaying the same session again (a reset) makes the same decisions; repeating a step places nothing twice", async () => {
-    const first = await run(session(), { cursor: m(70), config: primary });
-    const decisions = first.events.filter((event) => event.evaluation?.audit).map((event) => [event.time, event.evaluation!.audit!.decision, event.evaluation!.audit!.setup?.type ?? null]);
-    const repeat = await run(session(), { cursor: m(70), config: primary, state: first.state, processedThrough: first.processedThrough });
-    expect(repeat.events.filter((event) => event.kind === "ENTRY")).toHaveLength(0);
-    // A reset: a fresh state and a fresh ledger replays the same candles to the same decisions.
-    Object.assign(db.state, { orders: [], positions: [], executions: [], ledger: [], instruments: [] });
-    db.state.accounts[0].cashAvailable = START;
-    clearReplayTapes();
-    const again = await run(session(), { cursor: m(70), config: primary });
-    expect(again.events.filter((event) => event.evaluation?.audit).map((event) => [event.time, event.evaluation!.audit!.decision, event.evaluation!.audit!.setup?.type ?? null])).toEqual(decisions);
   });
 });
 
@@ -1855,7 +1727,7 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
     const hold: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "hold" } };
     const retest: AlgoConfig = { ...mathi, confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "retest" } };
 
-    it("Mathi Strategy confirms by default (retest since version 14); saved settings move to it once; Algo - Primary Strategy is unaffected", () => {
+    it("Mathi Strategy confirms by default (retest since version 14); saved settings move to it once", () => {
       expect(ALGO_DEFAULTS.confirmation.mode).toBe("retest");
       expect(readAlgoConfig({ settingsVersion: 10 }).confirmation.mode).toBe("retest");
       // Version 14 moves a saved hold (or single) to retest once, keeping its retest settings; a choice saved since is kept.
@@ -1863,7 +1735,6 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(readAlgoConfig({ settingsVersion: 14, confirmation: { mode: "hold" } }).confirmation.mode).toBe("hold");
       expect(readAlgoConfig({ settingsVersion: 14, confirmation: { mode: "single" } }).confirmation.mode).toBe("single");
       expect(readAlgoConfig({ settingsVersion: 11, confirmation: { mode: "retest", retestWindowMinutes: 20 } }).confirmation).toMatchObject({ mode: "retest", retestWindowMinutes: 20 });
-      expect(readAlgoConfig({ engine: "primary", settingsVersion: 10 }).confirmation.mode).toBe("single");
       expect(algoConfigProblems({ ...retest, confirmation: { ...retest.confirmation, retestWindowMinutes: 1 } })).toContain("The retest window must be 2 to 120 minutes.");
     });
 

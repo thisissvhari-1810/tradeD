@@ -180,7 +180,7 @@ export function useChartAlgo(input: {
   const setEnabled = useCallback(async (next: boolean) => {
     if (next) {
       callbacks.current.onPause();
-      // Only Algo Trade has a live-price mode to switch from; the Primary Strategy is chart replay only.
+      // Only Mathi Strategy has a live-price mode to switch from here; a variant runs the replay with its own settings.
       if (readSelectedStrategy() === "EXISTING_ALGO" && data?.config.mode !== "REPLAY" && !(await command("mode", { action: "chartMode" }))) return;
       remember(true);
       return;
@@ -260,9 +260,9 @@ export function useChartAlgo(input: {
     return true;
   }, [command, date, forgetSession]);
 
-  // Ready to trade the replay: Algo Trade in chart-replay mode, or Algo - Primary Strategy (chart replay only).
-  // Mathi 5% runs the same rules on the replay with its own settings (always chart replay there).
-  const replayReady = selected === "PRIMARY_STRATEGY" || isVariantStrategy(selected) || run?.strategy === "PRIMARY_STRATEGY" || isVariantStrategy(run?.strategy) || data?.config.mode === "REPLAY";
+  // Ready to trade the replay: Mathi Strategy in chart-replay mode, or a variant (Mathi Hourly Zone Strategy), which runs
+  // the replay with its own settings (always chart replay there).
+  const replayReady = isVariantStrategy(selected) || isVariantStrategy(run?.strategy) || data?.config.mode === "REPLAY";
   const gate: PlayGate | null = cursor == null ? null : playGate({
     algoEnabled: enabled && replayReady,
     cursor,

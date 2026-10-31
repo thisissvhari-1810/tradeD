@@ -14,7 +14,7 @@ import { dhanExpiredOptions, dhanOptionSession } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, isVariantStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity, type VariantStrategy } from "@/lib/algo/exclusive";
-import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, MATHI_BANK_DEFAULTS, MATHI_HOURLY_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI_HOURLY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -96,7 +96,7 @@ async function withLease<T>(sessionId: string, task: () => Promise<T>): Promise<
   }
 }
 
-/* ---------------- the exclusive execution lock (Algo Trade vs Algo - Primary Strategy) ---------------- */
+/* ---------------- the exclusive execution lock (Mathi Strategy vs Mathi Hourly Zone Strategy) ---------------- */
 
 /** The lock's atomic store: a conditional update on the user's algo session row. */
 function lockStore(sessionId: string): LockStore {
@@ -192,29 +192,20 @@ async function freeLock(sessionId: string, strategy: AlgoStrategy) {
   return releaseLock(lockStore(sessionId), strategy, await ownerActivity(sessionId, strategy));
 }
 
-/** Algo - Primary Strategy's own saved settings (or its defaults): always its engine, always chart replay. */
-function primaryConfigOf(session: { primaryConfig: Prisma.JsonValue | null }): AlgoConfig {
-  const saved = session.primaryConfig && typeof session.primaryConfig === "object" ? session.primaryConfig : PRIMARY_DEFAULTS;
-  return { ...readAlgoConfig(saved), engine: "primary", mode: "REPLAY" };
-}
-
 /**
- * Strategies with their own settings, live paper state, order keys and stored events (never Mathi Strategy's): Mathi 5%
- * (+5% target) and Mathi Bank Strategy (Mathi 3% on BANKNIFTY) on Mathi Strategy's engine, and Mathi Hourly Zone
- * Strategy on its own engine (its defaults carry engine "hourly"), all through the same runner and execution.
+ * Strategies with their own settings, live paper state, order keys and stored events (never Mathi Strategy's): Mathi
+ * Hourly Zone Strategy on its own engine (its defaults carry engine "hourly"), through the same runner and execution.
  */
 const VARIANTS = {
-  MATHI_5: { defaults: MATHI5_DEFAULTS, config: "mathi5Config", state: "mathi5State", mode: "MATHI_5", run: "M5" },
-  MATHI_BANK: { defaults: MATHI_BANK_DEFAULTS, config: "mathiBankConfig", state: "mathiBankState", mode: "MATHI_BANK", run: "MB" },
   MATHI_HOURLY: { defaults: MATHI_HOURLY_DEFAULTS, config: "mathiHourlyConfig", state: "mathiHourlyState", mode: "MATHI_HOURLY", run: "MH" },
 } as const satisfies Record<VariantStrategy, { defaults: AlgoConfig; config: string; state: string; mode: string; run: string }>;
-type VariantColumns = { mathi5Config: Prisma.JsonValue | null; mathi5State: Prisma.JsonValue | null; mathiBankConfig: Prisma.JsonValue | null; mathiBankState: Prisma.JsonValue | null; mathiHourlyConfig: Prisma.JsonValue | null; mathiHourlyState: Prisma.JsonValue | null };
+type VariantColumns = { mathiHourlyConfig: Prisma.JsonValue | null; mathiHourlyState: Prisma.JsonValue | null };
 
-/** A variant's settings read with its own engine and fixed underlying (Mathi Bank: BANKNIFTY; Mathi Hourly Zone: NIFTY). */
+/** A variant's settings read with its own engine and fixed underlying (Mathi Hourly Zone: NIFTY). */
 function variantSettings(raw: unknown, strategy: VariantStrategy): AlgoConfig {
   const defaults = VARIANTS[strategy].defaults;
   const read: AlgoConfig = { ...readAlgoConfig(raw && typeof raw === "object" ? { ...raw, engine: defaults.engine } : defaults), engine: defaults.engine, mode: "PAPER" };
-  return strategy === "MATHI_5" ? read : { ...read, underlying: defaults.underlying };
+  return { ...read, underlying: defaults.underlying };
 }
 
 /** A variant's own saved settings (or its defaults); live paper trading. */
@@ -229,7 +220,7 @@ function variantStateOf(row: VariantColumns, strategy: VariantStrategy): AlgoSta
   return { ...initialState(todayIst()), ...raw };
 }
 
-/** A variant's order keys: its own, so they never meet Mathi Strategy's (Mathi 5% keeps its original ":M5"). */
+/** A variant's order keys: its own, so they never meet Mathi Strategy's. */
 const variantKey = (sessionId: string, strategy: VariantStrategy) => `${sessionId}:${VARIANTS[strategy].run}`;
 
 async function saveVariant(sessionId: string, strategy: VariantStrategy, state: AlgoState, events: AlgoEvent[]) {
@@ -240,10 +231,10 @@ async function saveVariant(sessionId: string, strategy: VariantStrategy, state: 
   ]);
 }
 
-function configFor(session: { config: Prisma.JsonValue; primaryConfig: Prisma.JsonValue | null } & VariantColumns, strategy: AlgoStrategy): AlgoConfig {
+function configFor(session: { config: Prisma.JsonValue } & VariantColumns, strategy: AlgoStrategy): AlgoConfig {
   // The chart replay (Demo) runs a variant with its own settings on the replay clock.
   if (isVariantStrategy(strategy)) return { ...variantConfigOf(session, strategy), mode: "REPLAY" };
-  return strategy === "PRIMARY_STRATEGY" ? primaryConfigOf(session) : { ...readAlgoConfig(session.config), engine: "existing" };
+  return { ...readAlgoConfig(session.config), engine: "existing" };
 }
 
 const strategyOf = (value: unknown): AlgoStrategy => (isAlgoStrategy(value) ? value : "EXISTING_ALGO");
@@ -476,18 +467,12 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     prisma.algoEvent.findMany({ where: { sessionId: session.id, mode: "REPLAY" }, orderBy: [{ createdAt: "desc" }], take: 400 }),
   ]);
   const latestRun = replays[0]?.runId ?? null;
-  const primaryConfig = primaryConfigOf(session);
   const liveSession = await liveSessionView(session.id, config, state, unrealized);
-  const mathi5 = await variantView(user, session, "MATHI_5");
-  const mathiBank = await variantView(user, session, "MATHI_BANK");
   const mathiHourly = await variantView(user, session, "MATHI_HOURLY");
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
     problems: algoConfigProblems(config),
-    /** Algo - Primary Strategy's own settings and their problems. */
-    primaryConfig,
-    primaryProblems: algoConfigProblems(primaryConfig),
     /** The exclusive execution lock: its owner and what that owner still has open. */
     lock: { owner, activity: owner === "NONE" ? null : await ownerActivity(session.id, owner) },
     state,
@@ -499,10 +484,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     replay: latestRun ? { runId: latestRun, events: replays.filter((event) => event.runId === latestRun).map((event) => event.payload as unknown as AlgoEvent).sort((a, b) => a.time - b.time) } : null,
     /** Live demo: the Mathi Strategy activation session, its trades and status, and the earlier sessions. */
     liveSession,
-    /** Mathi 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
-    mathi5,
-    mathiBank,
-    /** Mathi Hourly Zone Strategy — 5%: the same view, on its own engine. */
+    /** Mathi Hourly Zone Strategy — 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
     mathiHourly,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
@@ -548,7 +530,7 @@ async function liveSessionView(sessionId: string, config: AlgoConfig, state: Alg
   };
 }
 
-/** The Mathi 5% panel: settings, the live paper session (status, regime, trades, P&L) and the open trade's premium. */
+/** A variant's panel: settings, the live paper session (status, regime, trades, P&L) and the open trade's premium. */
 async function variantView(user: SessionUser, session: Prisma.AlgoSessionGetPayload<object>, strategy: VariantStrategy) {
   const config = variantConfigOf(session, strategy);
   const state = variantStateOf(session, strategy);
@@ -581,7 +563,6 @@ export type AlgoCommand =
   | { action: "chartMode" }
   | { action: "stopStrategy"; strategy: AlgoStrategy; exit: boolean }
   | { action: "replay"; date: string }
-  | { action: "mathi5"; op: "start" | "stop" | "tick" | "exit" }
   | { action: "variant"; strategy: VariantStrategy; op: "start" | "stop" | "tick" | "exit" }
   | ChartCommand;
 
@@ -606,9 +587,8 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
     await withLease(session.id, () => chartCommandLocked(user, session, command));
     return algoView(user, command.session);
   }
-  if (command.action === "mathi5" || command.action === "variant") {
-    const strategy = command.action === "mathi5" ? "MATHI_5" : command.strategy;
-    await withLease(session.id, () => variantCommand(user, session.id, strategy, command.op));
+  if (command.action === "variant") {
+    await withLease(session.id, () => variantCommand(user, session.id, command.strategy, command.op));
     return algoView(user);
   }
   await withLease(session.id, async () => {
@@ -623,21 +603,13 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
       case "save": {
         if (isVariantStrategy(command.strategy)) {
           const strategy = command.strategy;
-          // Each variant keeps its own engine; Mathi Bank Strategy always trades BANKNIFTY, Mathi Hourly Zone NIFTY.
+          // Each variant keeps its own engine; Mathi Hourly Zone Strategy always trades NIFTY.
           const next = variantSettings(command.config, strategy);
           const problems = algoConfigProblems(next);
           if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
           if (variantStateOf(current, strategy).position && next.underlying !== variantConfigOf(current, strategy).underlying) throw new AppError(`Exit the open ${STRATEGY_NAME[strategy]} position before changing the underlying.`, 409);
           await prisma.algoSession.update({ where: { id: session.id }, data: { [VARIANTS[strategy].config]: next as unknown as Prisma.InputJsonValue } });
           note(`settings-${VARIANTS[strategy].run.toLowerCase()}`, `${STRATEGY_NAME[strategy]} settings saved.`);
-          break;
-        }
-        if (command.strategy === "PRIMARY_STRATEGY") {
-          const primary: AlgoConfig = { ...readAlgoConfig(command.config), engine: "primary", mode: "REPLAY" };
-          const problems = algoConfigProblems(primary);
-          if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
-          await prisma.algoSession.update({ where: { id: session.id }, data: { primaryConfig: primary as unknown as Prisma.InputJsonValue } });
-          note("settings-primary", "Algo - Primary Strategy settings saved.");
           break;
         }
         const next: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing" };
@@ -782,9 +754,9 @@ async function tagClosedTrades(userId: string, state: AlgoState, events: AlgoEve
 }
 
 /**
- * Mathi 5% in live paper trading: Start opens a new session (a fresh ₹1,00,000 Algo-wallet period, 0 / 3 trades)
+ * A variant in live paper trading: Start opens a new session (a fresh ₹1,00,000 Algo-wallet period, 0 / 3 trades)
  * evaluated from the latest completed candle; Stop ends new entries (an open trade stays managed to its exit);
- * each check runs the same engine as Mathi Strategy on today's live candles, with Mathi 5%'s own settings and state.
+ * each check runs the variant's engine on today's live candles, with its own settings and state.
  */
 async function variantCommand(user: SessionUser, sessionId: string, strategy: VariantStrategy, op: "start" | "stop" | "tick" | "exit") {
   const session = await prisma.algoSession.findUniqueOrThrow({ where: { id: sessionId } });
@@ -830,7 +802,7 @@ async function variantCommand(user: SessionUser, sessionId: string, strategy: Va
   await freeLock(sessionId, strategy);
 }
 
-/** One Mathi 5% live paper check: Mathi Strategy's engine on today's levels and completed 1-minute candles. */
+/** One variant live paper check: its engine on today's levels and completed 1-minute candles. */
 async function runVariantTick(user: SessionUser, sessionId: string, strategy: VariantStrategy, config: AlgoConfig, state: AlgoState, source: CheckSource = "browser") {
   if (!state.running && !state.position && !state.pending) return { state, events: [] as AlgoEvent[] };
   const name = STRATEGY_NAME[strategy];
@@ -886,7 +858,7 @@ export async function tickAllSessions(): Promise<{ ran: number; checks: Schedule
   const userOf = (row: Row["user"]): SessionUser => ({ id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt });
   return runScheduledChecks<Row>(sessions, {
     id: (session) => session.id,
-    strategies: ["MATHI_5", "MATHI_BANK", "MATHI_HOURLY", "MATHI"],
+    strategies: ["MATHI_HOURLY", "MATHI"],
     stateOf: (session, strategy) => (strategy === "MATHI" ? stateOf(session) : variantStateOf(session, strategy)),
     withLease,
     reload: (id) => prisma.algoSession.findUniqueOrThrow({ where: { id }, include }),
@@ -1095,7 +1067,7 @@ const istTime = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOSt
  * new replay session (the chart's reset), which starts a new run.
  */
 /**
- * Chart replay commands under the execution lock: a run's feature (Algo Trade or Algo - Primary Strategy)
+ * Chart replay commands under the execution lock: a run's feature (Mathi Strategy or Mathi Hourly Zone Strategy)
  * takes the lock when it is confirmed, keeps it while it is armed or has a position or order open, and
  * releases it after any command leaves it with nothing to manage (disabled and flat, exited, archived).
  */

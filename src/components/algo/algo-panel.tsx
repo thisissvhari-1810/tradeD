@@ -12,7 +12,7 @@ import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { LiveSessionSwitch } from "@/components/algo/algo-live-session";
 import { ALGO_VIEW_EVENT, algoLivePanel, algoPanelTicker, broadcastAlgoView } from "@/components/algo/algo-start-button";
 import { announceSaved, announceUnsaved, useSelectedStrategy } from "@/components/algo/algo-settings-sync";
-import { PrimaryPanel, StrategySelector } from "@/components/algo/algo-primary";
+import { StrategySelector } from "@/components/algo/algo-primary";
 import { VariantPanel } from "@/components/algo/algo-variant";
 import { isVariantStrategy } from "@/lib/algo/exclusive";
 import { LINE_TYPES, type LineType } from "@/lib/algo/lines";
@@ -160,15 +160,6 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
       <div className="space-y-3">
         <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
         <VariantPanel data={data} onData={apply} strategy={selected} />
-      </div>
-    );
-  }
-
-  if (selected === "PRIMARY_STRATEGY") {
-    return (
-      <div className="space-y-3">
-        <StrategySelector data={data} selected={selected} onSelect={select} onData={apply} />
-        <PrimaryPanel data={data} onData={apply} />
       </div>
     );
   }

@@ -4,7 +4,6 @@ import { ALGO_DEFAULTS, STRONG_BREAKOUT_DEFAULTS, type AlgoConfig, type AlgoStat
 import { EXIT_MANAGEMENT_DEFAULTS, type ExitManagement } from "./trend-exit";
 import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
 import { ALLOCATION_DEFAULTS, RISK_DEFAULTS, type AllocationSettings, type RiskSettings } from "./sizing";
-import { PRIMARY_SETTINGS_DEFAULTS, type PrimarySettings } from "./primary";
 import { HOURLY_SETTINGS_DEFAULTS, type HourlySettings } from "./hourly-zone";
 
 /**
@@ -40,19 +39,18 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   const kept = (value: number, old: number, next: number) => (!v6 && value === old ? next : value);
   // Version 7 makes Mathi Strategy a line-breakout strategy: enabled strategy lines only, 50% of the body across
   // the line, a fixed lot count, +3% on the premium, no stop-loss, three entries a session. Applied once to
-  // saved Mathi settings (never to Algo - Primary Strategy's).
-  const mathi = row.engine !== "primary";
-  const v7 = num(row.settingsVersion) >= 7 || !mathi;
+  // saved Mathi settings.
+  const v7 = num(row.settingsVersion) >= 7;
   // Version 8: Mathi Strategy has no entry cutoff (entries until the session's close); a saved cutoff moves once.
-  const v8 = num(row.settingsVersion) >= 8 || !mathi;
+  const v8 = num(row.settingsVersion) >= 8;
   // Version 10: Mathi Strategy enters once 50% of the body is past the line; a saved share moves to 50% once.
-  const v10 = num(row.settingsVersion) >= 10 || !mathi;
+  const v10 = num(row.settingsVersion) >= 10;
   // Version 11: Mathi Strategy confirms a breakout before entering (the next candle must hold beyond the line);
-  // saved Mathi settings move to that once. Algo - Primary Strategy keeps its own engine's confirmation.
+  // saved Mathi settings move to that once.
   const v11 = num(row.settingsVersion) >= 11;
   // Version 13: Mathi Strategy's only change from version 11 is a 30-minute time limit on an open trade; the line
   // exit and the 9 / 21 EMA filter (on by default in version 12) move back off once. Later choices are kept.
-  const v13 = num(row.settingsVersion) >= 13 || !mathi;
+  const v13 = num(row.settingsVersion) >= 13;
   // Version 14: Mathi Strategy confirms a breakout by its retest (3-month backtest: most losses were breaks that held
   // one candle and then fell straight back); saved Mathi settings move to retest once, a later choice is kept.
   const v14 = num(row.settingsVersion) >= 14;
@@ -66,7 +64,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
   // a saved choice is kept.
   const v17 = num(row.settingsVersion) >= 17;
   // Version 18: Mathi Strategy's regime switch (real entries only while the last 30 trades made money); saved Mathi
-  // settings move to it once, a later choice is kept. Algo - Primary Strategy has none.
+  // settings move to it once, a later choice is kept.
   const v18 = num(row.settingsVersion) >= 18;
   return {
     ...ALGO_DEFAULTS,
@@ -93,7 +91,7 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     maxSpreadPercent: Number.isFinite(num(row.maxSpreadPercent)) ? num(row.maxSpreadPercent) : ALGO_DEFAULTS.maxSpreadPercent,
     slippageTicks: Number.isFinite(num(row.slippageTicks)) ? num(row.slippageTicks) : ALGO_DEFAULTS.slippageTicks,
     entryStart: time(row.entryStart, ALGO_DEFAULTS.entryStart),
-    entryCutoff: !v8 ? ALGO_DEFAULTS.entryCutoff : early ? cutoff : mathi ? ALGO_DEFAULTS.entryCutoff : "12:00",
+    entryCutoff: !v8 ? ALGO_DEFAULTS.entryCutoff : early ? cutoff : ALGO_DEFAULTS.entryCutoff,
     windowExit: row.windowExit === "close" ? "close" : "hold",
     squareOff: time(row.squareOff, ALGO_DEFAULTS.squareOff!),
     sizing: !v7 ? "capital" : !early ? "risk" : row.sizing === "fixed" ? "fixed" : row.sizing === "capital" ? "capital" : "risk",
@@ -101,27 +99,27 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     risk: ((risk) => ({ ...risk, perTradePercent: kept(risk.perTradePercent, 0.5, RISK_DEFAULTS.perTradePercent), dailyTarget: kept(risk.dailyTarget, 5_000, RISK_DEFAULTS.dailyTarget) }))(riskOf(row.risk)),
     minScore: Number.isFinite(num(row.minScore)) ? num(row.minScore) : ALGO_DEFAULTS.minScore,
     // Mathi Strategy trades strategy-line crossings only; the other setups cannot be switched on for it.
-    strategies: mathi ? { ...ALGO_DEFAULTS.strategies } : strategiesOf(row.strategies),
-    engine: row.engine === "primary" ? "primary" : row.engine === "hourly" ? "hourly" : "existing",
-    primary: primaryOf(row.primary),
+    strategies: { ...ALGO_DEFAULTS.strategies },
+    // Any other saved engine (such as the removed "primary") reads as Mathi Strategy's.
+    engine: row.engine === "hourly" ? "hourly" : "existing",
     ...(row.engine === "hourly" ? { hourly: hourlyOf(row.hourly) } : {}),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
-    filters: ((filters) => ({ ...(v13 ? filters : { ...filters, momentum: false }), ...(mathi ? (v17 ? {} : { maxEntryPremium: ALGO_DEFAULTS.filters.maxEntryPremium }) : { maxEntryPremium: 0 }) }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
+    filters: ((filters) => ({ ...(v13 ? filters : { ...filters, momentum: false }), ...(v17 ? {} : { maxEntryPremium: ALGO_DEFAULTS.filters.maxEntryPremium }) }))(v7 ? filtersOf(row.filters) : { ...ALGO_DEFAULTS.filters }),
     structureStop: !v13 ? false : v7 && typeof row.structureStop === "boolean" ? row.structureStop : ALGO_DEFAULTS.structureStop,
     indexStopPoints: Number.isFinite(num(row.indexStopPoints)) && num(row.indexStopPoints) >= 0 ? num(row.indexStopPoints) : 0,
     itmSteps: Number.isInteger(num(row.itmSteps)) && num(row.itmSteps) >= 0 && num(row.itmSteps) <= 3 ? num(row.itmSteps) : 0,
     structureStopCloses: Number.isInteger(num(row.structureStopCloses)) && num(row.structureStopCloses) >= 1 && num(row.structureStopCloses) <= 10 ? num(row.structureStopCloses) : 1,
-    maxHoldMinutes: !mathi ? 0 : v13 && Number.isFinite(num(row.maxHoldMinutes)) ? (!v16 && num(row.maxHoldMinutes) === 30 ? ALGO_DEFAULTS.maxHoldMinutes : num(row.maxHoldMinutes)) : ALGO_DEFAULTS.maxHoldMinutes,
-    regime: !mathi ? { enabled: false, lookback: 30 } : v18 ? regimeOf(row.regime) : { ...ALGO_DEFAULTS.regime! },
-    exitManagement: !mathi ? { ...EXIT_MANAGEMENT_DEFAULTS } : v15 ? exitManagementOf(row.exitManagement) : { ...exitManagementOf(row.exitManagement), mode: "trend" },
-    crossRule: row.crossRule === "classic" || (!mathi && row.crossRule !== "body") ? "classic" : "body",
-    crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : mathi ? ALGO_DEFAULTS.crossPercent : 0,
-    stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : !mathi,
-    intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : mathi,
-    stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : !mathi,
-    confirmation: !mathi ? { ...ALGO_DEFAULTS.confirmation, mode: "single" } : v14 ? confirmationOf(row.confirmation) : v11 ? { ...confirmationOf(row.confirmation), mode: "retest" } : { ...ALGO_DEFAULTS.confirmation },
+    maxHoldMinutes: v13 && Number.isFinite(num(row.maxHoldMinutes)) ? (!v16 && num(row.maxHoldMinutes) === 30 ? ALGO_DEFAULTS.maxHoldMinutes : num(row.maxHoldMinutes)) : ALGO_DEFAULTS.maxHoldMinutes,
+    regime: v18 ? regimeOf(row.regime) : { ...ALGO_DEFAULTS.regime! },
+    exitManagement: v15 ? exitManagementOf(row.exitManagement) : { ...exitManagementOf(row.exitManagement), mode: "trend" },
+    crossRule: row.crossRule === "classic" ? "classic" : "body",
+    crossPercent: v10 && Number.isFinite(num(row.crossPercent)) ? num(row.crossPercent) : ALGO_DEFAULTS.crossPercent,
+    stopLoss: v7 && typeof row.stopLoss === "boolean" ? row.stopLoss : ALGO_DEFAULTS.stopLoss,
+    intrabar: v7 && typeof row.intrabar === "boolean" ? row.intrabar : ALGO_DEFAULTS.intrabar,
+    stopAtLimit: v7 && typeof row.stopAtLimit === "boolean" ? row.stopAtLimit : ALGO_DEFAULTS.stopAtLimit,
+    confirmation: v14 ? confirmationOf(row.confirmation) : v11 ? { ...confirmationOf(row.confirmation), mode: "retest" } : { ...ALGO_DEFAULTS.confirmation },
     patterns: ((patterns) => (v6 ? patterns : { ...patterns, trendStop: PATTERN_DEFAULTS.trendStop }))(patternsOf(row.patterns)),
   };
 }
@@ -226,27 +224,6 @@ function strongBreakoutOf(value: unknown): StrongBreakoutSettings {
   };
 }
 
-function primaryOf(value: unknown): PrimarySettings {
-  const row = (value && typeof value === "object" ? value : {}) as Raw;
-  const d = PRIMARY_SETTINGS_DEFAULTS;
-  const pick = (key: "orMinutes" | "trendFast" | "trendSlow" | "retestBars" | "breakBufferPercent" | "confirmBars") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
-  return {
-    orMinutes: pick("orMinutes"),
-    vwap: typeof row.vwap === "boolean" ? row.vwap : d.vwap,
-    vwapFallback: row.vwapFallback === "reject" ? "reject" : "twap",
-    trend: row.trend === "none" ? "none" : "ema",
-    trendFast: pick("trendFast"),
-    trendSlow: pick("trendSlow"),
-    retest: typeof row.retest === "boolean" ? row.retest : d.retest,
-    retestBars: pick("retestBars"),
-    breakBufferPercent: pick("breakBufferPercent"),
-    stopBasis: row.stopBasis === "mid" || row.stopBasis === "range" ? row.stopBasis : "candle",
-    confirmBars: pick("confirmBars"),
-    continuation: typeof row.continuation === "boolean" ? row.continuation : d.continuation,
-    supportBreak: typeof row.supportBreak === "boolean" ? row.supportBreak : d.supportBreak,
-  };
-}
-
 /** Mathi Hourly Zone Strategy's settings; unknown values fall back to the defaults (never loosened: validated below). */
 function hourlyOf(value: unknown): HourlySettings {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
@@ -345,11 +322,6 @@ function hourlyOf(value: unknown): HourlySettings {
   };
 }
 
-function strategiesOf(value: unknown): AlgoConfig["strategies"] {
-  const row = (value && typeof value === "object" ? value : {}) as Raw;
-  return Object.fromEntries(STRATEGY_IDS.map((id) => [id, typeof row[id] === "boolean" ? row[id] : ALGO_DEFAULTS.strategies[id]])) as AlgoConfig["strategies"];
-}
-
 function patternsOf(value: unknown): PatternSettings {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
   const pick = (key: keyof PatternSettings) => (Number.isFinite(num(row[key])) ? num(row[key]) : (PATTERN_DEFAULTS[key] as number));
@@ -419,16 +391,7 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!(config.maxQuoteAgeSeconds >= 5 && config.maxQuoteAgeSeconds <= 600)) problems.push("The quote freshness limit must be 5 to 600 seconds.");
   if (!Number.isInteger(config.slippageTicks) || config.slippageTicks < 0 || config.slippageTicks > 20) problems.push("Slippage must be 0 to 20 ticks.");
   for (const level of config.custom) if (!(level.price > 0)) problems.push(`The extra level "${level.label || level.id}" needs a price above 0.`);
-  if (config.engine !== "primary" && !STRATEGY_IDS.some((id) => config.strategies[id])) problems.push("Switch on at least one strategy.");
-  if (config.engine === "primary") {
-    const primary = config.primary;
-    if (config.mode !== "REPLAY") problems.push("Algo - Primary Strategy runs in chart replay (demo trading) only.");
-    if (!Number.isInteger(primary.orMinutes) || primary.orMinutes < 5 || primary.orMinutes > 60) problems.push("The opening range must be 5 to 60 minutes.");
-    if (!Number.isInteger(primary.trendFast) || !Number.isInteger(primary.trendSlow) || primary.trendFast < 2 || primary.trendSlow <= primary.trendFast || primary.trendSlow > 100) problems.push("The trend EMAs must be whole numbers with the fast one shorter than the slow one (at most 100).");
-    if (!Number.isInteger(primary.retestBars) || primary.retestBars < 1 || primary.retestBars > 60) problems.push("The retest window must be 1 to 60 candles.");
-    if (!(primary.breakBufferPercent >= 0 && primary.breakBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
-    if (!Number.isInteger(primary.confirmBars) || primary.confirmBars < 0 || primary.confirmBars > 60) problems.push("The confirmation window must be 0 to 60 candles.");
-  }
+  if (!STRATEGY_IDS.some((id) => config.strategies[id])) problems.push("Switch on at least one strategy.");
   if (config.engine === "hourly") {
     const hourly = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
     if (config.entryStart < "11:15") problems.push("Mathi Hourly Zone Strategy cannot enter before 11:15 IST (the first two hourly candles must be complete).");

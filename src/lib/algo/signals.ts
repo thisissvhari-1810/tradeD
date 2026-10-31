@@ -78,8 +78,6 @@ export type CandleEvaluation = {
   decision: Decision;
   /** Plain-language reason for the decision. */
   explanation: string;
-  /** Algo - Primary Strategy: every value and condition checked on this candle, and the order result. */
-  audit?: import("./primary").PrimaryAudit | null;
   /**
    * Breakout confirmation (hold / retest modes): SIGNAL_DETECTED — the body crossed a line, not yet tradable;
    * WAITING — still waiting for its hold or retest; SETUP_CONFIRMED — passed, goes to the entry checks;

@@ -32,7 +32,7 @@ export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { dis
   const cancel = useRef(false);
 
   const scoreVariants = [...new Set(scores.split(/[\s,]+/).filter(Boolean).map(Number).filter((value) => Number.isInteger(value) && value >= 0 && value <= 100))].slice(0, 4).map((value) => `score:${value}`);
-  const mathi = strategy === "EXISTING_ALGO" || strategy === "MATHI_5" || strategy === "MATHI_BANK";
+  const mathi = strategy === "EXISTING_ALGO";
   // Mathi Strategy: the same saved settings with each breakout confirmation mode, side by side.
   const confirmVariants = mathi && confirmModes ? ["confirm:single", "confirm:hold", "confirm:retest"] : [];
   const planned: BacktestVariant[] = confirmVariants.length ? confirmVariants : ["saved", ...(compare ? ["baseline"] : []), ...scoreVariants];

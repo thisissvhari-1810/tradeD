@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { acquireLock, ALGO_STRATEGIES, isAlgoStrategy, isVariantStrategy, STRATEGY_NAME, type LockOwner, type LockStore } from "../src/lib/algo/exclusive";
-import { algoConfigProblems, readAlgoConfig } from "../src/lib/algo/config";
 import { expiryCycleOf, monthlyExpiry, rollingRequest } from "../src/lib/algo/expired-options";
 import { strategyLines, type Candle } from "../src/lib/algo/lines";
 import { resolveAtm, tradeStrike, type ChainInput } from "../src/lib/algo/options";
-import { advance, ALGO_DEFAULTS, initialState, MATHI_BANK_DEFAULTS, type AlgoConfig, type ExecutionAdapter, type Fill } from "../src/lib/algo/runner";
+import { advance, ALGO_DEFAULTS, initialState, type AlgoConfig, type ExecutionAdapter, type Fill } from "../src/lib/algo/runner";
 import { allocateLots, ALLOCATION_DEFAULTS } from "../src/lib/algo/sizing";
-import { algoRequest } from "../src/lib/algo/request";
 import type { S1Data } from "../src/lib/trading/s1";
 
-/* Mathi Bank Strategy: Mathi Strategy (+3%) on BANKNIFTY monthly options, with its own settings. */
+/* BANKNIFTY monthly options: expired-contract history, the ATM contract, whole-lot sizing and Mathi Strategy's engine on BANKNIFTY. */
 
 const DATE = "2026-10-26";
 const OPEN = Date.UTC(2026, 9, 26, 3, 45) / 1000; // 09:15 IST
@@ -24,57 +21,6 @@ function bankChain(now: number, ask = 800): ChainInput {
   }));
   return { underlying: "BANKNIFTY", spot: 54_020, expiry: "2026-10-27", asOf: new Date(now * 1000).toISOString(), lotSize: LOT, strikes };
 }
-
-function memoryStore(initial: LockOwner = "NONE") {
-  let owner: LockOwner = initial;
-  const store: LockStore = {
-    compareAndSet: async (expected, next) => {
-      if (!expected.includes(owner)) return false;
-      owner = next;
-      return true;
-    },
-    read: async () => owner,
-  };
-  return { store, owner: () => owner };
-}
-
-describe("Mathi Bank Strategy: its own strategy, Mathi Strategy unchanged", () => {
-  it("leaves Mathi Strategy (+3%, NIFTY) exactly as it was", () => {
-    expect(ALGO_DEFAULTS.underlying).toBe("NIFTY");
-    expect(ALGO_DEFAULTS.target).toEqual({ mode: "percent", value: 3 });
-    expect(STRATEGY_NAME.EXISTING_ALGO).toBe("Mathi Strategy");
-  });
-
-  it("is Mathi Strategy's +3% engine on BANKNIFTY, valid, and keeps BANKNIFTY when saved settings are read back", () => {
-    expect(MATHI_BANK_DEFAULTS).toMatchObject({ underlying: "BANKNIFTY", engine: "existing", crossRule: "body", stopLoss: false, settingsVersion: ALGO_DEFAULTS.settingsVersion });
-    const saved = readAlgoConfig(JSON.parse(JSON.stringify(MATHI_BANK_DEFAULTS)));
-    expect(saved.underlying).toBe("BANKNIFTY");
-    expect(saved.target).toEqual(MATHI_BANK_DEFAULTS.target);
-    expect(algoConfigProblems(saved)).toEqual([]);
-  });
-
-  it("is a separate strategy under the exclusive lock: never trades while another one runs", async () => {
-    expect(ALGO_STRATEGIES).toContain("MATHI_BANK");
-    expect(isAlgoStrategy("MATHI_BANK")).toBe(true);
-    expect(isVariantStrategy("MATHI_BANK")).toBe(true);
-    expect(isVariantStrategy("EXISTING_ALGO")).toBe(false);
-    expect(STRATEGY_NAME.MATHI_BANK).toBe("Mathi Bank Strategy");
-    const busy = memoryStore("EXISTING_ALGO");
-    expect((await acquireLock(busy.store, "MATHI_BANK", async () => ({ running: true, position: false, pending: false }))).ok).toBe(false);
-    const free = memoryStore();
-    expect(await acquireLock(free.store, "MATHI_BANK", async () => ({ running: false, position: false, pending: false }))).toEqual({ ok: true });
-    expect(free.owner()).toBe("MATHI_BANK");
-  });
-
-  it("accepts its live paper commands, its settings save and the chart replay; Mathi 5%'s old command still works", () => {
-    for (const op of ["start", "stop", "tick", "exit"]) expect(algoRequest.safeParse({ action: "variant", strategy: "MATHI_BANK", op }).success).toBe(true);
-    expect(algoRequest.safeParse({ action: "variant", strategy: "EXISTING_ALGO", op: "start" }).success).toBe(false);
-    expect(algoRequest.safeParse({ action: "mathi5", op: "tick" }).success).toBe(true);
-    expect(algoRequest.safeParse({ action: "save", strategy: "MATHI_BANK", config: {} }).success).toBe(true);
-    expect(algoRequest.safeParse({ action: "chartArm", session: "2026-10-26.abcd", cursor: 1, strategy: "MATHI_BANK" }).success).toBe(true);
-    expect(algoRequest.safeParse({ action: "backtestDay", date: DATE, variant: "saved", strategy: "MATHI_BANK" }).success).toBe(true);
-  });
-});
 
 describe("BANKNIFTY contracts", () => {
   it("asks for monthly option history for BANKNIFTY (no weekly options) and weekly for NIFTY", () => {
@@ -134,13 +80,14 @@ describe("in the engine: a BANKNIFTY signal buys a BANKNIFTY contract", () => {
       lookup: async () => null,
     };
     // Single-candle confirmation only to keep the fixture short (the defaults confirm by retest).
-    const config: AlgoConfig = { ...MATHI_BANK_DEFAULTS, mode: "PAPER", confirmation: { ...MATHI_BANK_DEFAULTS.confirmation, mode: "single" }, regime: { enabled: false, lookback: 30 }, filters: { ...MATHI_BANK_DEFAULTS.filters } };
+    const bank: AlgoConfig = { ...ALGO_DEFAULTS, underlying: "BANKNIFTY" };
+    const config: AlgoConfig = { ...bank, mode: "PAPER", confirmation: { ...bank.confirmation, mode: "single" }, regime: { enabled: false, lookback: 30 }, filters: { ...bank.filters } };
     const result = await advance({ ...initialState(DATE), running: true, entries: true, lastCandle: at(29) }, { sessionId: "bank", sessionDate: DATE, config, candles, lines, now: at(32), adapter });
     expect(orders).toHaveLength(1);
     expect(orders[0].contract).toMatch(/^BANKNIFTY \d+ PE$/);
     expect(orders[0].quantity % LOT).toBe(0);
     expect(orders[0].quantity).toBe(Math.floor(100_000 / (orders[0].price * LOT + 40)) * LOT);
     expect(result.state.position?.contract.underlying).toBe("BANKNIFTY");
-    expect(result.state.position?.target).toBeCloseTo(orders[0].price * (1 + MATHI_BANK_DEFAULTS.target.value / 100), 1);
+    expect(result.state.position?.target).toBeCloseTo(orders[0].price * (1 + bank.target.value / 100), 1);
   });
 });

@@ -2,7 +2,6 @@ import type { AlgoLine, Candle, CustomLevel, LineType } from "./lines";
 import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm, type AtmContract, type ChainInput, type Protective, type Right } from "./options";
 import { consolidate, evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
 import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type ExistingStrategyId, type MarketAnalysis, type PatternSettings, type StrategySignal } from "./patterns";
-import { PRIMARY_SETTINGS_DEFAULTS, primarySignal, type PrimarySettings } from "./primary";
 import { HOURLY_SETTINGS_DEFAULTS, hourlyCandles, hourlyMidpointDecision, hourlySignal, isFullHour, istClock as hourClock, type HourlySettings, type HourlyTrade, type HourlyTradeStatus } from "./hourly-zone";
 import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
 import { ema } from "@/lib/market/indicators";
@@ -60,7 +59,7 @@ export type AlgoConfig = {
   /** Mandatory end-of-day square-off (IST HH:MM): an open position is closed and no new entry starts from this time. */
   squareOff?: string;
   /** "risk": lots sized from the index stop so one trade risks at most the risk per trade; "fixed": `lots`;
-   * "capital" (Algo - Primary Strategy): the most whole lots the capital allocation and available cash buy. */
+   * "capital": the most whole lots the capital allocation and available cash buy. */
   sizing: "risk" | "fixed" | "capital";
   /** Capital-allocation sizing: share of the capital per trade, the capital it is taken from, and the policy. */
   allocation: AllocationSettings;
@@ -70,10 +69,8 @@ export type AlgoConfig = {
   minScore: number;
   /** Which strategies may signal: the line break and the price-action add-ons (the existing Algo Trade). */
   strategies: Record<ExistingStrategyId, boolean>;
-  /** Which feature's signals these settings drive: the existing Algo Trade, Algo - Primary Strategy, or Mathi Hourly Zone Strategy. */
-  engine: "existing" | "primary" | "hourly";
-  /** Algo - Primary Strategy (NIFTY ORB + VWAP + trend) settings; used only when engine is "primary". */
-  primary: PrimarySettings;
+  /** Which feature's signals these settings drive: the existing Algo Trade or Mathi Hourly Zone Strategy. */
+  engine: "existing" | "hourly";
   /** Mathi Hourly Zone Strategy settings (zone, skip rule, pair schedule, session-loss limit); used only when engine is "hourly". */
   hourly?: HourlySettings;
   /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
@@ -154,7 +151,7 @@ export type AlgoConfig = {
   crossRule: "body" | "classic";
   /** "body" rule: the share of the candle's body that must be past the line, % (0 = any genuine crossing). */
   crossPercent: number;
-  /** Automatic stop-loss exits. Mathi Strategy runs without one (shown clearly); Algo - Primary Strategy keeps its premium stop. */
+  /** Automatic stop-loss exits. Mathi Strategy runs without one (shown clearly). */
   stopLoss: boolean;
   /** Live-price paper: also check the forming candle (at its current price) when the data feed provides it. */
   intrabar: boolean;
@@ -245,7 +242,6 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   strategies: { line: true, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false },
   observationMinutes: 0,
   engine: "existing",
-  primary: PRIMARY_SETTINGS_DEFAULTS,
   settingsVersion: 18,
   // The ATM option is bought at any premium (an optional limit can skip dear ones: maxEntryPremium).
   filters: { levelBlockMinutes: 0, breakoutBufferPercent: 0, secondCandle: false, momentum: false, maxEntryPremium: 0 },
@@ -266,43 +262,6 @@ export const ALGO_DEFAULTS: AlgoConfig = {
   // closing back through, and move on before an entry (retest) — a break that falls straight back is never traded.
   confirmation: { mode: "retest", retestTolerancePercent: 0.02, retestWindowMinutes: 15, holdMustAgree: true },
 };
-
-/**
- * Algo - Primary Strategy's own default settings: the same account, sizing and risk rules, its own signal
- * engine (the opening range is its observation window), no existing-strategy filters, chart replay only.
- */
-export const PRIMARY_DEFAULTS: AlgoConfig = {
-  ...ALGO_DEFAULTS,
-  engine: "primary",
-  mode: "REPLAY",
-  entryCutoff: "12:00",
-  // Up to 100% of the ₹1,00,000 demo capital in whole lots; +3% / −3% on the executed option premium.
-  sizing: "capital",
-  lots: 50,
-  stop: { mode: "percent", value: 3 },
-  target: { mode: "percent", value: 3 },
-  maxDailyLoss: 3_000,
-  maxTrades: 2,
-  stopLoss: true,
-  stopAtLimit: true,
-  maxHoldMinutes: 0,
-  exitManagement: EXIT_MANAGEMENT_DEFAULTS,
-  regime: { enabled: false, lookback: 30 },
-  crossRule: "classic",
-  crossPercent: 0,
-  intrabar: false,
-  minScore: 0,
-  filters: { levelBlockMinutes: 15, breakoutBufferPercent: 0, secondCandle: false, momentum: false, maxEntryPremium: 0 },
-  structureStop: false,
-  // Its own engine confirms its breakouts (ORB, VWAP, retest); the strategy-line confirmation does not apply.
-  confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" },
-};
-
-/**
- * Mathi 5%: a separate copy of Mathi Strategy v18 — the same engine, lines, confirmation, regime switch, exits and
- * 3 trades a session — with only the target changed, +5% on the executed option premium.
- */
-export const MATHI5_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, target: { mode: "percent", value: 5 } };
 
 /**
  * Mathi Hourly Zone Strategy — 5%: its own engine (the first two 1-hour NIFTY candles; see hourly-zone.ts) on the ATM
@@ -348,13 +307,6 @@ export const MATHI_HOURLY_DEFAULTS: AlgoConfig = {
   confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" },
   intrabar: false,
 };
-
-/**
- * Mathi Bank Strategy: Mathi Strategy v18 (the +3% version) on BANKNIFTY, with the ATM CE / PE of the nearest monthly
- * BANKNIFTY expiry (BANKNIFTY has no weekly options). Its own settings, live paper state, trades and results; any value
- * that differs from Mathi Strategy was chosen on BANKNIFTY history (see docs/mathi-bank-strategy.md).
- */
-export const MATHI_BANK_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, underlying: "BANKNIFTY" };
 
 export const TICK = 0.05;
 
@@ -627,7 +579,6 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
         if (!isLatest) {
           reasons = ["Signal evaluated late (its candle closed more than two minutes ago); not traded."];
-          if (evaluation.audit) evaluation.audit = { ...evaluation.audit, decision: "REJECT", reason: `REJECTED — ${reasons[0]}` };
           outcome = `${evaluation.explanation} Not traded: evaluated late.`;
         } else {
           const result = await tryEntry(state, input, evaluation, log, waited);
@@ -637,7 +588,6 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
           capital = result.capital ?? null;
           entered = result.ok;
           if (!result.ok) kind = "REJECTED";
-          if (evaluation.audit) evaluation.audit = { ...evaluation.audit, decision: result.ok ? "ENTER" : "REJECT", reason: result.ok ? `ORDER PLACED — ${evaluation.decision}` : `REJECTED — ${(result.reasons ?? [result.message]).join(" ")}` };
         }
       } else if (evaluation.decision === "CONFLICTING_SIGNAL") {
         state.lastSignal = { time: candle.time, decision: evaluation.decision, explanation: evaluation.explanation };
@@ -913,8 +863,6 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   else if (clock < (config.entryStart ?? "09:15")) reasons.push(`Before the entry window (${config.entryStart}–${config.entryCutoff} IST).`);
   else if (clock > config.entryCutoff) reasons.push(`Trading window closed at ${config.entryCutoff} IST: no new entries.`);
   else if (config.squareOff && clock >= config.squareOff) reasons.push(`End-of-day square-off at ${config.squareOff} IST: no new entries.`);
-  // A daily profit target that stops entries is Algo - Primary Strategy's rule only; Mathi Strategy's target is per trade.
-  if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) reasons.push(`Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (sizing !== "risk") {
     const problem = protectiveProblem(config.stop, config.target);
     if (problem) reasons.push(problem);
@@ -1410,10 +1358,8 @@ function minutesOf(hhmm: string) {
 function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, evaluation: CandleEvaluation, result: { entered: boolean; reasons?: string[]; plan: TradePlan | null }): EngineState {
   const time = candleTime + 60;
   const clock = istClock(time);
-  const risk = { ...RISK_DEFAULTS, ...config.risk };
   const at = (status: EngineStatus, reason: string, plan: TradePlan | null = null): EngineState => ({ status, reason, time, plan });
   if (state.riskLocked || strategyToday(state) <= -lossLimit(config)) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${lossLimit(config)}: no new entries today.`);
-  if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (clock > config.entryCutoff) return at("TRADING_WINDOW_CLOSED", `Entries closed at ${config.entryCutoff} IST.${state.position ? " The open position stays protected by its stop and target." : ""}`);
   if (result.entered && (evaluation.decision === "CALL" || evaluation.decision === "PUT")) return at(evaluation.decision === "CALL" ? "BUY_CANDIDATE" : "SELL_CANDIDATE", evaluation.explanation, result.plan);
   if (state.awaiting) return at("WAIT_FOR_CONFIRMATION", evaluation.explanation);
@@ -1582,7 +1528,6 @@ function deriveStatus(state: AlgoState): AlgoStatus {
  */
 function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
   const { config } = input;
-  if (config.engine === "primary") return primaryCoordinate(line, candles, input, state);
   if (config.engine === "hourly") return hourlyCoordinate(line, candles, input, state);
   const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
   const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
@@ -1637,35 +1582,6 @@ function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInp
   }
   if (!enabled.line && (line.decision === "CALL" || line.decision === "PUT")) return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: "Line break is switched off; no other strategy signalled." };
   return { ...line, strategies: all };
-}
-
-/**
- * Algo - Primary Strategy's signal for one completed candle: its own ORB + VWAP + trend rules only (the
- * strategy lines and the existing setups do not signal). The market analysis (trendlines, zones, the
- * opening range) is still computed for the chart, the dashboard and the room-to-target check.
- */
-function primaryCoordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
-  const { config } = input;
-  const settings = { ...PRIMARY_SETTINGS_DEFAULTS, ...config.primary };
-  const sessionOpen = dayStart(input.sessionDate);
-  const { analysis } = analyzeMarket({
-    candles,
-    sessionOpen,
-    observationMinutes: 0,
-    settings: { ...PATTERN_DEFAULTS, ...config.patterns, orbMinutes: settings.orMinutes },
-    enabled: {},
-    zones: input.lines.filter((item) => item.activeFrom <= line.time).map((item) => ({ price: item.price, label: item.label })),
-  });
-  const result = primarySignal(candles, sessionOpen, settings);
-  const before = state.analysis?.strategies.primary?.lastSignal ?? null;
-  analysis.primary = result.state;
-  analysis.strategies.primary = { enabled: true, status: result.state.status, direction: result.signal?.direction ?? null, trigger: result.signal?.level ?? result.state.range?.high ?? null, waiting: !result.signal, lastSignal: result.signal ? { time: line.time, direction: result.signal.direction } : before };
-  state.analysis = analysis;
-  state.awaiting = null;
-  const base = { ...line, events: [], notes: [] };
-  const audit = result.state.audit ?? null;
-  if (!result.signal) return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: [result.state.status, ...result.state.checks].join(" "), audit };
-  return { ...base, strategies: [result.signal], decision: result.signal.direction, explanation: result.signal.reason, audit };
 }
 
 /**

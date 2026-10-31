@@ -7,7 +7,7 @@ import {
 } from "../src/lib/algo/hourly-zone";
 import type { Candle } from "../src/lib/algo/lines";
 import { createReplayAdapter, simulateSession, type ReplayChain } from "../src/lib/algo/replay-adapter";
-import { advance, ALGO_DEFAULTS, initialState, lossLimit, MATHI5_DEFAULTS, MATHI_BANK_DEFAULTS, MATHI_HOURLY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState } from "../src/lib/algo/runner";
+import { advance, ALGO_DEFAULTS, initialState, lossLimit, MATHI_HOURLY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState } from "../src/lib/algo/runner";
 import { algoRequest } from "../src/lib/algo/request";
 import { hourlyDrawings } from "../src/components/algo/algo-drawings";
 
@@ -979,14 +979,12 @@ describe("chart: the reference as a position zone, with its status", () => {
   });
 });
 
-describe("15. Mathi Strategy and the other variants are unchanged", () => {
-  it("keeps Mathi Strategy's defaults and engine; the variants still run Mathi's engine", () => {
+describe("15. Mathi Strategy is unchanged", () => {
+  it("keeps Mathi Strategy's defaults and engine", () => {
     expect(ALGO_DEFAULTS).toMatchObject({ engine: "existing", target: { mode: "percent", value: 3 }, maxTrades: 3, entryStart: "09:15", maxDailyLoss: 2_000, regime: { enabled: true, lookback: 30 }, confirmation: { mode: "retest" } });
     expect("hourly" in ALGO_DEFAULTS).toBe(false);
     expect("hourly" in readAlgoConfig(JSON.parse(JSON.stringify(ALGO_DEFAULTS)))).toBe(false);
     expect(lossLimit(ALGO_DEFAULTS)).toBe(2_000);
-    expect(MATHI5_DEFAULTS.engine).toBe("existing");
-    expect(MATHI_BANK_DEFAULTS.engine).toBe("existing");
   });
   it("is its own strategy: listed, a variant with its own live commands, settings and replay", () => {
     expect(ALGO_STRATEGIES).toContain("MATHI_HOURLY");

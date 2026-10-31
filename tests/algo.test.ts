@@ -558,7 +558,6 @@ describe("trend exit management at the time checkpoint", async () => {
     expect(readAlgoConfig({ settingsVersion: 15, maxHoldMinutes: 30 }).maxHoldMinutes).toBe(45);
     expect(readAlgoConfig({ settingsVersion: 15, maxHoldMinutes: 20 }).maxHoldMinutes).toBe(20);
     expect(readAlgoConfig({ settingsVersion: 16, maxHoldMinutes: 30 }).maxHoldMinutes).toBe(30);
-    expect(readAlgoConfig({ engine: "primary", settingsVersion: 14 }).exitManagement?.mode).toBe("fixed");
     expect(readAlgoConfig({ settingsVersion: 14, exitManagement: { mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true } }).exitManagement).toMatchObject({ mode: "trend", maxHoldMinutes: 120, minScore: 3, trailPercent: 8, recoveryExit: true, reversalBeforeCheckpoint: false });
     expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, maxHoldMinutes: 20 } })).toContain("The maximum holding time must be after the checkpoint and at most 375 minutes.");
     expect(algoConfigProblems({ ...ALGO_DEFAULTS, exitManagement: { ...trend, minScore: 6 } })).toContain("The trend checks needed to hold must be 1 to 5.");
@@ -577,12 +576,11 @@ describe("optional premium limit: an ATM option above the limit is not bought", 
     expect(roomy.state.position).not.toBeNull();
   });
 
-  it("is off by default (any premium is bought); a saved limit is kept; Algo - Primary Strategy has none", () => {
+  it("is off by default (any premium is bought); a saved limit is kept", () => {
     expect(ALGO_DEFAULTS.filters.maxEntryPremium).toBe(0);
     expect(readAlgoConfig({ settingsVersion: 16, filters: {} }).filters.maxEntryPremium).toBe(0);
     expect(readAlgoConfig({ settingsVersion: 17, filters: { maxEntryPremium: 0 } }).filters.maxEntryPremium).toBe(0);
     expect(readAlgoConfig({ settingsVersion: 17, filters: { maxEntryPremium: 200 } }).filters.maxEntryPremium).toBe(200);
-    expect(readAlgoConfig({ engine: "primary", settingsVersion: 16 }).filters.maxEntryPremium).toBe(0);
   });
 });
 
@@ -621,11 +619,12 @@ describe("regime switch (version 18): real entries only while the last trades ma
     expect(regimeStatus({ regime: { history: [-9, -9, -9] } }, config({ regime: { enabled: false, lookback: 3 } }))).toMatchObject({ on: true });
   });
 
-  it("is on (30 trades) by default for Mathi Strategy; saved settings move once; a later choice is kept; Primary has none", () => {
+  it("is on (30 trades) by default for Mathi Strategy; saved settings move once; a later choice is kept", () => {
     expect(ALGO_DEFAULTS.regime).toEqual({ enabled: true, lookback: 30 });
     expect(readAlgoConfig({ settingsVersion: 17 }).regime).toEqual({ enabled: true, lookback: 30 });
     expect(readAlgoConfig({ settingsVersion: 18, regime: { enabled: false, lookback: 20 } }).regime).toEqual({ enabled: false, lookback: 20 });
-    expect(readAlgoConfig({ engine: "primary", settingsVersion: 17 }).regime?.enabled).toBe(false);
+    // Settings saved by the removed Algo - Primary Strategy ("primary" engine) read as Mathi Strategy's.
+    expect(readAlgoConfig({ engine: "primary", settingsVersion: 17 })).toMatchObject({ engine: "existing", regime: { enabled: true, lookback: 30 } });
     expect(algoConfigProblems({ ...ALGO_DEFAULTS, regime: { enabled: true, lookback: 1 } })).toContain("The regime switch look-back must be 3 to 100 trades.");
   });
 });

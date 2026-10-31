@@ -139,7 +139,7 @@ export function planTrade(input: PlanInput): { ok: true; plan: TradePlan } | { o
   return reasons.length ? { ok: false, plan, reasons } : { ok: true, plan };
 }
 
-/** Capital-allocation sizing (Algo - Primary Strategy): how much of the Algo account one trade may commit. */
+/** Capital-allocation sizing: how much of the Algo account one trade may commit. */
 export type AllocationSettings = {
   /** Share of the capital to commit to one trade, % (100 = all of it). */
   percent: number;

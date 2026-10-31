@@ -97,7 +97,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="text-base font-semibold">Algo</h2>
-        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "PRIMARY_STRATEGY" ? "Primary" : feature === "MATHI_5" ? "Mathi 5%" : feature === "MATHI_BANK" ? "Mathi Bank" : feature === "MATHI_HOURLY" ? "Mathi Hourly" : "Mathi"}</span>
+        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "MATHI_HOURLY" ? "Mathi Hourly" : "Mathi"}</span>
         <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
         <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
         {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
@@ -158,10 +158,9 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
         {run?.strategy === "MATHI_HOURLY" ? <HourlyToday state={state} position={position} config={run.config} /> : null}
-        {run && run.strategy !== "PRIMARY_STRATEGY" && run.strategy !== "MATHI_HOURLY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} signal={latestSignal(run.events)} /> : null}
+        {run && run.strategy !== "MATHI_HOURLY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} signal={latestSignal(run.events)} /> : null}
         {run && run.strategy !== "MATHI_HOURLY" ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
         {run ? <ReportDownload runId={run.id} /> : null}
-        {run?.strategy === "PRIMARY_STRATEGY" ? <SignalAudit events={run.events} /> : null}
         {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
         {run && run.strategy !== "MATHI_HOURLY" ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
         {run && run.strategy !== "MATHI_HOURLY" ? <StrategyRows analysis={state?.analysis} positionOpen={Boolean(position)} /> : null}
@@ -532,7 +531,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   const [selected] = useSelectedStrategy();
   // The run's own feature (a resume), else the one selected for this new session.
   const strategy = algo.run?.strategy ?? selected;
-  const config = strategy === "PRIMARY_STRATEGY" ? data?.primaryConfig : strategy === "MATHI_5" ? (data ? { ...data.mathi5.config, mode: "REPLAY" as const } : undefined) : strategy === "MATHI_BANK" ? (data ? { ...data.mathiBank.config, mode: "REPLAY" as const } : undefined) : strategy === "MATHI_HOURLY" ? (data ? { ...data.mathiHourly.config, mode: "REPLAY" as const } : undefined) : data?.config;
+  const config = strategy === "MATHI_HOURLY" ? (data ? { ...data.mathiHourly.config, mode: "REPLAY" as const } : undefined) : data?.config;
   const run = algo.run;
   const unsaved = useUnsavedSettings();
   // Always confirm with the settings saved right now (they may have been changed since the chart loaded them).
@@ -556,7 +555,6 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     );
   }
   const ended = run?.status === "ENDED";
-  const mathi = strategy !== "PRIMARY_STRATEGY";
   const noCutoff = config.entryCutoff >= "15:30";
   const rows: Array<[string, string]> = [
     ["Underlying", config.underlying],
@@ -572,16 +570,14 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
     ["Max daily loss", inr(config.maxDailyLoss)],
     ["Cooldown", `${config.cooldownMinutes} min`],
     ["Entry cutoff", noCutoff ? "None" : `${config.entryCutoff} IST`],
+    ["Breakout confirmation", { single: "Single candle (no confirmation)", hold: "Next candle must hold beyond the line", retest: `Retest must hold within ${config.confirmation.retestWindowMinutes} min` }[confirmationMode(config)]],
     // Optional Mathi confirmations are listed only when switched on.
-    ...(mathi ? [["Breakout confirmation", { single: "Single candle (no confirmation)", hold: "Next candle must hold beyond the line", retest: `Retest must hold within ${config.confirmation.retestWindowMinutes} min` }[confirmationMode(config)]] as [string, string]] : []),
-    ...(mathi && config.filters.momentum ? [["Momentum (9/21 EMA)", "Must agree"] as [string, string]] : []),
+    ...(config.filters.momentum ? [["Momentum (9/21 EMA)", "Must agree"] as [string, string]] : []),
     ["Open position", position ? `${position.contract.strike} ${position.contract.right} × ${position.quantity}` : "None"],
   ];
-  const strategies = strategy === "PRIMARY_STRATEGY"
-    ? `Opening range ${config.primary.orMinutes} min + ${config.primary.vwap ? "VWAP side" : "no VWAP filter"} + ${config.primary.trend === "ema" ? `${config.primary.trendFast}/${config.primary.trendSlow} EMA trend` : "no trend filter"}${config.primary.continuation ? " + continuation" : ""}${config.primary.retest ? " + retest" : ""}${config.primary.supportBreak ? " + support breakdown" : ""}; a break waits ${config.primary.confirmBars} candles for confirmation`
-    : config.crossPercent
-      ? `Strategy-line breakouts: ATM CE when ${config.crossPercent}% of a bullish candle's body is above an enabled line, ATM PE when that share of a bearish body is below it`
-      : "Strategy-line breakouts: ATM CE when a bullish candle's body crosses up through an enabled line, ATM PE when a bearish body crosses down (any amount; a wick alone never counts)";
+  const strategies = config.crossPercent
+    ? `Strategy-line breakouts: ATM CE when ${config.crossPercent}% of a bullish candle's body is above an enabled line, ATM PE when that share of a bearish body is below it`
+    : "Strategy-line breakouts: ATM CE when a bullish candle's body crosses up through an enabled line, ATM PE when a bearish body crosses down (any amount; a wick alone never counts)";
   const lock = data.lock;
   const blocked = lock.owner !== "NONE" && lock.owner !== strategy && lock.activity && (lock.activity.running || lock.activity.position || lock.activity.pending) ? blockedMessage(lock.owner, strategy, lock.activity) : null;
   return (
@@ -593,7 +589,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
       {ended ? <p className="mt-2 rounded-md bg-warning-soft px-2 py-1.5 text-micro text-warning">This replay session&apos;s algo run has ended ({run?.endReason === "SESSION_END" ? "session close" : "reset"}). Reset the replay to start a new isolated session.</p> : null}
       {gate.kind === "confirm" && gate.skippedMinutes > 0 ? <p className="mt-2 rounded-md bg-info-soft px-2 py-1.5 text-micro text-info">The replay moved forward {gate.skippedMinutes} minute{gate.skippedMinutes === 1 ? "" : "s"} since the algo last ran. Those minutes are processed in order first (signals, stop-loss and target), exactly as if the replay had played through them.</p> : null}
       <div className="mt-3">
-        <p className="text-micro text-muted">{strategy === "PRIMARY_STRATEGY" ? "Rules" : "Entry rule"}</p>
+        <p className="text-micro text-muted">Entry rule</p>
         <p className="font-medium text-text">{strategies}</p>
       </div>
       <dl className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1.5">
@@ -692,46 +688,6 @@ function useReportDownload(runId: string) {
       .finally(() => setBusy(false));
   };
   return { busy, error, download };
-}
-
-/**
- * Algo - Primary Strategy's signal audit: every candle on which a setup was armed, confirmed, waited or was
- * rejected — with the values and conditions it was decided on and the order result — newest first. Plain
- * "inside the range" candles are left out unless asked for. It tells an invalid setup from a software fault.
- */
-function SignalAudit({ events }: { events: Array<{ key: string; time: number; kind: string; evaluation?: { audit?: import("@/lib/algo/primary").PrimaryAudit | null } }> }) {
-  const [all, setAll] = useState(false);
-  const rows = events
-    .filter((event) => event.evaluation?.audit && (all || event.evaluation.audit.setup || event.evaluation.audit.crossing || event.evaluation.audit.decision !== "WAIT"))
-    .map((event) => ({ key: event.key, audit: event.evaluation!.audit! }))
-    .reverse()
-    .slice(0, 60);
-  const tone = (decision: string) => (decision === "ENTER" ? "text-profit" : decision === "REJECT" ? "text-loss" : "text-warning");
-  return (
-    <details className="rounded-lg border border-border-soft" aria-label="Signal audit">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Signal audit</span>
-        <span className="num ml-auto text-xs text-muted">{rows.length} candle{rows.length === 1 ? "" : "s"}</span>
-      </summary>
-      <div className="space-y-1.5 border-t border-border-soft px-3 py-2 text-xs">
-        <label className="flex cursor-pointer items-center gap-1.5 text-muted"><input type="checkbox" className="oc-check" checked={all} onChange={(event) => setAll(event.target.checked)} />Show every evaluated candle</label>
-        {rows.length ? rows.map(({ key, audit }) => (
-          <div key={key} className="rounded-md bg-sunken/50 p-1.5">
-            <p className="flex flex-wrap items-center gap-x-2">
-              <span className="num font-semibold text-text">{ist(audit.time + 60)}</span>
-              {audit.setup ? <span className="font-medium text-text-2">{audit.setup.type} {audit.setup.direction}</span> : null}
-              <span className={cx("ml-auto font-semibold", tone(audit.decision))}>{audit.decision}</span>
-            </p>
-            <p className="num text-muted">O {audit.candle.open.toFixed(2)} H {audit.candle.high.toFixed(2)} L {audit.candle.low.toFixed(2)} C {audit.candle.close.toFixed(2)}{audit.range ? ` · range ${audit.range.low.toFixed(2)}–${audit.range.high.toFixed(2)}` : ""}{audit.vwap ? ` · ${audit.vwap.source} ${audit.vwap.value.toFixed(2)}` : ""}{audit.ema ? ` · EMA ${audit.ema.fast.toFixed(2)} / ${audit.ema.slow.toFixed(2)}` : ""}</p>
-            {audit.crossing ? <p className="text-text-2">{audit.crossing}</p> : null}
-            {audit.passed.map((item) => <p key={item} className="text-profit">✓ {item}</p>)}
-            {audit.failed.map((item) => <p key={item} className="text-loss">✗ {item}</p>)}
-            <p className="text-text-2">{audit.reason}</p>
-          </div>
-        )) : <p className="text-muted">No setups yet{all ? "" : " (switch on “every evaluated candle” to see each WAITING candle)"}.</p>}
-      </div>
-    </details>
-  );
 }
 
 /** The session's trades so far (and every signal with its reason), downloadable at any time. */

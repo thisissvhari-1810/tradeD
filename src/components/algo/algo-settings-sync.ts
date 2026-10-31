@@ -41,7 +41,7 @@ export function useUnsavedSettings() {
 }
 
 /**
- * Which algo feature the panels show and the chart starts: Algo Trade or Algo - Primary Strategy. Selecting
+ * Which algo feature the panels show and the chart starts: Mathi Strategy or Mathi Hourly Zone Strategy. Selecting
  * one never starts it, and the server's execution lock — not this choice — decides who may place orders.
  */
 const SELECTED_KEY = "td-algo-strategy";

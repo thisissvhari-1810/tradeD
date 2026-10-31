@@ -19,10 +19,10 @@ export const algoPanelTicker = { mounted: 0 };
 /** Live Algo panels beside the chart: while one is mounted it reads the open trade's premium every 5 seconds. */
 export const algoLivePanel = { mounted: 0 };
 /** Variant panels that are open (each checks its own strategy while mounted, so the button does not check it twice). */
-export const variantTicker: Record<VariantStrategy, { mounted: number }> = { MATHI_5: { mounted: 0 }, MATHI_BANK: { mounted: 0 }, MATHI_HOURLY: { mounted: 0 } };
+export const variantTicker: Record<VariantStrategy, { mounted: number }> = { MATHI_HOURLY: { mounted: 0 } };
 
 /** A variant strategy's own view (settings, state, position, live session) from the Algo data. */
-export const variantData = (data: AlgoData, strategy: VariantStrategy) => (strategy === "MATHI_BANK" ? data.mathiBank : strategy === "MATHI_HOURLY" ? data.mathiHourly : data.mathi5);
+export const variantData = (data: AlgoData, strategy: VariantStrategy) => ({ MATHI_HOURLY: data.mathiHourly })[strategy];
 
 /**
  * Start Algo / Stop Algo on the live chart (paper trading only). Each Start begins a new session with its own

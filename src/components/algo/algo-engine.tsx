@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { cx } from "@/components/ui";
 import { api } from "@/components/api";
 import { confirmationMode, ENGINE_LABEL, type AlgoConfig, type AlgoState, type EngineStatus } from "@/lib/algo/runner";
-import { RISK_DEFAULTS } from "@/lib/algo/sizing";
 import type { MarketPlan } from "@/lib/algo/plan";
 
 const TONE: Record<EngineStatus, string> = {
@@ -37,7 +36,6 @@ export function EngineCard({ state, config, date, now, unrealized, available = n
   position?: { quantity: number; lots: number; avg: number; stop: number; target: number; entryCharges: number; premium?: number | null; unrealized?: number | null } | null;
 }) {
   const engine = state?.engine ?? null;
-  const risk = { ...RISK_DEFAULTS, ...config.risk };
   const realized = state?.realizedToday ?? 0;
   const net = realized + (unrealized ?? 0);
   const allowance = Math.max(0, config.maxDailyLoss + Math.min(0, realized));
@@ -46,7 +44,6 @@ export function EngineCard({ state, config, date, now, unrealized, available = n
   const left = now == null ? null : now < start ? null : Math.max(0, end - now);
   const windowText = now == null ? `${config.entryStart}–${config.entryCutoff} IST` : now < start ? `Opens at ${config.entryStart} IST` : left ? `${Math.floor(left / 60)}m ${String(left % 60).padStart(2, "0")}s left (to ${config.entryCutoff})` : `Closed at ${config.entryCutoff} IST`;
   const plan = engine?.plan ?? null;
-  const progress = risk.dailyTarget > 0 ? Math.max(0, Math.min(1, net / risk.dailyTarget)) : 0;
   return (
     <section className="rounded-lg border border-border-soft" aria-label="Strategy engine">
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
@@ -80,16 +77,10 @@ export function EngineCard({ state, config, date, now, unrealized, available = n
         {config.sizing === "capital" ? <CapitalBlock capital={engine?.capital ?? null} available={available} position={position} config={config} /> : null}
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <Cell label="Net P&L today" value={inr(net)} tone={net > 0 ? "text-profit" : net < 0 ? "text-loss" : undefined} />
-          {config.engine === "primary" ? <Cell label={`Target ${inr(risk.dailyTarget)} (goal)`} value={net >= risk.dailyTarget ? "Reached" : `${inr(risk.dailyTarget - net)} to go`} /> : <Cell label="Profit target" value={`+${config.target.value}% per trade (premium)`} />}
+          <Cell label="Profit target" value={`+${config.target.value}% per trade (premium)`} />
           <Cell label="Loss allowance left" value={`${inr(allowance)} of ${inr(config.maxDailyLoss)}`} tone={allowance <= 0 ? "text-loss" : undefined} />
           <Cell label="Entry window" value={windowText} />
         </dl>
-        {config.engine === "primary" ? (
-          <>
-            <div className="h-1.5 overflow-hidden rounded-full bg-sunken" role="progressbar" aria-label="Progress to the daily target" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}><div className="h-full bg-profit" style={{ width: `${progress * 100}%` }} /></div>
-            <p className="text-muted">The target is a goal, not an expected result. No setup means no trade; risk is never raised to reach it.</p>
-          </>
-        ) : null}
       </div>
     </section>
   );

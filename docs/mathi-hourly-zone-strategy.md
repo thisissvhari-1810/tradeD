@@ -1,7 +1,7 @@
 # Mathi Hourly Zone Strategy — 5%
 
 A separate strategy (`MATHI_HOURLY`) with its own engine, settings, live paper session, state, order keys (run `MH`) and
-trade history. Mathi Strategy, Mathi 5% and Mathi Bank Strategy are unchanged: they keep `engine: "existing"`, and
+trade history. Mathi Strategy is unchanged: it keeps `engine: "existing"`, and
 every runner path added for this strategy is behind `config.engine === "hourly"`.
 
 ## Where it lives

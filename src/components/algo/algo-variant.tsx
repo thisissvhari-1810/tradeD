@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/components/api";
 import { useDesk } from "@/components/shell";
-import { Confirm, Info, type AlgoData } from "@/components/algo/algo-panel";
+import { Confirm, type AlgoData } from "@/components/algo/algo-panel";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { LiveSessionSwitch } from "@/components/algo/algo-live-session";
 import { HourlyRules } from "@/components/algo/algo-hourly";
@@ -12,14 +12,8 @@ import { STRATEGY_NAME, type VariantStrategy } from "@/lib/algo/exclusive";
 
 export { variantData };
 
-const SUMMARY: Record<VariantStrategy, string> = {
-  MATHI_5: "Same lines, entries, regime switch and exits as Mathi Strategy v18; only the target differs.",
-  MATHI_BANK: "Mathi Strategy (+3% version) on BANKNIFTY: the same lines, 50% body break, retest and exits, on the ATM CE / PE of the nearest monthly BANKNIFTY expiry (BANKNIFTY has no weekly options). Its own settings, trades and results; Mathi Strategy is unchanged.",
-  MATHI_HOURLY: "Its own engine on the first two 1-hour NIFTY candles; Mathi Strategy is unchanged.",
-};
-
 /**
- * Mathi 5%, Mathi Bank Strategy and Mathi Hourly Zone Strategy: their own settings, sessions and trades. Live mode runs one as live paper
+ * Mathi Hourly Zone Strategy: its own settings, sessions and trades. Live mode runs it as live paper
  * trading (its own session, state and trades); Demo mode runs it on the chart replay. Every entry and exit is decided by
  * the server.
  */
@@ -62,26 +56,13 @@ export function VariantPanel({ data, onData, strategy }: { data: AlgoData; onDat
 
   // The switch shows this strategy's own session, state and position (never Mathi Strategy's).
   const view: AlgoData = { ...data, config, state: own.state, position: own.position, liveSession: own.liveSession, problems: own.problems };
-  const hold = config.exitManagement?.mode === "trend" ? `exit at ${config.maxHoldMinutes} min unless the trend agrees (at most ${config.exitManagement.maxHoldMinutes} min)` : config.maxHoldMinutes > 0 ? `exit after ${config.maxHoldMinutes} min` : "none";
 
   return (
     <div className="space-y-3">
       {error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{error}</p> : null}
       {own.problems.length ? <p className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro text-warning" role="alert">{own.problems.join(" ")}</p> : null}
 
-      {strategy === "MATHI_HOURLY" ? <HourlyRules data={data} onData={onData} /> : (
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
-        <div className="col-span-2"><p className="eyebrow">{name} — rules</p></div>
-        <Info label="Instrument" text={`${config.underlying} ATM CE / PE · ${strategy === "MATHI_BANK" ? "monthly expiry" : "nearest expiry"}`} />
-        <Info label="Target" text={`+${config.target.value}% of the option premium`} tone="text-profit" />
-        <Info label="Stop-loss" text={config.stopLoss === false ? "None" : `${config.stop.value}%`} />
-        <Info label="Trades" text={`${config.maxTrades} per session`} />
-        <Info label="Confirmation" text={config.confirmation?.mode === "retest" ? "Retest" : config.confirmation?.mode ?? "Single"} />
-        <Info label="Square-off" text={config.squareOff ? `${config.squareOff} IST` : "Session close"} />
-        <div className="col-span-2 min-w-0"><Info label="Time exit" text={hold} /></div>
-        <p className="col-span-2 text-micro leading-snug text-muted">{SUMMARY[strategy]} Paper trading only — no real orders.</p>
-      </dl>
-      )}
+      <HourlyRules data={data} onData={onData} />
 
       {live ? (
         <>
