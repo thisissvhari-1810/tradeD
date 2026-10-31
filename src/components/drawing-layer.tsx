@@ -1392,6 +1392,11 @@ function pushPosition(marks: Mark[], drawing: Drawing, xy: (point: Point) => { x
   const below = (y: number) => fit(y + 15);
   const targetOutside = kind === "long" ? above(targetY) : below(targetY);
   const stopOutside = kind === "long" ? below(stopY) : above(stopY);
+  // A strategy's own reference zone (read-only, "algo:" ids) carries its own label: it has no index target or stop.
+  if (drawing.id.startsWith("algo:") && drawing.text) {
+    marks.push({ id: `${drawing.id}-label`, kind: "text", x: x + 6, y: targetOutside, text: drawing.text, color: "var(--text)", selected: false, size: 11 });
+    return;
+  }
   marks.push({ id: `${drawing.id}-target`, kind: "text", x: x + 6, y: targetOutside, text: `Target ${price(geometry.target)} · ${stats.reward >= 0 ? "+" : "−"}${price(Math.abs(stats.reward))} (${stats.rewardPercent.toFixed(2)}%)`, color: "var(--profit)", selected: false, size: 11 });
   marks.push({ id: `${drawing.id}-stop`, kind: "text", x: x + 6, y: stopOutside, text: `Stop ${price(geometry.stop)} · ${stats.risk >= 0 ? "−" : "+"}${price(Math.abs(stats.risk))} (${stats.riskPercent.toFixed(2)}%)`, color: "var(--loss)", selected: false, size: 11 });
   marks.push({ id: `${drawing.id}-ratio`, kind: "text", x: x + 6, y: fit(entryY - 4), text: `${kind === "long" ? "Long" : "Short"} · entry ${price(geometry.entry)} · R:R ${stats.ratio == null ? "—" : stats.ratio.toFixed(2)}`, color: "var(--text)", selected: false, size: 11 });

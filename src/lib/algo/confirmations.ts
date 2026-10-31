@@ -1,3 +1,4 @@
+import type { EntryType } from "./signals";
 import { ema } from "@/lib/market/indicators";
 import type { Candle } from "./lines";
 import { strongCandle, volumeCheck, type Direction, type StrategyId } from "./patterns";
@@ -46,6 +47,8 @@ export type TradeSetup = {
   trail?: boolean;
   risk?: number;
   score?: number;
+  /** Which entry path confirmed the setup (hold, retest, or a strong breakout without a retest). */
+  entryType?: EntryType;
 };
 
 export const CONFIRMATION_LABEL: Record<ConfirmationCategory, string> = { price: "Price action", level: "Breakout level", candle: "Candle", volume: "Volume", momentum: "Momentum", risk: "Risk / exit" };

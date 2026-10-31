@@ -93,6 +93,7 @@ const NAV: NavItem[] = [
   { href: "/funds", label: "Money", icon: Wallet, feature: "portfolio" },
   { href: "/markets", label: "Markets", icon: LineChart, rail: false },
   { href: "/alerts", label: "Alerts", icon: Bell, rail: false },
+  { href: "/backtests", label: "Backtests", title: "Mathi Strategy index backtests", icon: FlaskConical, rail: false },
   { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
 ];
 

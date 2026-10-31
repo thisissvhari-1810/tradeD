@@ -14,7 +14,7 @@ import { dhanExpiredOptions, dhanOptionSession } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, isVariantStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity, type VariantStrategy } from "@/lib/algo/exclusive";
-import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, MATHI_BANK_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI5_DEFAULTS, MATHI_BANK_DEFAULTS, MATHI_HOURLY_DEFAULTS, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -199,20 +199,27 @@ function primaryConfigOf(session: { primaryConfig: Prisma.JsonValue | null }): A
 }
 
 /**
- * Strategies run by Mathi Strategy's engine with their own settings, live paper state, order keys and stored events
- * (never Mathi Strategy's): Mathi 5% (+5% target) and Mathi Bank Strategy (Mathi 3% on BANKNIFTY).
+ * Strategies with their own settings, live paper state, order keys and stored events (never Mathi Strategy's): Mathi 5%
+ * (+5% target) and Mathi Bank Strategy (Mathi 3% on BANKNIFTY) on Mathi Strategy's engine, and Mathi Hourly Zone
+ * Strategy on its own engine (its defaults carry engine "hourly"), all through the same runner and execution.
  */
 const VARIANTS = {
   MATHI_5: { defaults: MATHI5_DEFAULTS, config: "mathi5Config", state: "mathi5State", mode: "MATHI_5", run: "M5" },
   MATHI_BANK: { defaults: MATHI_BANK_DEFAULTS, config: "mathiBankConfig", state: "mathiBankState", mode: "MATHI_BANK", run: "MB" },
+  MATHI_HOURLY: { defaults: MATHI_HOURLY_DEFAULTS, config: "mathiHourlyConfig", state: "mathiHourlyState", mode: "MATHI_HOURLY", run: "MH" },
 } as const satisfies Record<VariantStrategy, { defaults: AlgoConfig; config: string; state: string; mode: string; run: string }>;
-type VariantColumns = { mathi5Config: Prisma.JsonValue | null; mathi5State: Prisma.JsonValue | null; mathiBankConfig: Prisma.JsonValue | null; mathiBankState: Prisma.JsonValue | null };
+type VariantColumns = { mathi5Config: Prisma.JsonValue | null; mathi5State: Prisma.JsonValue | null; mathiBankConfig: Prisma.JsonValue | null; mathiBankState: Prisma.JsonValue | null; mathiHourlyConfig: Prisma.JsonValue | null; mathiHourlyState: Prisma.JsonValue | null };
 
-/** A variant's own saved settings (or its defaults); live paper trading. Mathi Bank Strategy always trades BANKNIFTY. */
+/** A variant's settings read with its own engine and fixed underlying (Mathi Bank: BANKNIFTY; Mathi Hourly Zone: NIFTY). */
+function variantSettings(raw: unknown, strategy: VariantStrategy): AlgoConfig {
+  const defaults = VARIANTS[strategy].defaults;
+  const read: AlgoConfig = { ...readAlgoConfig(raw && typeof raw === "object" ? { ...raw, engine: defaults.engine } : defaults), engine: defaults.engine, mode: "PAPER" };
+  return strategy === "MATHI_5" ? read : { ...read, underlying: defaults.underlying };
+}
+
+/** A variant's own saved settings (or its defaults); live paper trading. */
 function variantConfigOf(session: VariantColumns, strategy: VariantStrategy): AlgoConfig {
-  const saved = session[VARIANTS[strategy].config];
-  const config: AlgoConfig = { ...readAlgoConfig(saved && typeof saved === "object" ? saved : VARIANTS[strategy].defaults), engine: "existing", mode: "PAPER" };
-  return strategy === "MATHI_BANK" ? { ...config, underlying: "BANKNIFTY" } : config;
+  return variantSettings(session[VARIANTS[strategy].config], strategy);
 }
 
 /** A variant's live paper-trading state (its own, never Mathi Strategy's). */
@@ -473,6 +480,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   const liveSession = await liveSessionView(session.id, config, state, unrealized);
   const mathi5 = await variantView(user, session, "MATHI_5");
   const mathiBank = await variantView(user, session, "MATHI_BANK");
+  const mathiHourly = await variantView(user, session, "MATHI_HOURLY");
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
@@ -494,6 +502,8 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     /** Mathi 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
     mathi5,
     mathiBank,
+    /** Mathi Hourly Zone Strategy — 5%: the same view, on its own engine. */
+    mathiHourly,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
@@ -613,9 +623,8 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
       case "save": {
         if (isVariantStrategy(command.strategy)) {
           const strategy = command.strategy;
-          const read: AlgoConfig = { ...readAlgoConfig(command.config), engine: "existing", mode: "PAPER" };
-          // Mathi Bank Strategy always trades BANKNIFTY.
-          const next: AlgoConfig = strategy === "MATHI_BANK" ? { ...read, underlying: "BANKNIFTY" } : read;
+          // Each variant keeps its own engine; Mathi Bank Strategy always trades BANKNIFTY, Mathi Hourly Zone NIFTY.
+          const next = variantSettings(command.config, strategy);
           const problems = algoConfigProblems(next);
           if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
           if (variantStateOf(current, strategy).position && next.underlying !== variantConfigOf(current, strategy).underlying) throw new AppError(`Exit the open ${STRATEGY_NAME[strategy]} position before changing the underlying.`, 409);
@@ -877,7 +886,7 @@ export async function tickAllSessions(): Promise<{ ran: number; checks: Schedule
   const userOf = (row: Row["user"]): SessionUser => ({ id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt });
   return runScheduledChecks<Row>(sessions, {
     id: (session) => session.id,
-    strategies: ["MATHI_5", "MATHI_BANK", "MATHI"],
+    strategies: ["MATHI_5", "MATHI_BANK", "MATHI_HOURLY", "MATHI"],
     stateOf: (session, strategy) => (strategy === "MATHI" ? stateOf(session) : variantStateOf(session, strategy)),
     withLease,
     reload: (id) => prisma.algoSession.findUniqueOrThrow({ where: { id }, include }),

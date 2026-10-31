@@ -15,10 +15,10 @@ import { openingRange as buildOpeningRange, openingRangeBreak, sessionTrend, ses
 
 /** The existing Algo Trade's setups (each can be switched on / off in its settings). */
 export type ExistingStrategyId = "line" | "trendline" | "w" | "m" | "orb" | "bounce" | "rejection";
-/** Every signal source; "primary" is "Algo - Primary Strategy" (its own feature, not one of the toggles). */
-export type StrategyId = ExistingStrategyId | "primary";
+/** Every signal source; "primary" is "Algo - Primary Strategy" and "hourly" Mathi Hourly Zone Strategy (their own features, not toggles). */
+export type StrategyId = ExistingStrategyId | "primary" | "hourly";
 export const STRATEGY_IDS: ExistingStrategyId[] = ["line", "trendline", "orb", "bounce", "rejection", "w", "m"];
-export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern", orb: "Opening-range breakout", bounce: "Support bounce", rejection: "Resistance rejection", primary: "ORB + VWAP (Primary)" };
+export const STRATEGY_LABEL: Record<StrategyId, string> = { line: "Line break", trendline: "Trendline breakout", w: "W pattern", m: "M pattern", orb: "Opening-range breakout", bounce: "Support bounce", rejection: "Resistance rejection", primary: "ORB + VWAP (Primary)", hourly: "Hourly zone" };
 export type Direction = "CALL" | "PUT";
 
 export type PatternSettings = {
@@ -144,9 +144,11 @@ export type MarketAnalysis = {
   orb?: OpeningRange | null;
   /** Recently broken trendlines, up to the candle that broke them. */
   brokenLines?: Array<Trendline & { brokenAt: { time: number; price: number; close: number } }>;
-  strategies: Record<ExistingStrategyId, StrategyStatus> & { primary?: StrategyStatus };
+  strategies: Record<ExistingStrategyId, StrategyStatus> & { primary?: StrategyStatus; hourly?: StrategyStatus };
   /** Algo - Primary Strategy: its opening range, VWAP / TWAP, trend and the conditions checked last. */
   primary?: import("./primary").PrimaryState | null;
+  /** Mathi Hourly Zone Strategy: the hourly candles, every pair checked today and the trades taken on them. */
+  hourly?: import("./hourly-zone").HourlyState | null;
 };
 
 const round = (value: number) => Math.round(value * 100) / 100;
@@ -272,7 +274,7 @@ function breakoutOn(candles: Candle[], from: number, direction: Direction, level
 export function analyzeMarket(input: { candles: Candle[]; sessionOpen: number; observationMinutes: number; settings: Partial<PatternSettings>; enabled: Partial<Record<StrategyId, boolean>>; lineDecision?: { direction: Direction | null; status: string; trigger: number | null; lastSignal: { time: number; direction: Direction } | null }; zones?: Zone[] }): { analysis: MarketAnalysis; signals: StrategySignal[] } {
   const { candles, sessionOpen } = input;
   const settings: PatternSettings = { ...PATTERN_DEFAULTS, ...input.settings };
-  const enabled: Record<StrategyId, boolean> = { primary: false, line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false, ...input.enabled };
+  const enabled: Record<StrategyId, boolean> = { primary: false, hourly: false, line: false, trendline: false, w: false, m: false, orb: false, bounce: false, rejection: false, ...input.enabled };
   const observationEnd = sessionOpen + input.observationMinutes * 60;
   const last = candles.at(-1) ?? null;
   const asOf = last ? last.time + 60 : sessionOpen;

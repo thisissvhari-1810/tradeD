@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { readAlgoConfig } from "@/lib/algo/config";
-import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "@/lib/algo/runner";
+import { ALGO_DEFAULTS, TICK, type AlgoConfig, type AlgoState } from "@/lib/algo/runner";
 import { strategyLines, type Candle } from "@/lib/algo/lines";
 import { createReplayAdapter, simulateSession } from "@/lib/algo/replay-adapter";
 import { expiredChain, expiredTape, mergeRolling, rollingRequest, ROLLING_OFFSETS, type RollingSide } from "@/lib/algo/expired-options";
@@ -86,12 +86,7 @@ async function dhan(pathname: string, body: Record<string, unknown>, label: stri
     if (response.status === 401 || response.status === 403 || /DH-90[123]/.test(text)) {
       throw new Fatal(`Dhan refused the request (${response.status}): the access token is invalid or expired, or the Data API is not enabled. ${text.slice(0, 160)}`);
     }
-    // "No data" answers are cached as empty so they are not asked again.
-    if (response.status === 400 && /DH-905|DH-907|no data/i.test(text)) {
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify({ path: pathname, body, fetchedAt: new Date().toISOString(), data: null, note: text.slice(0, 300) }));
-      return null;
-    }
+    // Only successful answers are cached: a refusal (DH-905 is "bad values for parameters", not "no data") is an error.
     if ((response.status === 429 || response.status >= 500) && attempt < 6) { await sleep(3_000 * (attempt + 1)); continue; }
     throw new Error(`${pathname} ${response.status} ${text.slice(0, 200)}`);
   }
@@ -118,24 +113,18 @@ async function indexData(spec: IndexSpec) {
 const rowsOf = (data: unknown, side: RollingSide) => ((data as { data?: Record<string, { timestamp?: number[]; strike?: number[]; spot?: number[] } | null> } | null)?.data?.[side === "CALL" ? "ce" : "pe"]) ?? null;
 
 /**
- * The expired-options history: every strike offset ATM−10 … ATM+10, CALL and PUT, nearest monthly expiry. The documented
- * limit is 30 days a request; some accounts get only two days, so a whole-window ATM probe decides the window size.
+ * The expired-options history: every strike offset ATM−10 … ATM+10, CALL and PUT, nearest monthly expiry. The docs give
+ * 30 days a request with toDate exclusive; this account (2026-10-28) is refused (DH-905) for any span over one day and
+ * gets both dates back (toDate inclusive), so each request covers two calendar days: [day, day + 1].
  */
 async function optionData(spec: IndexSpec, sessions: string[]) {
   const windows: Array<[string, string]> = [];
-  for (let start = FROM; start <= TO; start = addDays(start, 30)) windows.push([start, addDays(start, 30) > addDays(TO, 1) ? addDays(TO, 1) : addDays(start, 30)]);
-  const body = (offset: string, side: RollingSide, from: string, to: string) => rollingRequest({ underlyingSecurityId: spec.dhanIndexId, offset, side, from, to, cycle: spec.cycle });
-  const probeDays = new Set<string>();
-  for (const [from, to] of windows) for (const time of rowsOf(await dhan("/charts/rollingoption", body("ATM", "CALL", from, to), `${spec.symbol}/rolling`), "CALL")?.timestamp ?? []) probeDays.add(istDay(time));
-  const covered = sessions.filter((day) => probeDays.has(day)).length;
-  const mode = covered >= sessions.length - 1 ? "range" : "two-day";
-  if (mode === "two-day") {
-    windows.length = 0;
-    for (let start = FROM; start <= TO; start = addDays(start, 2)) {
-      const end = addDays(start, 2) > addDays(TO, 1) ? addDays(TO, 1) : addDays(start, 2);
-      if (sessions.some((day) => day >= start && day < end)) windows.push([start, end]);
-    }
+  for (let start = FROM; start <= TO; start = addDays(start, 2)) {
+    const end = addDays(start, 1) > TO ? TO : addDays(start, 1);
+    if (sessions.some((day) => day >= start && day <= end)) windows.push([start, end]);
   }
+  const mode = "two days a request, both dates inclusive";
+  const body = (offset: string, side: RollingSide, from: string, to: string) => rollingRequest({ underlyingSecurityId: spec.dhanIndexId, offset, side, from, to, cycle: spec.cycle });
   const responses: Array<{ side: RollingSide; data: unknown; offset: string }> = [];
   const failures: string[] = [];
   for (const [from, to] of windows) {
@@ -186,8 +175,11 @@ async function runIndex(spec: IndexSpec, report: { holidays: Set<string>; weekda
     return empty("NOT_BACKTESTED", `Expired-option history unavailable: ${error instanceof Error ? error.message : "request failed"}`, { dataQuality: { ...empty("NOT_BACKTESTED", "").dataQuality, ...quality } });
   }
   const { tapes } = options;
+  if (!tapes.size && options.failures.length) {
+    return empty("NOT_BACKTESTED", `All ${options.failures.length} option-history requests failed, e.g. ${options.failures[0]}`, { dataQuality: { ...empty("NOT_BACKTESTED", "").dataQuality, ...quality, requestFailures: options.failures } });
+  }
   const level = sessions.length ? split.byDay.get(sessions[0])![0].close : 0;
-  const expiries = resolveExpiries(tapes, spec.cycle, Math.max(5, level * 0.0002));
+  const expiries = resolveExpiries(tapes, spec.cycle, Math.max(5, level * 0.0002), new Set(sessions));
   const bars = index.daily.map((bar) => ({ ...bar, day: istDay(bar.time) })).sort((a, b) => a.time - b.time);
   const spotAt = new Map(index.minutes.map((candle) => [candle.time, candle.close]));
   const spotByDay = new Map<string, { checked: number; mismatched: number }>();
@@ -248,20 +240,29 @@ async function runIndex(spec: IndexSpec, report: { holidays: Set<string>; weekda
 
   const config = strategyConfig(spec.symbol);
   const base = await run(config);
-  const stress = await run(strategyConfig(spec.symbol, STRESS_SLIPPAGE_TICKS));
   const simulated = base.records.filter((record) => record.status === "SIMULATED").map((record) => record.date);
   const summary = summarize(base.trades, simulated, CAPITAL);
   const closed = base.trades.filter((trade) => trade.net != null && trade.exitPremium != null);
   const statutory = closed.reduce((sum, trade) => sum + statutoryCharges("BUY", trade.entryPremium, trade.quantity) + statutoryCharges("SELL", trade.exitPremium!, trade.quantity), 0);
   const problems = [...base.trades, ...base.shadow].map((trade) => ({ id: trade.id, problems: verifyTrade(trade, tapes.get(trade.date)?.get(`${trade.right}:${trade.strike}`) ?? [], config.slippageTicks, config.target.value) })).filter((item) => item.problems.length);
   const skipped = base.records.filter((record) => record.status === "SKIPPED");
-  const status: IndexResult["status"] = !simulated.length ? "NOT_BACKTESTED" : skipped.length ? "INCOMPLETE" : "BACKTESTED";
+  // Premiums that were never traded cannot be filled: when most entries fall in minutes where the chosen option did not
+  // trade (zero volume, the provider carrying the last price forward), the index is not backtested and its trades are kept
+  // only as diagnostics, in no figure.
+  const untradeable = summary.trades > 0 && summary.staleEntries / summary.trades > 0.5;
+  const status: IndexResult["status"] = !simulated.length || untradeable ? "NOT_BACKTESTED" : skipped.length ? "INCOMPLETE" : "BACKTESTED";
+  // The slippage stress keeps the same trades and adds the extra ticks to both fills (re-running the engine with other
+  // prices changes its later decisions — loss lock, regime switch — and is no longer a cost test).
+  const extraSlippage = closed.reduce((sum, trade) => sum + (STRESS_SLIPPAGE_TICKS - config.slippageTicks) * TICK * 2 * trade.quantity, 0);
   return {
     symbol: spec.symbol, name: spec.name, status,
-    reason: status === "NOT_BACKTESTED" ? (skipped[0]?.reason ?? "No session could be simulated.") : status === "INCOMPLETE" ? `${skipped.length} of ${sessions.length} sessions could not be priced: ${skipped.map((record) => record.date).join(", ")}.` : null,
-    premiumSource: simulated.length ? "Actual historical premiums: 1-minute candles of the expired contracts (Dhan /v2/charts/rollingoption, nearest monthly expiry), regrouped by strike." : "none",
-    spec, sessions: base.records, trades: base.trades, shadowTrades: base.shadow, summary,
-    sensitivity: { statutoryCharges: Math.round(statutory * 100) / 100, netAtStatutoryCharges: Math.round((summary.gross - statutory) * 100) / 100, stressSlippageTicks: STRESS_SLIPPAGE_TICKS, netAtStressSlippage: summarize(stress.trades, simulated, CAPITAL).net },
+    reason: untradeable
+      ? `${summary.staleEntries} of ${summary.trades} entries fall in minutes where the chosen ATM option did not trade (zero volume): Dhan's rows there carry an earlier price forward, so no realistic fill can be simulated. Eligible contracts are listed (monthly, lot ${spec.lotSize}), but the options were too illiquid for this strategy's entries.`
+      : status === "NOT_BACKTESTED" ? (skipped[0]?.reason ?? "No session could be simulated.") : status === "INCOMPLETE" ? `${skipped.length} of ${sessions.length} sessions could not be priced: ${skipped.map((record) => record.date).join(", ")}.` : null,
+    premiumSource: untradeable ? "Historical rows exist, but at the entries they are zero-volume carried-forward prices, not traded premiums." : simulated.length ? "Actual historical premiums: 1-minute candles of the expired contracts (Dhan /v2/charts/rollingoption, nearest monthly expiry), regrouped by strike." : "none",
+    spec, sessions: base.records, trades: untradeable ? [] : base.trades, shadowTrades: untradeable ? [] : base.shadow, summary: untradeable ? null : summary,
+    ...(untradeable ? { untradeableTrades: [...base.trades, ...base.shadow] } : {}),
+    sensitivity: untradeable ? null : { statutoryCharges: Math.round(statutory * 100) / 100, netAtStatutoryCharges: Math.round((summary.gross - statutory) * 100) / 100, stressSlippageTicks: STRESS_SLIPPAGE_TICKS, netAtStressSlippage: Math.round((summary.net - extraSlippage) * 100) / 100 },
     dataQuality: {
       ...quality, incompleteSessions: base.records.filter((record) => record.missingMinutes.length).map((record) => `${record.date} (${record.missingMinutes.length} min missing)`),
       offsetsWithData: options.offsetsWithData, requestFailures: options.failures, verification: { checked: base.trades.length + base.shadow.length, problems },
@@ -314,6 +315,7 @@ const report: IndexBacktestReport = {
   capital: CAPITAL, strategy, definitions: DEFINITIONS,
   limitations: [
     ...(fatal ? [`NOT RUN: ${fatal}`] : []),
+    "Dhan's expired-options endpoint refused (DH-905) any request spanning more than one day on this account and returned both dates of a one-day span, unlike its documentation (30 days, toDate exclusive); the data was fetched two calendar days at a time.",
     "Lot sizes are today's (Dhan instrument master, 2026-10-28): FINNIFTY 60, MIDCPNIFTY 120, NIFTYNXT50 25. No NSE lot-size revision is known inside the window, but this was not verified against the expired contracts (Dhan's history has no lot size).",
     "Premiums are 1-minute trade candles (no bid / ask history): fills assume the minute's close plus 1 tick at entry and the target (or the minute's close) less 1 tick at exit. A 5-tick slippage stress test is shown separately.",
     "Charges use the app's charge model (an estimate); a statutory-rate check (exchange 0.03503%, SEBI ₹10 / crore, stamp 0.003%, STT 0.1% on sells, GST 18%) is shown alongside. Verify against a contract note; if STT on options is now higher, charges rise by the difference on sell turnover.",
@@ -332,10 +334,10 @@ const folder = path.join(EXPORT_ROOT, `Mathi-3pct-Indices-${FROM}-to-${TO}`);
 mkdirSync(folder, { recursive: true });
 writeFileSync(path.join(folder, "results.json"), JSON.stringify(report, null, 1));
 const row = (cells: unknown[]) => cells.map(csvCell).join(",");
-const comparison = [row(["Index", "Status", "Data availability", "Trading sessions", "Total trades", "CE trades", "PE trades", "Target hits", "Win rate %", "Gross P&L", "Charges (est.)", "Net P&L", "Net return on deployed %", "Net return on ₹1,00,000 %", "Max drawdown", "Net at statutory charges", `Net at ${STRESS_SLIPPAGE_TICKS}-tick slippage`, "Reason"])];
+const comparison = [row(["Index", "Status", "Data availability", "Trading sessions", "Total trades", "CE trades", "PE trades", "Target hits", "Win rate %", "Gross P&L", "Charges (est.)", "Net P&L", "Conservative net P&L (target-capped fills)", "Net return on deployed %", "Net return on ₹1,00,000 %", "Max drawdown", "Net at statutory charges", `Net at ${STRESS_SLIPPAGE_TICKS}-tick slippage`, "Reason"])];
 for (const result of results) {
   const s = result.summary;
-  comparison.push(row([result.symbol, result.status, result.premiumSource, s?.sessions ?? 0, s?.trades ?? "", s?.ce ?? "", s?.pe ?? "", s?.targetHits ?? "", s?.winRate ?? "", s?.gross ?? "", s?.charges ?? "", s?.net ?? "", s?.returnOnDeployed ?? "", s?.returnOnCapital ?? "", s?.maxDrawdown ?? "", result.sensitivity?.netAtStatutoryCharges ?? "", result.sensitivity?.netAtStressSlippage ?? "", result.reason ?? ""]));
+  comparison.push(row([result.symbol, result.status, result.premiumSource, s?.sessions ?? 0, s?.trades ?? "", s?.ce ?? "", s?.pe ?? "", s?.targetHits ?? "", s?.winRate ?? "", s?.gross ?? "", s?.charges ?? "", s?.net ?? "", s?.netConservative ?? "", s?.returnOnDeployed ?? "", s?.returnOnCapital ?? "", s?.maxDrawdown ?? "", result.sensitivity?.netAtStatutoryCharges ?? "", result.sensitivity?.netAtStressSlippage ?? "", result.reason ?? ""]));
 }
 writeFileSync(path.join(folder, "01-comparison.csv"), `﻿${comparison.join("\r\n")}\r\n`);
 writeFileSync(path.join(folder, "02-trades-audit.csv"), auditCsv(results.flatMap((result) => result.trades)));
@@ -344,6 +346,29 @@ const sessionRows = [row(["Index", "Date", "Status", "Reason", "Index candles", 
 for (const result of results) for (const s of result.sessions) sessionRows.push(row([result.symbol, s.date, s.status, s.reason ?? "", s.indexCandles, s.missingMinutes.join(" "), s.optionStrikes, s.expiry?.expiry ?? "", s.expiry?.source ?? "", s.expiry?.calendar ?? "", s.spotChecked, s.spotMismatched, s.signals.detected, s.signals.confirmed, s.signals.falseBreakouts, s.signals.expired, s.signals.rejected, s.signals.entered, s.signals.shadow]));
 writeFileSync(path.join(folder, "04-sessions-data-quality.csv"), `﻿${sessionRows.join("\r\n")}\r\n`);
 writeFileSync(path.join(folder, "05-shadow-trades.csv"), auditCsv(results.flatMap((result) => result.shadowTrades)));
+writeFileSync(path.join(folder, "06-untradeable-diagnostics.csv"), auditCsv(results.flatMap((result) => result.untradeableTrades ?? [])));
+writeFileSync(path.join(folder, "README.md"), [
+  `# Mathi Strategy (+3%) — FINNIFTY, MIDCPNIFTY, NIFTY NEXT 50, ${FROM} to ${TO}`,
+  "",
+  `Generated ${report.generatedAt}. Paper backtest only; no orders were placed.`,
+  "",
+  ...results.map((result) => `- **${result.symbol}**: ${result.status}${result.reason ? ` — ${result.reason}` : ""}${result.summary ? ` (trades ${result.summary.trades}, net ₹${result.summary.net} after estimated charges)` : ""}`),
+  "",
+  "Files: `01-comparison.csv` (one row per index), `02-trades-audit.csv` (every real trade), `03-daily-pnl.csv`, `04-sessions-data-quality.csv`, `05-shadow-trades.csv` (regime switch off, no money), `results.json` (everything, read by the app's Backtests page).",
+  "",
+  "Reproduce (from TradeD/tradeD):",
+  "",
+  "```",
+  `DHAN_CLIENT_ID=<id> DHAN_ACCESS_TOKEN=<daily Data API token> npm run backtest:indices -- --from ${FROM} --to ${TO}`,
+  "```",
+  "",
+  "Downloaded data is cached in `.backtest-cache/dhan` (keyed by request), so a repeat run reads the same data and needs no token.",
+  "",
+  "## Limitations",
+  "",
+  ...report.limitations.map((item) => `- ${item}`),
+  "",
+].join("\n"));
 console.log(`Dhan requests ${requests}, cache hits ${cacheHits}. Written: ${path.join(RESULTS, "latest.json")} and ${folder}`);
 if (fatal) process.exitCode = 2;
 }

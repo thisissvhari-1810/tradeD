@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Candle } from "../src/lib/market/demo";
 import type { OptionChainView } from "../src/server/option-chain";
 import type { AlgoLine } from "../src/lib/algo/lines";
-import { ALGO_DEFAULTS, initialState, PRIMARY_DEFAULTS, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
+import { ALGO_DEFAULTS, initialState, PRIMARY_DEFAULTS, STRONG_BREAKOUT_DEFAULTS, strongBreakoutCheck, type AlgoConfig, type AlgoState } from "../src/lib/algo/runner";
 import { activityFeed, algoOrders, algoTrades, clampFill, minuteEnds, panelEvents, playGate, positionValuation, runDiagnostics, runStats, sessionComplete, skippedSignals, tradeMarkers, tradeSlots, tradeTimeline } from "../src/lib/algo/chart-replay";
 import { algoChartMarkers, MARKER_SIZE, SELECTED_MARKER_SIZE } from "../src/components/algo/algo-markers";
 import { money, rupeesOf } from "../src/components/algo/live-value";
@@ -1974,6 +1974,93 @@ describe("Mathi Strategy: line breakouts with 50% of the body, +3% target, no st
       expect(result.events.find((event) => event.key === `eval:${m(16)}`)?.message).toMatch(/^SIGNAL EXPIRED — no retest of 23150\.00 that held and moved on within 10 minutes/);
       expect(buys()).toHaveLength(0);
       expect(runStats(result.events).expired).toBe(1);
+    });
+
+    describe("strong breakout entry (retest mode, off unless enabled)", () => {
+      const strong = (patch: Partial<typeof STRONG_BREAKOUT_DEFAULTS> = {}): AlgoConfig => ({ ...retest, confirmation: { ...retest.confirmation, strongBreakout: { ...STRONG_BREAKOUT_DEFAULTS, enabled: true, ...patch } } });
+      // A break of the line at 5 and a strong continuation at 6 that never comes back to retest the line.
+      const callBreak = { 5: { open: LINE - 10, high: LINE + 13, low: LINE - 11, close: LINE + 12 }, 6: { open: LINE + 12, high: LINE + 22, low: LINE + 11, close: LINE + 21 } };
+      const putBreak = { 5: { open: LINE + 10, high: LINE + 11, low: LINE - 13, close: LINE - 12 }, 6: { open: LINE - 12, high: LINE - 11, low: LINE - 22, close: LINE - 21 } };
+
+      it("is off by default: Mathi Strategy's retest rules are unchanged (the same break only waits)", async () => {
+        expect(ALGO_DEFAULTS.confirmation.strongBreakout).toBeUndefined();
+        expect(STRONG_BREAKOUT_DEFAULTS.enabled).toBe(false);
+        const result = await run(session(callBreak, LINE - 10, LINE + 40, 7), { cursor: m(12), config: retest });
+        expect(result.events.find((event) => event.key === `eval:${m(6)}`)?.message).toMatch(/^WAITING — .*waiting for a retest of it\.$/);
+        expect(buys()).toHaveLength(0);
+      });
+
+      it("CALL: a strong bullish close above the breakout candle's high enters ATM CE without a retest, recorded as STRONG_BREAKOUT", async () => {
+        const result = await run(session(callBreak, LINE - 10, LINE + 21, 7), { cursor: m(12), config: strong() });
+        expect(result.events.find((event) => event.key === `eval:${m(6)}`)?.message).toMatch(/^STRONG BREAKOUT CONFIRMED — no retest needed: this bullish candle .* closed above the breakout candle's high 23163\.00/);
+        const entry = result.events.find((event) => event.kind === "ENTRY")!;
+        expect(entry).toMatchObject({ time: m(6), side: "CALL" });
+        expect(entry.setup?.entryType).toBe("STRONG_BREAKOUT");
+        expect(String(db.state.instruments[0].symbol)).toContain("|CE|");
+      });
+
+      it("PUT: the mirror image — a strong bearish close below the breakout candle's low enters ATM PE", async () => {
+        const result = await run(session(putBreak, LINE + 10, LINE - 21, 7), { cursor: m(12), config: strong() });
+        expect(result.events.find((event) => event.key === `eval:${m(6)}`)?.message).toMatch(/^STRONG BREAKOUT CONFIRMED — .*bearish candle .* closed below the breakout candle's low 23137\.00/);
+        expect(result.events.find((event) => event.kind === "ENTRY")).toMatchObject({ time: m(6), side: "PUT" });
+        expect(String(db.state.instruments[0].symbol)).toContain("|PE|");
+      });
+
+      it("an extended move is skipped (ENTRY SKIPPED — MOVE EXTENDED) and the setup keeps waiting for its retest", async () => {
+        // The distance guard needs 15 completed candles for its ATR: the break is at 20, the continuation at 21.
+        const result = await run(session({ 20: callBreak[5], 21: callBreak[6] }, LINE - 10, LINE + 21, 22), { cursor: m(26), config: strong({ maxDistanceAtr: 1 }) });
+        expect(result.events.find((event) => event.key === `eval:${m(21)}`)?.message).toMatch(/^ENTRY SKIPPED — MOVE EXTENDED: the continuation closed 21\.00 points past 23150\.00, more than 1 × ATR .* still waits for a retest of the line\.$/);
+        expect(buys()).toHaveLength(0);
+      });
+
+      it("a weak continuation (small body) does not qualify; a close back across the line cancels the setup and it is never entered later", async () => {
+        const weak = { ...callBreak, 6: { open: LINE + 12, high: LINE + 30, low: LINE + 11, close: LINE + 14 }, 7: { open: LINE + 14, high: LINE + 15, low: LINE - 6, close: LINE - 5 }, 8: { open: LINE - 5, high: LINE + 30, low: LINE - 6, close: LINE + 29 } };
+        const result = await run(session(weak, LINE - 10, LINE + 29, 9), { cursor: m(30), config: strong() });
+        expect(result.events.find((event) => event.key === `eval:${m(6)}`)?.message).toMatch(/^WAITING — .*waiting for a retest of it or a strong continuation\.$/);
+        expect(result.events.find((event) => event.key === `eval:${m(7)}`)?.message).toMatch(/^FALSE BREAKOUT — ENTRY CANCELLED/);
+        // Candle 8 is a new crossing (a new setup), not the old one: it only starts its own wait.
+        expect(result.events.find((event) => event.key === `eval:${m(8)}`)?.message).toMatch(/^SIGNAL DETECTED/);
+        expect(result.events.filter((event) => event.kind === "ENTRY").every((event) => event.time !== m(6) && event.time !== m(7))).toBe(true);
+      });
+
+      it("a repeated check of the same candles (reconnect / resume) never enters the same breakout twice", async () => {
+        const candles = session(callBreak, LINE - 10, LINE + 21, 7);
+        const first = await run(candles, { cursor: m(7), config: strong() });
+        const again = await run(candles, { state: first.state, processedThrough: first.processedThrough, cursor: m(7), config: strong() });
+        const later = await run(candles, { state: again.state, processedThrough: again.processedThrough, cursor: m(12), config: strong() });
+        expect([...first.events, ...again.events, ...later.events].filter((event) => event.kind === "ENTRY")).toHaveLength(1);
+        expect(buys()).toHaveLength(1);
+      });
+
+      it("the trend-channel entry filter is off by default and its setting is read back", () => {
+        expect(ALGO_DEFAULTS.filters.trendChannel).toBeUndefined();
+        expect(readAlgoConfig(ALGO_DEFAULTS).filters.trendChannel).toBeUndefined();
+        expect(readAlgoConfig({ ...ALGO_DEFAULTS, filters: { ...ALGO_DEFAULTS.filters, trendChannel: "channel" } }).filters.trendChannel).toBe("channel");
+        expect(readAlgoConfig({ ...ALGO_DEFAULTS, filters: { ...ALGO_DEFAULTS.filters, trendChannel: "structure" } }).filters.trendChannel).toBe("structure");
+        expect(readAlgoConfig({ ...ALGO_DEFAULTS, filters: { ...ALGO_DEFAULTS.filters, trendChannel: "sideways" } }).filters.trendChannel).toBeUndefined();
+      });
+
+      it("its settings are read back, validated, and only apply in retest mode", () => {
+        const saved = readAlgoConfig({ ...ALGO_DEFAULTS, confirmation: { ...ALGO_DEFAULTS.confirmation, strongBreakout: { enabled: true, minBodyPercent: 60, maxDistanceAtr: 1.5, trend: "both" } } });
+        expect(saved.confirmation.strongBreakout).toEqual({ enabled: true, minBodyPercent: 60, maxDistanceAtr: 1.5, trend: "both" });
+        expect(readAlgoConfig(ALGO_DEFAULTS).confirmation.strongBreakout).toBeUndefined();
+        expect(algoConfigProblems({ ...saved, confirmation: { ...saved.confirmation, strongBreakout: { ...saved.confirmation.strongBreakout!, maxDistanceAtr: 11 } } })).toContain("The strong-breakout maximum distance must be 0 to 10 ATRs.");
+      });
+
+      it("the trend guard skips a strong breakout against VWAP or the 9 / 21 EMA, for CALL and PUT alike", () => {
+        const flat = Array.from({ length: 30 }, (_, index) => ({ time: m(index), open: LINE + 50, high: LINE + 51, low: LINE + 49, close: LINE + 50 }));
+        const breakout = { time: m(30), open: LINE - 10, high: LINE + 13, low: LINE - 11, close: LINE + 12 };
+        const candle = { time: m(31), open: LINE + 12, high: LINE + 22, low: LINE + 11, close: LINE + 21 };
+        const candles = [...flat, breakout, candle];
+        const call = (trend: "vwap" | "ema" | "none") => strongBreakoutCheck({ side: "CALL", level: LINE, candle, breakout, candles, settings: { ...STRONG_BREAKOUT_DEFAULTS, enabled: true, trend } });
+        expect(call("none").ok).toBe(true);
+        expect(call("vwap")).toMatchObject({ ok: false, skip: expect.stringMatching(/^ENTRY SKIPPED — TREND AGAINST .*VWAP/) });
+        expect(call("ema")).toMatchObject({ ok: false, skip: expect.stringMatching(/9 EMA .* ≤ 21 EMA/) });
+        const mirror = (c: { time: number; open: number; high: number; low: number; close: number }) => ({ time: c.time, open: 2 * LINE - c.open, high: 2 * LINE - c.low, low: 2 * LINE - c.high, close: 2 * LINE - c.close });
+        const put = strongBreakoutCheck({ side: "PUT", level: LINE, candle: mirror(candle), breakout: mirror(breakout), candles: candles.map(mirror), settings: { ...STRONG_BREAKOUT_DEFAULTS, enabled: true, trend: "both" } });
+        expect(put).toMatchObject({ ok: false, skip: expect.stringMatching(/VWAP .*; 9 EMA .* ≥ 21 EMA/) });
+        expect(strongBreakoutCheck({ side: "PUT", level: LINE, candle: mirror(candle), breakout: mirror(breakout), candles: candles.map(mirror), settings: { ...STRONG_BREAKOUT_DEFAULTS, enabled: true } }).ok).toBe(true);
+      });
     });
 
     it("with the line exit switched on, a trade whose setup is invalidated exits on that close", async () => {

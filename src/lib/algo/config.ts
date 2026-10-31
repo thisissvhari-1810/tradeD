@@ -1,10 +1,11 @@
 import { ALL_LINE_TYPES, type CustomLevel, type LineType } from "./lines";
 import { protectiveProblem, type Protective } from "./options";
-import { ALGO_DEFAULTS, type AlgoConfig, type AlgoState } from "./runner";
+import { ALGO_DEFAULTS, STRONG_BREAKOUT_DEFAULTS, type AlgoConfig, type AlgoState, type StrongBreakoutSettings } from "./runner";
 import { EXIT_MANAGEMENT_DEFAULTS, type ExitManagement } from "./trend-exit";
 import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
 import { ALLOCATION_DEFAULTS, RISK_DEFAULTS, type AllocationSettings, type RiskSettings } from "./sizing";
 import { PRIMARY_SETTINGS_DEFAULTS, type PrimarySettings } from "./primary";
+import { HOURLY_SETTINGS_DEFAULTS, type HourlySettings } from "./hourly-zone";
 
 /**
  * Reads and validates Algo settings (the server applies this to every save, so limits are never only a
@@ -101,8 +102,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     minScore: Number.isFinite(num(row.minScore)) ? num(row.minScore) : ALGO_DEFAULTS.minScore,
     // Mathi Strategy trades strategy-line crossings only; the other setups cannot be switched on for it.
     strategies: mathi ? { ...ALGO_DEFAULTS.strategies } : strategiesOf(row.strategies),
-    engine: row.engine === "primary" ? "primary" : "existing",
+    engine: row.engine === "primary" ? "primary" : row.engine === "hourly" ? "hourly" : "existing",
     primary: primaryOf(row.primary),
+    ...(row.engine === "hourly" ? { hourly: hourlyOf(row.hourly) } : {}),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
@@ -184,17 +186,20 @@ function filtersOf(value: unknown): AlgoConfig["filters"] {
     secondCandle: typeof row.secondCandle === "boolean" ? row.secondCandle : fallback.secondCandle,
     momentum: typeof row.momentum === "boolean" ? row.momentum : fallback.momentum,
     maxEntryPremium: Number.isFinite(num(row.maxEntryPremium)) ? num(row.maxEntryPremium) : (fallback.maxEntryPremium ?? 0),
+    minEntryPremium: Number.isFinite(num(row.minEntryPremium)) ? num(row.minEntryPremium) : (fallback.minEntryPremium ?? 0),
     vwapAlign: typeof row.vwapAlign === "boolean" ? row.vwapAlign : (fallback.vwapAlign ?? false),
     momentum5: typeof row.momentum5 === "boolean" ? row.momentum5 : (fallback.momentum5 ?? false),
     minAtrPoints: Number.isFinite(num(row.minAtrPoints)) ? num(row.minAtrPoints) : (fallback.minAtrPoints ?? 0),
     maxLineCrossings: Number.isFinite(num(row.maxLineCrossings)) ? num(row.maxLineCrossings) : (fallback.maxLineCrossings ?? 0),
     minAdx: Number.isFinite(num(row.minAdx)) ? num(row.minAdx) : (fallback.minAdx ?? 0),
     supertrend: typeof row.supertrend === "boolean" ? row.supertrend : (fallback.supertrend ?? false),
+    ...(row.trendChannel === "structure" || row.trendChannel === "channel" ? { trendChannel: row.trendChannel } : {}),
     noChaseCandles: Number.isInteger(num(row.noChaseCandles)) && num(row.noChaseCandles) >= 0 && num(row.noChaseCandles) <= 10 ? num(row.noChaseCandles) : (fallback.noChaseCandles ?? 0),
     breakoutAtrMultiple: num(row.breakoutAtrMultiple) >= 0 && num(row.breakoutAtrMultiple) <= 5 ? num(row.breakoutAtrMultiple) : (fallback.breakoutAtrMultiple ?? 0),
     maxBreakoutCandleAtr: num(row.maxBreakoutCandleAtr) >= 0 && num(row.maxBreakoutCandleAtr) <= 20 ? num(row.maxBreakoutCandleAtr) : (fallback.maxBreakoutCandleAtr ?? 0),
     ...(num(row.maxVwapSlopeAgainstAtr) >= 0 && num(row.maxVwapSlopeAgainstAtr) <= 10 ? { maxVwapSlopeAgainstAtr: num(row.maxVwapSlopeAgainstAtr) } : {}),
     ...(num(row.maxEmaGapAgainstAtr) >= 0 && num(row.maxEmaGapAgainstAtr) <= 10 ? { maxEmaGapAgainstAtr: num(row.maxEmaGapAgainstAtr) } : {}),
+    ...(Array.isArray(row.maxDaysToExpiryByTrade) ? { maxDaysToExpiryByTrade: row.maxDaysToExpiryByTrade.slice(0, 10).map((value) => (value == null || !(num(value) >= 0) ? null : num(value))) } : {}),
   };
 }
 
@@ -206,6 +211,18 @@ function confirmationOf(value: unknown): AlgoConfig["confirmation"] {
     retestTolerancePercent: Number.isFinite(num(row.retestTolerancePercent)) ? num(row.retestTolerancePercent) : fallback.retestTolerancePercent,
     retestWindowMinutes: Number.isFinite(num(row.retestWindowMinutes)) ? num(row.retestWindowMinutes) : fallback.retestWindowMinutes,
     holdMustAgree: typeof row.holdMustAgree === "boolean" ? row.holdMustAgree : fallback.holdMustAgree,
+    ...(row.strongBreakout && typeof row.strongBreakout === "object" ? { strongBreakout: strongBreakoutOf(row.strongBreakout) } : {}),
+  };
+}
+
+function strongBreakoutOf(value: unknown): StrongBreakoutSettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const d = STRONG_BREAKOUT_DEFAULTS;
+  return {
+    enabled: row.enabled === true,
+    minBodyPercent: Number.isFinite(num(row.minBodyPercent)) ? num(row.minBodyPercent) : d.minBodyPercent,
+    maxDistanceAtr: Number.isFinite(num(row.maxDistanceAtr)) ? num(row.maxDistanceAtr) : d.maxDistanceAtr,
+    trend: row.trend === "vwap" || row.trend === "ema" || row.trend === "both" || row.trend === "none" ? row.trend : d.trend,
   };
 }
 
@@ -227,6 +244,104 @@ function primaryOf(value: unknown): PrimarySettings {
     confirmBars: pick("confirmBars"),
     continuation: typeof row.continuation === "boolean" ? row.continuation : d.continuation,
     supportBreak: typeof row.supportBreak === "boolean" ? row.supportBreak : d.supportBreak,
+  };
+}
+
+/** Mathi Hourly Zone Strategy's settings; unknown values fall back to the defaults (never loosened: validated below). */
+function hourlyOf(value: unknown): HourlySettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const d = HOURLY_SETTINGS_DEFAULTS;
+  const pick = (key: "dojiTolerance" | "zoneMinPoints" | "zoneMaxPoints" | "boxSize" | "boxMinPoints" | "skipWickPercent" | "skipWickPoints" | "maxRejectionWickPercent" | "maxLossWickPercent" | "minSecondBodyPercent" | "gapPoints" | "crossTolerance" | "redAgainstFlip" | "redRedDailyCall" | "redGreenDailyPut" | "greenRedPut" | "greenRedTolerance" | "thinWickPut" | "thinWickCall" | "dearFlipPremium" | "dearFlipBody" | "greenRedHighGap" | "greenRedDrawnWick" | "redRedWaitWick" | "redRedWaitBody" | "greenGreenWaitWick" | "redGreenOpenFlip" | "redRedWaitOppWick" | "redRedWaitOppPoints" | "redRedDrawnLowerWick" | "redRedDrawnUpperWick" | "wickPutPercent" | "wickPutTouch" | "wickCallAnyTrendShare" | "greenRedTrendMaxRange" | "redGreenBodyTolerance" | "redGreenWaitPremium" | "earlyExitMinutes" | "earlyExitPercent" | "protectArmPercent" | "protectLockPercent" | "ggWaitFirstHourMin" | "ggWaitFirstHourMax" | "callWaitDayMoveMin" | "callWaitDayMoveMax" | "dte3OppWick" | "maxOptionLevel" | "weakTargetPercent" | "weakBodyPoints" | "weakMinDaysToExpiry" | "expiryEarlyExitMinutes" | "expiryEarlyExitPercent" | "trendTolerance" | "redRedMaxLowerWick" | "wickCall" | "bodyCrossPoints" | "maxSessionLoss") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
+  return {
+    dojiTolerance: pick("dojiTolerance"),
+    zoneMinPoints: pick("zoneMinPoints"),
+    zoneMaxPoints: pick("zoneMaxPoints"),
+    skipCandle: row.skipCandle === "first" ? "first" : "second",
+    skipPart: row.skipPart === "body" || row.skipPart === "off" ? row.skipPart : row.skipPart === "wick" ? "wick" : d.skipPart,
+    skipSide: row.skipSide === "above" ? "above" : "against",
+    skipWickPercent: pick("skipWickPercent"),
+    skipWickPoints: pick("skipWickPoints"),
+    skipWickFor: row.skipWickFor === "both" ? "both" : row.skipWickFor === "short" ? "short" : d.skipWickFor,
+    pairStep: row.pairStep === "next" ? "next" : row.pairStep === "sliding" ? "sliding" : d.pairStep,
+    boxMode: row.boxMode === "range" || row.boxMode === "points" || row.boxMode === "wick" || row.boxMode === "off" ? row.boxMode : d.boxMode,
+    boxSkip: row.boxSkip !== false,
+    boxLongLowFree: typeof row.boxLongLowFree === "boolean" ? row.boxLongLowFree : d.boxLongLowFree,
+    boxCheck: row.boxCheck === "wick" ? "wick" : row.boxCheck === "body" ? "body" : d.boxCheck,
+    gapPoints: pick("gapPoints"),
+    dailyFallback: typeof row.dailyFallback === "boolean" ? row.dailyFallback : d.dailyFallback,
+    trendFilter: typeof row.trendFilter === "boolean" ? row.trendFilter : d.trendFilter,
+    trendTolerance: pick("trendTolerance"),
+    crossTolerance: pick("crossTolerance"),
+    redAgainstFlip: pick("redAgainstFlip"),
+    redRedDailyCall: pick("redRedDailyCall"),
+    redGreenDailyPut: pick("redGreenDailyPut"),
+    greenRedPut: pick("greenRedPut"),
+    greenRedTolerance: pick("greenRedTolerance"),
+    greenRedTrendFree: typeof row.greenRedTrendFree === "boolean" ? row.greenRedTrendFree : d.greenRedTrendFree,
+    greenRedAtMid: typeof row.greenRedAtMid === "boolean" ? row.greenRedAtMid : d.greenRedAtMid,
+    greenRedToleranceMode: row.greenRedToleranceMode === "daily" || row.greenRedToleranceMode === "all" ? row.greenRedToleranceMode : d.greenRedToleranceMode,
+    redRedMaxLowerWick: pick("redRedMaxLowerWick"),
+    wickCall: pick("wickCall"),
+    thinWickPut: pick("thinWickPut"),
+    thinWickCall: pick("thinWickCall"),
+    dearFlipPremium: pick("dearFlipPremium"),
+    dearFlipBody: pick("dearFlipBody"),
+    greenRedHighGap: pick("greenRedHighGap"),
+    greenRedDrawnWick: pick("greenRedDrawnWick"),
+    redRedWaitWick: pick("redRedWaitWick"),
+    redRedWaitBody: pick("redRedWaitBody"),
+    greenGreenWaitWick: pick("greenGreenWaitWick"),
+    redGreenOpenFlip: pick("redGreenOpenFlip"),
+    greenGreenWaitNoDearFlip: typeof row.greenGreenWaitNoDearFlip === "boolean" ? row.greenGreenWaitNoDearFlip : d.greenGreenWaitNoDearFlip,
+    greenRedDrawnWickTrend: typeof row.greenRedDrawnWickTrend === "boolean" ? row.greenRedDrawnWickTrend : d.greenRedDrawnWickTrend,
+    greenRedTrendMaxRange: pick("greenRedTrendMaxRange"),
+    redGreenBodyTolerance: pick("redGreenBodyTolerance"),
+    redGreenWaitPremium: pick("redGreenWaitPremium"),
+    earlyExitMinutes: pick("earlyExitMinutes"),
+    protectArmPercent: pick("protectArmPercent"),
+    ggWaitFirstHourMin: pick("ggWaitFirstHourMin"),
+    ggWaitFirstHourMax: pick("ggWaitFirstHourMax"),
+    callWaitDayMoveMin: pick("callWaitDayMoveMin"),
+    callWaitDayMoveMax: pick("callWaitDayMoveMax"),
+    dte3OppWick: pick("dte3OppWick"),
+    maxOptionLevel: pick("maxOptionLevel"),
+    weakTargetPercent: pick("weakTargetPercent"),
+    weakBodyPoints: pick("weakBodyPoints"),
+    weakMinDaysToExpiry: pick("weakMinDaysToExpiry"),
+    protectLockPercent: pick("protectLockPercent"),
+    earlyExitPercent: pick("earlyExitPercent"),
+    expiryEarlyExitMinutes: pick("expiryEarlyExitMinutes"),
+    expiryEarlyExitPercent: pick("expiryEarlyExitPercent"),
+    greenRedDailyTrend: typeof row.greenRedDailyTrend === "boolean" ? row.greenRedDailyTrend : d.greenRedDailyTrend,
+    greenGreenWaitBy: typeof row.greenGreenWaitBy === "string" && /^(\d\d:\d\d)?$/.test(row.greenGreenWaitBy) ? row.greenGreenWaitBy : d.greenGreenWaitBy,
+    redRedWaitOppWick: pick("redRedWaitOppWick"),
+    redRedWaitOppPoints: pick("redRedWaitOppPoints"),
+    redRedDrawnLowerWick: pick("redRedDrawnLowerWick"),
+    redRedDrawnUpperWick: pick("redRedDrawnUpperWick"),
+    wickPutPercent: pick("wickPutPercent"),
+    wickPutTouch: pick("wickPutTouch"),
+    wickPutTrend: typeof row.wickPutTrend === "boolean" ? row.wickPutTrend : d.wickPutTrend,
+    shortAboveTrend: row.shortAboveTrend === "first" || row.shortAboveTrend === "all" || row.shortAboveTrend === "check" ? row.shortAboveTrend : d.shortAboveTrend,
+    wickCallAnyTrendDays: typeof row.wickCallAnyTrendDays === "string" ? row.wickCallAnyTrendDays : d.wickCallAnyTrendDays,
+    wickCallAnyTrendShare: pick("wickCallAnyTrendShare"),
+    wickCallMode: row.wickCallMode === "trend" || row.wickCallMode === "override" ? row.wickCallMode : d.wickCallMode,
+    greenRedMode: row.greenRedMode === "all" || row.greenRedMode === "daily" ? row.greenRedMode : d.greenRedMode,
+    crossFlip: row.crossFlip === "daily" || row.crossFlip === "all" || row.crossFlip === "off" ? row.crossFlip : d.crossFlip,
+    fallbackTime: typeof row.fallbackTime === "string" && /^\d\d:\d\d$/.test(row.fallbackTime) ? row.fallbackTime : d.fallbackTime,
+    directionFrom: row.directionFrom === "close" || row.directionFrom === "color" || row.directionFrom === "position" ? row.directionFrom : d.directionFrom,
+    oppositeOnFail: row.oppositeOnFail === "wrongSide" || row.oppositeOnFail === "anyRule" || row.oppositeOnFail === "off" ? row.oppositeOnFail : d.oppositeOnFail,
+    maxRejectionWickPercent: pick("maxRejectionWickPercent"),
+    maxLossWickPercent: pick("maxLossWickPercent"),
+    minSecondBodyPercent: pick("minSecondBodyPercent"),
+    longLowBelowBoxPoints: Number.isFinite(num(row.longLowBelowBoxPoints)) ? num(row.longLowBelowBoxPoints) : d.longLowBelowBoxPoints,
+    bodyCrossPoints: pick("bodyCrossPoints"),
+    boxMinPoints: pick("boxMinPoints"),
+    boxSize: pick("boxSize"),
+    boxStop: row.boxStop === true,
+    boxTarget: row.boxTarget === true,
+    referencePrice: row.referencePrice === "close" || row.referencePrice === "open" || row.referencePrice === "bodyLow" ? row.referencePrice : d.referencePrice,
+    midpointExit: row.midpointExit !== false,
+    maxSessionLoss: pick("maxSessionLoss"),
   };
 }
 
@@ -264,6 +379,9 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (confirmation.mode === "retest") {
     if (!(confirmation.retestTolerancePercent >= 0 && confirmation.retestTolerancePercent <= 0.5)) problems.push("The retest tolerance must be 0% to 0.5% of the line.");
     if (!Number.isInteger(confirmation.retestWindowMinutes) || confirmation.retestWindowMinutes < 2 || confirmation.retestWindowMinutes > 120) problems.push("The retest window must be 2 to 120 minutes.");
+    const strong = confirmation.strongBreakout;
+    if (strong && (strong.minBodyPercent < 0 || strong.minBodyPercent > 100)) problems.push("The strong-breakout body must be 0 to 100% of the candle's range.");
+    if (strong && (strong.maxDistanceAtr < 0 || strong.maxDistanceAtr > 10)) problems.push("The strong-breakout maximum distance must be 0 to 10 ATRs.");
   }
   if (config.sizing === "capital") {
     if (!(config.allocation.percent > 0 && config.allocation.percent <= 100)) problems.push("Capital allocation must be above 0% and at most 100%.");
@@ -311,6 +429,29 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
     if (!(primary.breakBufferPercent >= 0 && primary.breakBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
     if (!Number.isInteger(primary.confirmBars) || primary.confirmBars < 0 || primary.confirmBars > 60) problems.push("The confirmation window must be 0 to 60 candles.");
   }
+  if (config.engine === "hourly") {
+    const hourly = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+    if (config.entryStart < "11:15") problems.push("Mathi Hourly Zone Strategy cannot enter before 11:15 IST (the first two hourly candles must be complete).");
+    if (config.underlying !== "NIFTY") problems.push("Mathi Hourly Zone Strategy trades NIFTY 50 options only.");
+    if (config.stopLoss !== false) problems.push("Mathi Hourly Zone Strategy has no fixed stop-loss: the hourly midpoint rule exits it.");
+    if (!(hourly.dojiTolerance >= 0 && hourly.dojiTolerance <= 50)) problems.push("The doji tolerance must be 0 to 50 points.");
+    if (!(hourly.zoneMinPoints >= 0 && hourly.zoneMinPoints <= 500)) problems.push("The zone's minimum distance must be 0 to 500 points.");
+    if (!(hourly.zoneMaxPoints >= 0 && hourly.zoneMaxPoints <= 2_000)) problems.push("The zone's maximum distance must be 0 (no limit) to 2,000 points.");
+    if (hourly.zoneMaxPoints > 0 && hourly.zoneMaxPoints <= hourly.zoneMinPoints) problems.push("The zone's maximum distance must be above its minimum.");
+    if (!(hourly.maxSessionLoss >= 0 && hourly.maxSessionLoss <= 100_000_000)) problems.push("The session-loss limit must be 0 (off) or a positive amount.");
+    if (hourly.boxMode === "range" && !(hourly.boxSize > 0 && hourly.boxSize <= 5)) problems.push("The position box must be above 0 and at most 5 × the first candle's range.");
+    if (hourly.boxMode === "points" && !(hourly.boxSize > 0 && hourly.boxSize <= 2_000)) problems.push("The position box must be above 0 and at most 2,000 points.");
+    if (!(hourly.skipWickPercent >= 0 && hourly.skipWickPercent <= 100)) problems.push("The wick share must be 0 to 100%.");
+    if (!(hourly.bodyCrossPoints >= 0 && hourly.bodyCrossPoints <= 100)) problems.push("The body crossing allowance must be 0 to 100 points.");
+    if (!(hourly.gapPoints >= 0 && hourly.gapPoints <= 100)) problems.push("The difference rule must be 0 (off) to 100 points.");
+    if (!(hourly.minSecondBodyPercent >= 0 && hourly.minSecondBodyPercent <= 100)) problems.push("The strong-candle body share must be 0 (off) to 100%.");
+    if (!(hourly.maxLossWickPercent >= 0 && hourly.maxLossWickPercent <= 100)) problems.push("The loss-side wick limit must be 0 (off) to 100%.");
+    if (!(hourly.maxRejectionWickPercent >= 0 && hourly.maxRejectionWickPercent <= 100)) problems.push("The rejection-wick limit must be 0 (off) to 100%.");
+    if (!(hourly.skipWickPoints >= 0 && hourly.skipWickPoints <= 1_000)) problems.push("The wick limit must be 0 (off) to 1,000 points.");
+    if (!(hourly.boxMinPoints >= 0 && hourly.boxMinPoints <= 1_000)) problems.push("The minimum box size must be 0 (off) to 1,000 points.");
+    if (hourly.boxStop && hourly.boxMode === "off") problems.push("The box stop needs a position box edge.");
+    if (hourly.boxTarget && hourly.boxMode === "off") problems.push("The box target needs a position box edge.");
+  }
   if (!Number.isInteger(config.observationMinutes) || config.observationMinutes < 0 || config.observationMinutes > 120) problems.push("The observation period must be 0 to 120 minutes.");
   const pattern = config.patterns;
   if (!Number.isInteger(pattern.pivotStrength) || pattern.pivotStrength < 1 || pattern.pivotStrength > 5) problems.push("Swing sensitivity must be 1 to 5 candles.");
@@ -326,6 +467,9 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
   if (!Number.isInteger(config.filters.levelBlockMinutes) || config.filters.levelBlockMinutes < 0 || config.filters.levelBlockMinutes > 240) problems.push("The level block after a stop must be 0 to 240 minutes.");
   const premiumLimit = config.filters.maxEntryPremium ?? 0;
   if (!(premiumLimit >= 0) || premiumLimit > 100_000) problems.push("The maximum entry premium must be 0 (off) or a positive amount.");
+  const premiumFloor = config.filters.minEntryPremium ?? 0;
+  if (!(premiumFloor >= 0) || premiumFloor > 100_000) problems.push("The minimum entry premium must be 0 (off) or a positive amount.");
+  if (premiumLimit > 0 && premiumFloor > premiumLimit) problems.push("The minimum entry premium must not be above the maximum.");
   if (config.regime?.enabled && (!Number.isInteger(config.regime.lookback) || config.regime.lookback < 3 || config.regime.lookback > 100)) problems.push("The regime switch look-back must be 3 to 100 trades.");
   if (!(config.filters.breakoutBufferPercent >= 0 && config.filters.breakoutBufferPercent <= 1)) problems.push("The breakout buffer must be 0% to 1%.");
   return problems;

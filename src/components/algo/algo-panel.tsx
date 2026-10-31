@@ -256,7 +256,7 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
         <div className="space-y-1.5 border-t border-border-soft p-2">
           <Field label="Underlying">
             <input className="compact-field w-[9.5rem] uppercase" list="algo-underlyings" value={draft.underlying} disabled={state.running} onChange={(event) => set({ underlying: event.target.value.toUpperCase().replace(/[^A-Z0-9&_-]/g, "") })} />
-            <datalist id="algo-underlyings">{["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX", chartSymbol].filter((item, index, list) => item && list.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist>
+            <datalist id="algo-underlyings">{["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "SENSEX", chartSymbol].filter((item, index, list) => item && list.indexOf(item) === index).map((item) => <option key={item} value={item} />)}</datalist>
           </Field>
           <Field label="Signal timeframe"><span className="w-[9.5rem] text-right text-text-2">1 minute (completed)</span></Field>
           <Field label="Expiry">
@@ -307,6 +307,13 @@ export function AlgoPanel({ chartSymbol }: { chartSymbol: string }) {
           <p className="text-micro text-muted">{draft.filters.breakoutBufferPercent ? `The close must be at least ${draft.filters.breakoutBufferPercent}% beyond the line (the signal and the hold).` : "0 = off: any close beyond the line counts."}</p>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Momentum must agree (9 / 21 EMA)</span><input type="checkbox" className="oc-check" aria-label="Momentum filter" checked={draft.filters.momentum} onChange={(event) => set({ filters: { ...draft.filters, momentum: event.target.checked } })} /></label>
           <p className="text-micro text-muted">Off by default. When on, a CALL needs the 9 EMA above the 21 EMA and a PUT below; a rejection says so.</p>
+          <Field label="Trend mode">
+            <select className="compact-field w-[9.5rem]" aria-label="Trend mode" value={draft.filters.trendChannel === "structure" ? "structure" : "off"} onChange={(event) => set({ filters: { ...draft.filters, trendChannel: event.target.value === "structure" ? "structure" : "off" } })}>
+              <option value="off">Retest only (current)</option>
+              <option value="structure">Retest + swing trend</option>
+            </select>
+          </Field>
+          <p className="text-micro text-muted">{draft.filters.trendChannel === "structure" ? "No CALL while the swings make lower highs and lows, no PUT while they make higher highs and lows (confirmed swings only). 12-month backtest: +₹3,12,612 vs +₹3,51,145 for retest only." : "Every retest that passes is traded, in any trend. 12-month backtest: +₹3,51,145 (the best tested)."}</p>
           <label className="flex min-h-7 cursor-pointer items-center justify-between gap-2"><span className="text-muted">Enter while the candle forms (live paper)</span><input type="checkbox" className="oc-check" aria-label="Enter while the candle forms" checked={draft.intrabar} disabled={confirmationMode(draft) !== "single"} onChange={(event) => set({ intrabar: event.target.checked })} /></label>
           <p className="text-micro text-muted">{confirmationMode(draft) === "single" ? "Live-price paper only, when the data feed provides the forming candle; once per candle. Replay uses 1-minute candles." : "Not used with breakout confirmation: a breakout is confirmed on completed candles only."}</p>
 

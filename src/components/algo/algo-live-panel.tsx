@@ -12,6 +12,7 @@ import { Confirm, type AlgoData } from "@/components/algo/algo-panel";
 import { ALGO_VIEW_EVENT, algoLivePanel, broadcastAlgoView } from "@/components/algo/algo-start-button";
 import { useSelectedStrategy } from "@/components/algo/algo-settings-sync";
 import { variantData } from "@/components/algo/algo-variant";
+import { HourlyToday } from "@/components/algo/algo-hourly";
 import { LiveMoney, rupeesOf } from "@/components/algo/live-value";
 import { isVariantStrategy, STRATEGY_NAME } from "@/lib/algo/exclusive";
 import { LIVE_STATUS_LABEL } from "@/lib/algo/live-session";
@@ -170,8 +171,8 @@ export function AlgoLivePanel() {
           </div>
         </dl>
 
-        {/* 4. The engine and the market, as the replay dashboard shows them */}
-        {state.running || state.analysis ? (
+        {/* 4. The engine and the market, as the replay dashboard shows them (Mathi Hourly Zone: its own pairs and trade) */}
+        {variant === "MATHI_HOURLY" ? <HourlyToday state={state} position={position} config={view.config} /> : state.running || state.analysis ? (
           <>
             <MathiStatus state={state} config={view.config} mode="Live-price paper trading" now={now ?? analysisTime} />
             <EngineCard state={state} config={view.config} date={state.sessionDate} now={now ?? analysisTime} unrealized={position?.unrealized ?? null} />

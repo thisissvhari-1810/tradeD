@@ -1,8 +1,9 @@
 import type { AlgoLine, Candle, CustomLevel, LineType } from "./lines";
 import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm, type AtmContract, type ChainInput, type Protective, type Right } from "./options";
-import { evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
+import { consolidate, evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
 import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type ExistingStrategyId, type MarketAnalysis, type PatternSettings, type StrategySignal } from "./patterns";
 import { PRIMARY_SETTINGS_DEFAULTS, primarySignal, type PrimarySettings } from "./primary";
+import { HOURLY_SETTINGS_DEFAULTS, hourlyCandles, hourlyMidpointDecision, hourlySignal, isFullHour, istClock as hourClock, type HourlySettings, type HourlyTrade, type HourlyTradeStatus } from "./hourly-zone";
 import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
 import { ema } from "@/lib/market/indicators";
 import { allocateLots, ALLOCATION_DEFAULTS, planTrade, RISK_DEFAULTS, type AllocationSettings, type CapitalPlan, type RiskSettings, type TradePlan } from "./sizing";
@@ -38,6 +39,8 @@ export type AlgoConfig = {
   cooldownMinutes: number;
   /** Line types that do not take part (all take part by default). */
   disabledLines: LineType[];
+  /** Optional (research; off by default): a line that only counts one way, e.g. or-high only "UP", or-low only "DOWN". */
+  lineDirections?: Partial<Record<LineType, "UP" | "DOWN">>;
   custom: CustomLevel[];
   /** Both directions on one candle: no entry (the only policy; it is shown in the log). */
   conflictPolicy: "block";
@@ -67,10 +70,12 @@ export type AlgoConfig = {
   minScore: number;
   /** Which strategies may signal: the line break and the price-action add-ons (the existing Algo Trade). */
   strategies: Record<ExistingStrategyId, boolean>;
-  /** Which feature's signals these settings drive: the existing Algo Trade, or Algo - Primary Strategy. */
-  engine: "existing" | "primary";
+  /** Which feature's signals these settings drive: the existing Algo Trade, Algo - Primary Strategy, or Mathi Hourly Zone Strategy. */
+  engine: "existing" | "primary" | "hourly";
   /** Algo - Primary Strategy (NIFTY ORB + VWAP + trend) settings; used only when engine is "primary". */
   primary: PrimarySettings;
+  /** Mathi Hourly Zone Strategy settings (zone, skip rule, pair schedule, session-loss limit); used only when engine is "hourly". */
+  hourly?: HourlySettings;
   /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
   observationMinutes: number;
   /** Settings format: 4 = the early-session strategy (9:15–10:30, risk sizing); 3 = trade filters; 2 = observation. */
@@ -88,6 +93,9 @@ export type AlgoConfig = {
     /** Do not buy an ATM option whose premium is above this (₹; 0 = off): a dear option needs a much bigger index move
      * to make the same % target, so those trades fail more often. */
     maxEntryPremium?: number;
+    /** Do not buy an ATM option whose premium is below this (₹; 0 = off): a cheap option means a very large quantity,
+     * and its premium can collapse to almost nothing near expiry. */
+    minEntryPremium?: number;
     /** CALL only with the signal close above the session VWAP, PUT only below (VWAP from completed candles; time-weighted
      * if the index has no volume). Off unless true. */
     vwapAlign?: boolean;
@@ -101,6 +109,12 @@ export type AlgoConfig = {
     minAdx?: number;
     /** CALL only while the Supertrend (10, 3) of NIFTY (1-minute) is up, PUT only while it is down. Off unless true. */
     supertrend?: boolean;
+    /**
+     * Trend channel, from the automatic trendline engine at the entry candle (confirmed swings only; off unless set).
+     * "structure": no CALL while the swings make lower highs and lows, no PUT while they make higher highs and lows.
+     * "channel": no CALL while the close is under a falling upper channel line, no PUT while it is over a rising lower one.
+     */
+    trendChannel?: "off" | "structure" | "channel";
     /** No-chase: skip a signal when the last this-many completed candles all moved in the trade's direction (a stretched
      * move usually pulls back first; 0 or absent = off). */
     noChaseCandles?: number;
@@ -113,6 +127,17 @@ export type AlgoConfig = {
     maxVwapSlopeAgainstAtr?: number;
     /** Skip while the 9 EMA is this many ATRs or more on the wrong side of the 21 EMA (absent = off). */
     maxEmaGapAgainstAtr?: number;
+    /** Skip when the bought contract's expiry is more than this many calendar days away (0 or absent = off): far from
+     * expiry the option is dear and +3% needs a bigger NIFTY move. */
+    maxDaysToExpiry?: number;
+    /** With farExpiryMinConfirmMinutes: on a contract this many calendar days or more from expiry (absent = off) ... */
+    farExpiryDays?: number;
+    /** ... the confirming candle must come at least this many minutes after the breakout candle (a quick retest far
+     * from expiry is skipped; 0 or absent = off). */
+    farExpiryMinConfirmMinutes?: number;
+    /** Rules by the day's trade number: entry i is the most calendar days to expiry for trade i + 1 (null = no limit),
+     * e.g. [null, 2, 1] keeps the 1st trade as it is, takes a 2nd only 0–2 days and a 3rd only 0–1 days from expiry. */
+    maxDaysToExpiryByTrade?: Array<number | null>;
   };
   /** Strikes in the money from ATM for the bought option (0 or absent = ATM; 1 = one listed strike ITM). */
   itmSteps?: number;
@@ -160,7 +185,27 @@ export type ConfirmationSettings = {
   retestWindowMinutes: number;
   /** Hold mode: the confirming candle must also move with the breakout (bullish for a CALL, bearish for a PUT). */
   holdMustAgree: boolean;
+  /** Retest mode: a second entry path for a break that continues strongly without a retest (off unless enabled). */
+  strongBreakout?: StrongBreakoutSettings;
 };
+
+/**
+ * Strong breakout entry (retest mode only): while a break waits for its retest, a completed candle that continues
+ * beyond the breakout candle (a bearish close below its low for a PUT, a bullish close above its high for a CALL)
+ * with a strong body confirms the setup without a retest. Optional guards: not too far past the broken level
+ * (in 14-minute ATRs) and the trend agreeing (session VWAP side and / or the 9 / 21 EMA).
+ */
+export type StrongBreakoutSettings = {
+  enabled: boolean;
+  /** The continuation candle's body as a share of its range, % (0 = any bearish / bullish candle). */
+  minBodyPercent: number;
+  /** Skip when the close is more than this many 14-minute ATRs past the broken level (0 = no limit). */
+  maxDistanceAtr: number;
+  /** Trend that must agree: none, the session VWAP side, the 9 / 21 EMA, or both. */
+  trend: "none" | "vwap" | "ema" | "both";
+};
+
+export const STRONG_BREAKOUT_DEFAULTS: StrongBreakoutSettings = { enabled: false, minBodyPercent: 50, maxDistanceAtr: 0, trend: "none" };
 
 export const ALGO_DEFAULTS: AlgoConfig = {
   underlying: "NIFTY",
@@ -260,6 +305,51 @@ export const PRIMARY_DEFAULTS: AlgoConfig = {
 export const MATHI5_DEFAULTS: AlgoConfig = { ...ALGO_DEFAULTS, target: { mode: "percent", value: 5 } };
 
 /**
+ * Mathi Hourly Zone Strategy — 5%: its own engine (the first two 1-hour NIFTY candles; see hourly-zone.ts) on the ATM
+ * CALL / PUT, +5% on the executed option premium, no stop-loss order, the hourly midpoint exit, entries from 11:15 IST,
+ * one trade a session by default and the 15:20 square-off. No regime switch, no time limit, no strategy lines.
+ */
+export const MATHI_HOURLY_DEFAULTS: AlgoConfig = {
+  ...ALGO_DEFAULTS,
+  engine: "hourly",
+  // F7, traded every day: the X30 direction rules with the 28/29 Oct 2026 fixes, an early exit (−5% after 30 minutes,
+  // −3% after 15 on expiry day), the red–green premium wait and three four-year correlation rules. Four years of NIFTY
+  // weekly options (Oct 2022 – Oct 2026, real premiums): 780 / 205, but 2022–23 and 2023–24 lose slightly; the
+  // market filter (`maxOptionLevel`) and protect-the-gain stay off so that every session trades.
+  hourly: {
+    ...HOURLY_SETTINGS_DEFAULTS,
+    referencePrice: "close", directionFrom: "position", zoneMinPoints: 10, skipPart: "body", skipCandle: "second", skipSide: "against", bodyCrossPoints: 0,
+    trendFilter: true, trendTolerance: 0.5, crossFlip: "all", crossTolerance: 2, redAgainstFlip: 10, greenRedPut: 3, greenRedMode: "daily",
+    wickCall: 60, wickCallMode: "trend", wickCallAnyTrendDays: "Mon,Tue", thinWickPut: 0.5, thinWickCall: 1.45,
+    dearFlipPremium: 175, dearFlipBody: 50,
+    greenRedHighGap: 20.73, greenRedDrawnWick: 6.12, redRedWaitWick: 22.25, redRedWaitBody: 15.95, greenGreenWaitWick: 13.15, greenGreenWaitBy: "12:15", greenGreenWaitNoDearFlip: true, greenRedDailyTrend: true, greenRedDrawnWickTrend: true, greenRedTrendMaxRange: 55,
+    // Early exit: still more than 5% down 30 minutes after the entry (3% after 15 minutes on the contract's expiry day)
+    // → sold. Shape rule 8 (two long drawn wicks) is off: a 41-variant sweep found both helped on both years.
+    earlyExitMinutes: 30, earlyExitPercent: 5, expiryEarlyExitMinutes: 15, expiryEarlyExitPercent: 3,
+    // Red drawn + green second candle above the mid with the option over ₹150: wait one hour. Chosen on 2025–26 and
+    // checked on 2024–25. With the two changes above: 198 / 45 (+1.43% a trade) and 229 / 18 (+3.89%).
+    redGreenWaitPremium: 150,
+    // Four-year correlation rules (checked on Oct 2022 – Oct 2026 with real option premiums): 777 / 205 against 766 / 216.
+    ggWaitFirstHourMin: 78.8, ggWaitFirstHourMax: 105.6, callWaitDayMoveMin: 25, callWaitDayMoveMax: 79.6, dte3OppWick: 34.8,
+    redGreenOpenFlip: 1.9, redRedWaitOppWick: 30.4, redRedWaitOppPoints: 20,
+    boxMode: "off", gapPoints: 0, dailyFallback: true, fallbackTime: "13:15",
+  },
+  target: { mode: "percent", value: 5 },
+  stopLoss: false,
+  maxTrades: 1,
+  cooldownMinutes: 0,
+  entryStart: "11:15",
+  // The last entry is 14:15 (the 12:15 + 13:15 pair); the 13:15 + 14:15 pair, decided at 15:15, is not traded.
+  entryCutoff: "14:15",
+  squareOff: "15:20",
+  maxHoldMinutes: 0,
+  exitManagement: { ...EXIT_MANAGEMENT_DEFAULTS, mode: "fixed" },
+  regime: { enabled: false, lookback: 30 },
+  confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" },
+  intrabar: false,
+};
+
+/**
  * Mathi Bank Strategy: Mathi Strategy v18 (the +3% version) on BANKNIFTY, with the ATM CE / PE of the nearest monthly
  * BANKNIFTY expiry (BANKNIFTY has no weekly options). Its own settings, live paper state, trades and results; any value
  * that differs from Mathi Strategy was chosen on BANKNIFTY history (see docs/mathi-bank-strategy.md).
@@ -302,6 +392,10 @@ export type OpenPosition = {
   highest?: number;
   /** Paper monitoring: the latest option candle (start time) already checked for the target / stop. */
   checkedThrough?: number | null;
+  /** Mathi Hourly Zone Strategy: the latest completed hour (its start) already checked by the midpoint rule. */
+  hourChecked?: number | null;
+  /** Mathi Hourly Zone Strategy: the latest NIFTY minute (its start) already checked against the box edges. */
+  boxChecked?: number | null;
   /** Paper monitoring: the time of the latest quote used; an older quote arriving later is ignored. */
   lastQuoteAt?: number | null;
   /** Trend exit management: the highest premium since the time checkpoint (for the trailing stop). */
@@ -343,6 +437,10 @@ export type AlgoState = {
   recovery: string | null;
   position: OpenPosition | null;
   pending: PendingEntry | null;
+  /** Hourly shape rule "wait one hour": the side bought at the next hourly decision (unix seconds) of this session. */
+  hourlyWait?: { session: string; at: number; side: Side; level: number; note: string } | null;
+  /** The session the market-condition filter (`maxOptionLevel`) closed to new hourly entries. */
+  hourlyBlockedSession?: string | null;
   lastSignal: { time: number; decision: string; explanation: string } | null;
   lastOrder: { time: number; status: string; message: string } | null;
   /** The latest market analysis (opening range, trend, trendlines, W / M, strategy statuses). */
@@ -367,6 +465,8 @@ export type AlgoState = {
   shadowToday?: number;
   /** Monitoring status of the latest check (paper trading). */
   monitor?: MonitorStatus | null;
+  /** Mathi Hourly Zone Strategy: today's trades with their reference, target, midpoint checks and outcome (for the chart). */
+  hourly?: { trades: HourlyTrade[] } | null;
 };
 
 export function initialState(sessionDate: string): AlgoState {
@@ -486,7 +586,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
 
   if (state.sessionDate !== input.sessionDate) {
     // A new trading day: daily counters reset; candles are only ever paired within one session.
-    Object.assign(state, { sessionDate: input.sessionDate, lastCandle: null, tradesToday: 0, realizedToday: 0, shadowToday: 0, riskLocked: false, lastEntryAt: null, awaiting: null, blockedLevels: [] });
+    Object.assign(state, { sessionDate: input.sessionDate, lastCandle: null, tradesToday: 0, realizedToday: 0, shadowToday: 0, riskLocked: false, lastEntryAt: null, awaiting: null, blockedLevels: [], ...(config.engine === "hourly" ? { hourly: null } : {}) });
   }
 
   await reconcile(state, input, log);
@@ -499,8 +599,16 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
     const fresh = state.lastCandle == null ? (latest ? [latest] : []) : completed.filter((candle) => candle.time > state.lastCandle!);
     for (const candle of fresh) {
       const index = completed.indexOf(candle);
-      const lineEvaluation = evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: config.crossRule === "body" ? (config.crossPercent ?? 0) / 100 : undefined });
-      const evaluation = coordinate(lineEvaluation, completed.slice(0, index + 1), input, state);
+      const lineEvaluation = directional(evaluateCandle({ previous: index > 0 ? completed[index - 1] : null, candle, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: config.crossRule === "body" ? (config.crossPercent ?? 0) / 100 : undefined }), config);
+      let evaluation = coordinate(lineEvaluation, completed.slice(0, index + 1), input, state);
+      // An hourly "wait one hour" rule: its side is bought at the next hourly decision, whatever that pair says.
+      const wait = state.hourlyWait;
+      if (wait && (wait.session !== input.sessionDate || candle.time + 60 > wait.at)) state.hourlyWait = null;
+      const waited = !!wait && wait.session === input.sessionDate && candle.time + 60 === wait.at;
+      if (wait && waited) {
+        const explanation = `${wait.note} Now at ${istClock(wait.at)} → ATM ${wait.side}.`;
+        evaluation = { ...evaluation, decision: wait.side, setupSide: wait.side, explanation, strategies: [{ id: `hourly:${wait.side}:${wait.at}:wait`, strategy: "hourly", direction: wait.side, time: candle.time, trigger: candle.close, level: wait.level, invalidation: wait.level, reason: explanation, volume: "NOT_REQUIRED" }] };
+      }
       const signal = evaluation.decision === "CALL" || evaluation.decision === "PUT";
       const isLatest = candle === latest && (adapter.kind === "replay" || now - (candle.time + 60) <= FRESH_SECONDS);
       let outcome = evaluation.explanation;
@@ -522,7 +630,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
           if (evaluation.audit) evaluation.audit = { ...evaluation.audit, decision: "REJECT", reason: `REJECTED — ${reasons[0]}` };
           outcome = `${evaluation.explanation} Not traded: evaluated late.`;
         } else {
-          const result = await tryEntry(state, input, evaluation, log);
+          const result = await tryEntry(state, input, evaluation, log, waited);
           outcome = `${evaluation.explanation} ${result.message}`;
           reasons = result.reasons;
           plan = result.plan ?? null;
@@ -549,7 +657,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
     const forming = input.candles.filter((candle) => candle.time + 60 > now && candle.time <= now && sameSession(candle.time, dayStart(input.sessionDate))).sort((a, b) => a.time - b.time).at(-1);
     if (config.intrabar && config.crossRule === "body" && adapter.kind === "paper" && forming && state.formingEntry !== forming.time && confirmationMode(config) === "single" && (state.lastCandle == null || forming.time > state.lastCandle)) {
       const previous = completed.at(-1) ?? null;
-      const lineEvaluation = evaluateCandle({ previous, candle: forming, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: (config.crossPercent ?? 0) / 100, forming: true });
+      const lineEvaluation = directional(evaluateCandle({ previous, candle: forming, lines: input.lines, enabled: (line) => !config.disabledLines.includes(line.type), now, fraction: (config.crossPercent ?? 0) / 100, forming: true }), config);
       if (lineEvaluation.decision === "CALL" || lineEvaluation.decision === "PUT") {
         const evaluation = coordinate(lineEvaluation, [...completed, forming], input, state);
         if (evaluation.decision === "CALL" || evaluation.decision === "PUT") {
@@ -563,6 +671,7 @@ export async function advance(previous: AlgoState, input: AdvanceInput): Promise
   }
 
   await confirm(state, input, log);
+  if (config.engine === "hourly") trackHourly(state, events);
 
   state.status = deriveStatus(state);
   return { state, events };
@@ -572,12 +681,215 @@ function dayStart(date: string) {
   return Math.floor(Date.parse(`${date}T03:45:00Z`) / 1000);
 }
 
-async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void): Promise<{ ok: boolean; message: string; reasons?: string[]; plan?: TradePlan | null; capital?: CapitalPlan | null }> {
+/**
+ * Hourly dear-option flip: when the ATM option is dear and the drawn candle was indecisive (a small body), the setup's
+ * other side is bought. Null when the rule is off or does not apply.
+ */
+async function dearFlip(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation): Promise<CandleEvaluation | null> {
+  const { config, adapter, now } = input;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+  if (config.engine !== "hourly" || !(settings.dearFlipPremium > 0)) return null;
+  const pair = state.analysis?.hourly?.pairs?.find((item) => item.decisionTime === evaluation.time + 60);
+  if (!pair) return null;
+  const range = pair.first.high - pair.first.low;
+  const body = range > 0 ? (Math.abs(pair.first.close - pair.first.open) / range) * 100 : 0;
+  if (body > settings.dearFlipBody) return null;
+  const right: Right = evaluation.decision === "CALL" ? "CE" : "PE";
+  let chain: ChainInput;
+  try { chain = await adapter.chain(right, config.expiry); } catch { return null; }
+  const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
+  if (!atm.ok) return null;
+  const price = money(atm.contract.ask + config.slippageTicks * TICK);
+  if (price < settings.dearFlipPremium) return null;
+  const other: Side = evaluation.decision === "CALL" ? "PUT" : "CALL";
+  const note = `Dear-option flip: the ATM ${evaluation.decision} costs ₹${price} (at least ₹${settings.dearFlipPremium}) and the drawn candle's body is ${body.toFixed(0)}% of its range (at most ${settings.dearFlipBody}%) → ATM ${other}.`;
+  return { ...evaluation, decision: other, setupSide: other, strategies: (evaluation.strategies ?? []).map((item) => ({ ...item, direction: other, reason: `${note} ${item.reason}` })), explanation: `${note} ${evaluation.explanation ?? ""}` };
+}
+
+/**
+ * Hourly shape rules on the side about to be bought (see `greenRedHighGap`, `greenRedDrawnWick`, `redRedWaitWick`,
+ * `redRedWaitBody`, `greenGreenWaitWick`, `redGreenOpenFlip`, `redRedWaitOppWick`, `redRedDrawnLowerWick`): the other
+ * side now, or a side bought one hour later (never past the entry cutoff). Null when none applies.
+ */
+function shapeRule(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, dearFlipped = false): { evaluation?: CandleEvaluation; note?: string; wait?: NonNullable<AlgoState["hourlyWait"]> } | null {
+  const { config } = input;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+  if (config.engine !== "hourly" || (evaluation.decision !== "CALL" && evaluation.decision !== "PUT")) return null;
+  const pair = state.analysis?.hourly?.pairs?.find((item) => item.decisionTime === evaluation.time + 60);
+  const a = pair?.first;
+  const b = pair?.second;
+  if (!pair || !a || !b) return null;
+  const side: Side = evaluation.decision;
+  const other: Side = side === "CALL" ? "PUT" : "CALL";
+  const below = b.close < b.open && b.close < pair.reference;
+  const above = b.close > b.open && b.close > pair.reference;
+  const fmt = (value: number) => value.toFixed(2);
+  const at = pair.decisionTime + 3600;
+  const make = (wait: Side, note: string) => istClock(at) > config.entryCutoff ? null : ({ wait: { session: input.sessionDate, at, side: wait, level: pair.reference, note: `${note} → wait one hour: ATM ${wait} at ${istClock(at)}.` } });
+  const flip = (note: string) => {
+    const text = `${note} → ATM ${other} instead of the ${side}.`;
+    return { note: text, evaluation: { ...evaluation, decision: other, setupSide: other, strategies: (evaluation.strategies ?? []).map((item) => ({ ...item, direction: other, reason: `${text} ${item.reason}` })), explanation: `${text} ${evaluation.explanation ?? ""}` } };
+  };
+  if (above && a.close > a.open && settings.greenGreenWaitWick > 0 && (!settings.greenGreenWaitBy || istClock(pair.decisionTime) <= settings.greenGreenWaitBy) && !(settings.greenGreenWaitNoDearFlip && dearFlipped)) {
+    const wick = side === "PUT" ? Math.min(b.open, b.close) - b.low : b.high - Math.max(b.open, b.close);
+    if (wick > settings.greenGreenWaitWick) return make(side, `Green–green shape: the second candle's ${side === "PUT" ? "lower" : "upper"} wick is ${fmt(wick)} points (over ${settings.greenGreenWaitWick})`);
+  }
+  if (above && a.close < a.open && side === "CALL" && settings.redGreenOpenFlip > 0) {
+    const gap = b.open - pair.reference;
+    // A near-perfect wick CALL (at least `wickCallAnyTrendShare` % of the lower wick below the mid) is not flipped.
+    const wick = Math.min(b.open, b.close) - b.low;
+    const share = wick > 0 && pair.reference > b.low ? (Math.min(pair.reference - b.low, wick) / wick) * 100 : 0;
+    const clean = settings.wickCallAnyTrendShare > 0 && share >= settings.wickCallAnyTrendShare;
+    if (gap > settings.redGreenOpenFlip && !clean) return flip(`Red–green shape: the second candle opened ${fmt(gap)} points above the mid ${fmt(pair.reference)} (over ${settings.redGreenOpenFlip})`);
+  }
+  // With the day's move for a side: NIFTY (the second candle's close) below the 09:15 open for a PUT, above it for a CALL.
+  const dayOpen = state.analysis?.hourly?.pairs?.at(0)?.first.open ?? null;
+  const withDay = (want: Side) => dayOpen != null && (want === "PUT" ? b.close < dayOpen : b.close > dayOpen);
+  if (below && a.close > a.open) {
+    const highGap = a.high - b.high;
+    const drawnWick = side === "CALL" ? Math.min(a.open, a.close) - a.low : a.high - Math.max(a.open, a.close);
+    const note = settings.greenRedHighGap > 0 && highGap > settings.greenRedHighGap ? `Green–red shape: the second candle's high ${fmt(b.high)} is ${fmt(highGap)} points below the drawn high ${fmt(a.high)} (over ${settings.greenRedHighGap})`
+      : settings.greenRedDrawnWick > 0 && drawnWick < settings.greenRedDrawnWick && (!settings.greenRedDrawnWickTrend || withDay(other) || (settings.greenRedTrendMaxRange > 0 && a.high - a.low >= settings.greenRedTrendMaxRange)) ? `Green–red shape: the drawn candle's ${side === "CALL" ? "lower" : "upper"} wick is ${fmt(drawnWick)} points (under ${settings.greenRedDrawnWick})` : null;
+    return note ? flip(note) : null;
+  }
+  if (below && a.close < a.open) {
+    const range = b.high - b.low;
+    const body = range > 0 ? (Math.abs(b.close - b.open) / range) * 100 : 0;
+    const wick = side === "PUT" ? Math.min(b.open, b.close) - b.low : b.high - Math.max(b.open, b.close);
+    if (settings.redRedWaitBody > 0 && body < settings.redRedWaitBody) return make(other, `Red–red shape: the second candle's body is ${body.toFixed(0)}% of its range (under ${settings.redRedWaitBody}%)`);
+    if (settings.redRedWaitWick > 0 && wick > settings.redRedWaitWick) return make(side, `Red–red shape: the second candle's ${side === "PUT" ? "lower" : "upper"} wick is ${fmt(wick)} points (over ${settings.redRedWaitWick})`);
+    if (side === "PUT") {
+      const lower = Math.min(b.open, b.close) - b.low;
+      const lowerShare = range > 0 ? (lower / range) * 100 : 0;
+      if (settings.redRedWaitOppWick > 0 && lowerShare > settings.redRedWaitOppWick && lower >= settings.redRedWaitOppPoints) return make(other, `Red–red shape: the second candle's lower wick is ${fmt(lower)} points, ${lowerShare.toFixed(0)}% of its range (over ${settings.redRedWaitOppWick}%)`);
+      const drawnLower = Math.min(a.open, a.close) - a.low;
+      const drawnUpper = a.high - Math.max(a.open, a.close);
+      // Not on rule 7's shape (a second candle whose lower wick is over its share), even when that one's point minimum is missed.
+      const wickShape = settings.redRedWaitOppWick > 0 && lowerShare > settings.redRedWaitOppWick;
+      if (settings.redRedDrawnLowerWick > 0 && !wickShape && drawnLower > settings.redRedDrawnLowerWick && drawnUpper > settings.redRedDrawnUpperWick) return make(side, `Red–red shape: the drawn candle has long wicks on both sides (lower ${fmt(drawnLower)}, upper ${fmt(drawnUpper)} points)`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Red drawn + green second candle closing above the mid (`redGreenWaitPremium`): an option that costs more than that
+ * is not bought now; the same side is bought one hour later. Null when it does not apply.
+ */
+async function redGreenWait(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation): Promise<{ evaluation?: CandleEvaluation; note?: string; wait?: NonNullable<AlgoState["hourlyWait"]> } | null> {
+  const { config, adapter, now } = input;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+  if (config.engine !== "hourly" || !(settings.redGreenWaitPremium > 0) || (evaluation.decision !== "CALL" && evaluation.decision !== "PUT")) return null;
+  const pair = state.analysis?.hourly?.pairs?.find((item) => item.decisionTime === evaluation.time + 60);
+  const a = pair?.first;
+  const b = pair?.second;
+  if (!pair || !a || !b || !(a.close < a.open && b.close > b.open && b.close > pair.reference)) return null;
+  const at = pair.decisionTime + 3600;
+  if (istClock(at) > config.entryCutoff) return null;
+  const side: Side = evaluation.decision;
+  const right: Right = side === "CALL" ? "CE" : "PE";
+  let chain: ChainInput;
+  try { chain = await adapter.chain(right, config.expiry); } catch { return null; }
+  const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
+  if (!atm.ok) return null;
+  const price = money(atm.contract.ask + config.slippageTicks * TICK);
+  if (price <= settings.redGreenWaitPremium) return null;
+  return { wait: { session: input.sessionDate, at, side, level: pair.reference, note: `Red–green wait: the ATM ${side} costs ₹${price} (over ₹${settings.redGreenWaitPremium}) → wait one hour: ATM ${side} at ${istClock(at)}.` } };
+}
+
+/**
+ * The four-year correlation rules (`ggWaitFirstHour…`, `callWaitDayMove…`, `dte3OppWick`): wait one hour or buy the
+ * other side. Null when none applies.
+ */
+async function correlationRule(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation): Promise<{ evaluation?: CandleEvaluation; note?: string; wait?: NonNullable<AlgoState["hourlyWait"]> } | null> {
+  const { config, adapter, now } = input;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+  if (config.engine !== "hourly" || (evaluation.decision !== "CALL" && evaluation.decision !== "PUT")) return null;
+  const pairs = state.analysis?.hourly?.pairs ?? [];
+  const pair = pairs.find((item) => item.decisionTime === evaluation.time + 60);
+  const a = pair?.first;
+  const b = pair?.second;
+  const opening = pairs.at(0)?.first;
+  if (!pair || !a || !b || !opening) return null;
+  const side: Side = evaluation.decision;
+  const other: Side = side === "CALL" ? "PUT" : "CALL";
+  const at = pair.decisionTime + 3600;
+  const canWait = istClock(at) <= config.entryCutoff;
+  const wait = (note: string) => ({ wait: { session: input.sessionDate, at, side, level: pair.reference, note: `${note} → wait one hour: ATM ${side} at ${istClock(at)}.` } });
+  const fmt = (value: number) => value.toFixed(2);
+  const firstHour = opening.high - opening.low;
+  if (canWait && settings.ggWaitFirstHourMax > 0 && a.close > a.open && b.close > b.open && b.close > pair.reference && firstHour >= settings.ggWaitFirstHourMin && firstHour < settings.ggWaitFirstHourMax) {
+    return wait(`Green–green with a ${fmt(firstHour)}-point 09:15 hour (${settings.ggWaitFirstHourMin}–${settings.ggWaitFirstHourMax})`);
+  }
+  const dayMove = b.close - opening.open;
+  if (canWait && side === "CALL" && settings.callWaitDayMoveMax > 0 && dayMove >= settings.callWaitDayMoveMin && dayMove < settings.callWaitDayMoveMax) {
+    return wait(`CALL with NIFTY ${fmt(dayMove)} points above the 09:15 open (${settings.callWaitDayMoveMin}–${settings.callWaitDayMoveMax})`);
+  }
+  if (settings.dte3OppWick > 0) {
+    const range = b.high - b.low;
+    const wick = side === "CALL" ? b.high - Math.max(b.open, b.close) : Math.min(b.open, b.close) - b.low;
+    const share = range > 0 ? (wick / range) * 100 : 0;
+    if (share < settings.dte3OppWick) return null;
+    const right: Right = side === "CALL" ? "CE" : "PE";
+    let chain: ChainInput;
+    try { chain = await adapter.chain(right, config.expiry); } catch { return null; }
+    const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
+    const expiry = atm.ok ? atm.contract.expiry : chain.expiry;
+    if (!expiry || !/^\d{4}-\d{2}-\d{2}$/.test(expiry)) return null;
+    const days = Math.round((Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000);
+    if (days !== 3) return null;
+    const text = `3 days to expiry and the second candle's ${side === "CALL" ? "upper" : "lower"} wick is ${share.toFixed(0)}% of its range (at least ${settings.dte3OppWick}%) → ATM ${other} instead of the ${side}.`;
+    return { note: text, evaluation: { ...evaluation, decision: other, setupSide: other, strategies: (evaluation.strategies ?? []).map((item) => ({ ...item, direction: other, reason: `${text} ${item.reason}` })), explanation: `${text} ${evaluation.explanation ?? ""}` } };
+  }
+  return null;
+}
+
+/**
+ * The market-condition filter (`maxOptionLevel`): once the option to buy is too dear for the day, the session takes no
+ * hourly trade. Returns the reason, or null when the entry may go on.
+ */
+async function optionLevelBlock(state: AlgoState, input: AdvanceInput, right: Right): Promise<string | null> {
+  const { config, adapter, now } = input;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
+  if (config.engine !== "hourly" || !(settings.maxOptionLevel > 0)) return null;
+  if (state.hourlyBlockedSession === input.sessionDate) return "Market filter: options are too dear today — no hourly trade this session.";
+  if (state.position || state.tradesToday >= config.maxTrades) return null;
+  let chain: ChainInput;
+  try { chain = await adapter.chain(right, config.expiry); } catch { return null; }
+  const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
+  if (!atm.ok) return null;
+  const spot = chain.spot ?? atm.contract.strike;
+  const expiry = atm.contract.expiry;
+  const days = expiry && /^\d{4}-\d{2}-\d{2}$/.test(expiry) ? Math.max(0, Math.round((Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000)) : 3;
+  const price = money(atm.contract.ask + config.slippageTicks * TICK);
+  const level = (100 * price) / spot / Math.sqrt(days + 1);
+  if (level <= settings.maxOptionLevel) return null;
+  state.hourlyBlockedSession = input.sessionDate;
+  return `Market filter: the ATM ${right} costs ₹${price} — option level ${level.toFixed(3)} (premium ${((100 * price) / spot).toFixed(2)}% of NIFTY ÷ √${days + 1} days) is above ${settings.maxOptionLevel}: no hourly trade this session.`;
+}
+
+async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void, flipped = false): Promise<{ ok: boolean; message: string; reasons?: string[]; plan?: TradePlan | null; capital?: CapitalPlan | null }> {
+  // The side-changing hourly rules only matter while a trade can still be entered today.
+  if (!flipped && (evaluation.decision === "CALL" || evaluation.decision === "PUT") && !state.position && state.tradesToday < input.config.maxTrades) {
+    const other = await dearFlip(state, input, evaluation);
+    const shape = shapeRule(state, input, other ?? evaluation, !!other) ?? (await redGreenWait(state, input, other ?? evaluation)) ?? (await correlationRule(state, input, other ?? evaluation));
+    if (shape?.wait) {
+      state.hourlyWait = shape.wait;
+      return { ok: false, message: shape.wait.note, reasons: [shape.wait.note] };
+    }
+    if (shape?.evaluation || other) {
+      const result = await tryEntry(state, input, shape?.evaluation ?? other!, log, true);
+      const notes = [other ? other.explanation?.split(" → ATM ")[0] + ` → ATM ${other.decision}.` : null, shape?.note ?? null].filter(Boolean).join(" ");
+      return { ...result, message: `${notes} ${result.message}` };
+    }
+  }
   const { config, adapter, now } = input;
   const side: Side = evaluation.decision === "CALL" ? "CALL" : "PUT";
   const right: Right = side === "CALL" ? "CE" : "PE";
   const key = entryKey(input.sessionId, evaluation.time, config.underlying, side);
   const reasons: string[] = [];
+  const marketBlock = await optionLevelBlock(state, input, right);
+  if (marketBlock) return { ok: false, message: marketBlock, reasons: [marketBlock] };
 
   if (!state.entries) reasons.push("Algo is disabled for new entries.");
   if (state.riskLocked) reasons.push("Daily loss limit reached (risk lock).");
@@ -591,7 +903,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     } else reasons.push("Opposing signal ignored while a position is open.");
   }
   if (state.tradesToday >= config.maxTrades) reasons.push(`DAILY TRADE LIMIT REACHED — ${state.tradesToday}/${config.maxTrades}: new entries are blocked until the next session.`);
-  if (strategyToday(state) <= -config.maxDailyLoss) { state.riskLocked = true; reasons.push("Daily loss limit reached (risk lock)."); }
+  if (strategyToday(state) <= -lossLimit(config)) { state.riskLocked = true; reasons.push("Daily loss limit reached (risk lock)."); }
   if (state.lastEntryAt != null && config.cooldownMinutes > 0 && now - state.lastEntryAt < config.cooldownMinutes * 60) reasons.push(`Cooling down (${config.cooldownMinutes} min between entries).`);
   const clock = istClock(evaluation.time + 60);
   const observationEnd = dayStart(input.sessionDate) + config.observationMinutes * 60;
@@ -614,6 +926,17 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     const fast = ema(closes, 9).at(-1);
     const slow = ema(closes, 21).at(-1);
     if (fast != null && slow != null && (side === "CALL" ? fast <= slow : fast >= slow)) reasons.push(`Momentum against the signal (9 EMA ${fast.toFixed(2)} ${side === "CALL" ? "≤" : "≥"} 21 EMA ${slow.toFixed(2)}).`);
+  }
+  // Trend channel: the market analysis of this candle (the chart's trendlines; confirmed swings only, nothing later).
+  const channelMode = filters.trendChannel ?? "off";
+  if (channelMode !== "off" && state.analysis) {
+    const { trend, resistance, support } = state.analysis;
+    const close = evaluation.candle.close;
+    if (channelMode === "structure" && (side === "CALL" ? trend === "BEARISH" : trend === "BULLISH")) reasons.push(`TREND AGAINST — the swings make ${side === "CALL" ? "lower highs and lower lows" : "higher highs and higher lows"}: no ${side}.`);
+    if (channelMode === "channel") {
+      if (side === "CALL" && resistance && resistance.slope < 0 && close < resistance.now) reasons.push(`CHANNEL AGAINST — inside a falling channel: the close ${close.toFixed(2)} is under its upper line ${resistance.now.toFixed(2)}; a CALL needs a break above it.`);
+      if (side === "PUT" && support && support.slope > 0 && close > support.now) reasons.push(`CHANNEL AGAINST — inside a rising channel: the close ${close.toFixed(2)} is over its lower line ${support.now.toFixed(2)}; a PUT needs a break below it.`);
+    }
   }
   // Optional entry filters (each off unless set), from completed candles up to the signal candle only.
   if (filters.vwapAlign || filters.momentum5 || (filters.minAtrPoints ?? 0) > 0 || (filters.maxLineCrossings ?? 0) > 0 || (filters.minAdx ?? 0) > 0 || filters.supertrend || (filters.noChaseCandles ?? 0) > 0 || (filters.breakoutAtrMultiple ?? 0) > 0 || (filters.maxBreakoutCandleAtr ?? 0) > 0 || filters.maxVwapSlopeAgainstAtr != null || filters.maxEmaGapAgainstAtr != null) {
@@ -722,11 +1045,28 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   const atm = resolveAtm(chain, right, { rounding: config.rounding, maxQuoteAgeSeconds: config.maxQuoteAgeSeconds, maxSpreadPercent: config.maxSpreadPercent, itmSteps: config.itmSteps ?? 0 }, new Date(now * 1000));
   if (!atm.ok) return reject(state, evaluation.time, key, [atm.reason], log);
   const contract = atm.contract;
+  // Days to the contract's expiry: a far expiry is skipped, or needs a slower retest (each off unless set).
+  const daysToExpiry = /^\d{4}-\d{2}-\d{2}$/.test(contract.expiry) ? Math.round((Date.parse(`${contract.expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000) : null;
+  if (daysToExpiry != null && (filters.maxDaysToExpiry ?? 0) > 0 && daysToExpiry > filters.maxDaysToExpiry!) {
+    return reject(state, evaluation.time, key, [`FAR EXPIRY — ${right} ${contract.strike} expires ${contract.expiry}, ${daysToExpiry} days away (limit ${filters.maxDaysToExpiry}): the option is dear and needs a bigger NIFTY move for +${config.target.value}%. Not traded.`], log);
+  }
+  const tradeLimit = filters.maxDaysToExpiryByTrade?.[state.tradesToday];
+  if (daysToExpiry != null && tradeLimit != null && daysToExpiry > tradeLimit) {
+    return reject(state, evaluation.time, key, [`TRADE ${state.tradesToday + 1} RULE — expiry ${contract.expiry} is ${daysToExpiry} days away; trade ${state.tradesToday + 1} of the day is taken only ${tradeLimit} or fewer days from expiry. Not traded.`], log);
+  }
+  const confirmMinutes = evaluation.breakout ? (evaluation.time - evaluation.breakout.time) / 60 : null;
+  if (daysToExpiry != null && confirmMinutes != null && (filters.farExpiryDays ?? 0) > 0 && (filters.farExpiryMinConfirmMinutes ?? 0) > 0 && daysToExpiry >= filters.farExpiryDays! && confirmMinutes < filters.farExpiryMinConfirmMinutes!) {
+    return reject(state, evaluation.time, key, [`QUICK RETEST FAR FROM EXPIRY — confirmed ${confirmMinutes} minutes after the break, ${daysToExpiry} days to expiry (needs ${filters.farExpiryMinConfirmMinutes} minutes when ${filters.farExpiryDays}+ days away). Not traded.`], log);
+  }
   const price = money(contract.ask + config.slippageTicks * TICK);
   // Premium limit: the ATM option is not bought above it (the signal is logged as not traded, with the reason).
   const maxPremium = { ...ALGO_DEFAULTS.filters, ...config.filters }.maxEntryPremium ?? 0;
   if (maxPremium > 0 && price > maxPremium) {
     return reject(state, evaluation.time, key, [`PREMIUM ABOVE LIMIT — ATM ${right} ${contract.strike} costs ₹${price}, above the ₹${maxPremium} limit: a dear option needs a bigger NIFTY move for the same +${config.target.value}% target. Not traded.`], log);
+  }
+  const minPremium = { ...ALGO_DEFAULTS.filters, ...config.filters }.minEntryPremium ?? 0;
+  if (minPremium > 0 && price < minPremium) {
+    return reject(state, evaluation.time, key, [`PREMIUM BELOW LIMIT — ATM ${right} ${contract.strike} costs ₹${price}, below the ₹${minPremium} floor: a cheap option means a very large quantity and its premium can collapse. Not traded.`], log);
   }
   const cash = await adapter.cash();
   // Risk sizing: the stop on the index (beyond the setup's invalidation) decides the lots, or no trade.
@@ -803,7 +1143,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     openPosition(state, { key, contract: ref, side, lots, quantity, signalTime: evaluation.time, lineIds, explanation: evaluation.explanation, uncertain: false, setup: setupOf(entryEvaluation, side, plan), plan }, fill, input);
     const position = state.position!;
     if (shadow) position.shadow = true;
-    const capitalText = capital ? ` Capital: ₹${money(fill.price * fill.quantity + fill.charges).toFixed(2)} committed of ₹${capital.available.toFixed(2)} available (${capital.percent}% allocation of ₹${capital.allocation.toFixed(2)}; ${capital.note}) Option-premium target ₹${position.target} (+${config.target.value}${config.target.mode === "percent" ? "% on the premium" : " ₹ on the premium"} = ₹${money((position.target - fill.price) * fill.quantity).toFixed(2)} on this trade before charges, ${money(((position.target - fill.price) * fill.quantity / capital.allocation) * 100)}% of the allocated capital); premium stop ₹${position.stop}. Entry charges ₹${fill.charges}.` : "";
+    const capitalText = capital ? ` Capital: ₹${money(fill.price * fill.quantity + fill.charges).toFixed(2)} committed of ₹${capital.available.toFixed(2)} available (${capital.percent}% allocation of ₹${capital.allocation.toFixed(2)}; ${capital.note}) Option-premium target ₹${position.target} (+${config.target.mode === "percent" ? `${money(((position.target - fill.price) / fill.price) * 100)}% on the premium` : `${config.target.value} ₹ on the premium`} = ₹${money((position.target - fill.price) * fill.quantity).toFixed(2)} on this trade before charges, ${money(((position.target - fill.price) * fill.quantity / capital.allocation) * 100)}% of the allocated capital); premium stop ₹${position.stop}. Entry charges ₹${fill.charges}.` : "";
     const planned = plan ? ` Index stop ${plan.stopIndex.toFixed(2)}, index target ${plan.targetIndex.toFixed(2)} (reward : risk ${plan.rewardRisk}); ${lots} lot${lots === 1 ? "" : "s"} risking ₹${plan.risk.toFixed(2)} of ₹${plan.budget.toFixed(2)}; setup score ${plan.score.score}.` : "";
     const message = `${shadow ? `REGIME SWITCH OFF — ${regime.reason} Shadow trade: no order, no money. ` : ""}${label} selected. Entry accepted: ${fill.quantity} @ ₹${fill.price}${fill.status === "PARTIAL" ? ` (partial fill of ${quantity})` : ""}. Stop ₹${position.stop}, target ₹${position.target}.${planned}${capitalText}`;
     state.lastOrder = { time: now, status: fill.status, message };
@@ -828,6 +1168,19 @@ function reject(state: AlgoState, time: number, key: string, reasons: string[], 
   return { ok: false, message, reasons };
 }
 
+/** The weak-setup target (`weakTargetPercent`) for an hourly trade, or null when the session target applies. */
+function weakSetupTarget(state: AlgoState, pending: PendingEntry, price: number, input: AdvanceInput): number | null {
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...input.config.hourly };
+  if (input.config.engine !== "hourly" || !(settings.weakTargetPercent > 0)) return null;
+  const pair = state.analysis?.hourly?.pairs?.find((item) => item.decisionTime === pending.signalTime + 60);
+  const body = pair?.second ? Math.abs(pair.second.close - pair.second.open) : null;
+  const expiry = pending.contract.expiry;
+  const days = /^\d{4}-\d{2}-\d{2}$/.test(expiry) ? Math.round((Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000) : null;
+  const smallBody = settings.weakBodyPoints > 0 && body != null && body < settings.weakBodyPoints;
+  const farExpiry = settings.weakMinDaysToExpiry > 0 && days != null && days >= settings.weakMinDaysToExpiry;
+  return smallBody || farExpiry ? money(price * (1 + settings.weakTargetPercent / 100)) : null;
+}
+
 function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fill, { quantity: number }>, input: AdvanceInput) {
   const levels = protectiveLevels(fill.price, input.config.stop, input.config.target);
   // A fill whose levels would be invalid still opens (it is real), protected by the closest valid stop.
@@ -837,7 +1190,10 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
   // Without a stop-loss (Mathi Strategy) the stop level is 0: no premium can reach it, so no stop exit.
   const stop = input.config.stopLoss === false && !plan ? 0 : plan ? money(Math.max(TICK, plan.premiumStop + offset)) : levels.ok ? levels.stop : money(fill.price * 0.5);
   // A trailing exit has no premium target (the trailing index stop closes it).
-  const target = plan ? (plan.targetMode === "trail" ? money(fill.price * 100) : money(plan.premiumTarget + offset)) : levels.ok ? levels.target : money(fill.price * 1.5);
+  let target = plan ? (plan.targetMode === "trail" ? money(fill.price * 100) : money(plan.premiumTarget + offset)) : levels.ok ? levels.target : money(fill.price * 1.5);
+  // Mathi Hourly weak-setup target: a small second-candle body or a far expiry takes the smaller target.
+  const weak = !plan ? weakSetupTarget(state, pending, fill.price, input) : null;
+  if (weak) target = weak;
   state.position = {
     entryKey: pending.key, contract: pending.contract, side: pending.side, lots: pending.lots, quantity: fill.quantity, avg: fill.price,
     stop, target, entryCharges: fill.charges, openedAt: input.now, signalTime: pending.signalTime, lineIds: pending.lineIds, exit: null, exitAttempts: 0,
@@ -954,12 +1310,16 @@ async function protect(state: AlgoState, input: AdvanceInput, log: (event: Omit<
     await startExit(state, input, trigger.reason, trigger, log);
     return;
   }
+  // Mathi Hourly early exit: still well below the entry this long after it, the trade is cut before it can fall further.
+  if (input.config.engine === "hourly" && bid != null && (await hourlyEarlyExit(state, input, bid, log))) return;
   // Mandatory end-of-day square-off: nothing is carried past it.
   const squareOff = input.config.squareOff;
   if (squareOff && istClock(input.now) >= squareOff && bid != null) {
     await startExit(state, input, "SQUARE_OFF", { price: bid, note: `End-of-day square-off at ${squareOff} IST` }, log);
     return;
   }
+  // Mathi Hourly Zone Strategy: each completed hour after the entry must close beyond its midpoint in the trade's direction.
+  if (input.config.engine === "hourly" && bid != null && (await hourlyMidpointExit(state, input, bid, log))) return;
   // Time limit: still short of the target this long after the entry, the trade exits at the premium. With trend exit
   // management the limit is a checkpoint: the trade is kept only while the index trend still agrees, within the
   // maximum holding time and the loss cap; a confirmed reversal closes it. The stop-loss and target above come first.
@@ -1052,13 +1412,22 @@ function engineState(state: AlgoState, config: AlgoConfig, candleTime: number, e
   const clock = istClock(time);
   const risk = { ...RISK_DEFAULTS, ...config.risk };
   const at = (status: EngineStatus, reason: string, plan: TradePlan | null = null): EngineState => ({ status, reason, time, plan });
-  if (state.riskLocked || strategyToday(state) <= -config.maxDailyLoss) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${config.maxDailyLoss}: no new entries today.`);
+  if (state.riskLocked || strategyToday(state) <= -lossLimit(config)) return at("DAILY_RISK_LIMIT_REACHED", `Realized ₹${state.realizedToday} reached the daily loss limit of ₹${lossLimit(config)}: no new entries today.`);
   if (config.engine === "primary" && risk.stopAtTarget && state.realizedToday >= risk.dailyTarget) return at("TRADING_WINDOW_CLOSED", `Daily target ₹${risk.dailyTarget} reached (realized ₹${state.realizedToday}): no new entries today.`);
   if (clock > config.entryCutoff) return at("TRADING_WINDOW_CLOSED", `Entries closed at ${config.entryCutoff} IST.${state.position ? " The open position stays protected by its stop and target." : ""}`);
   if (result.entered && (evaluation.decision === "CALL" || evaluation.decision === "PUT")) return at(evaluation.decision === "CALL" ? "BUY_CANDIDATE" : "SELL_CANDIDATE", evaluation.explanation, result.plan);
   if (state.awaiting) return at("WAIT_FOR_CONFIRMATION", evaluation.explanation);
   if (result.reasons?.length) return at("NO_TRADE", result.reasons.join(" "), result.plan);
   return at("NO_TRADE", evaluation.decision === "NO_SIGNAL" || !evaluation.explanation ? `No valid setup on the ${istClock(candleTime)} candle.` : evaluation.explanation);
+}
+
+/** A line that only counts one way (lineDirections): its crossings the other way are no signal. */
+function directional(evaluation: CandleEvaluation, config: AlgoConfig): CandleEvaluation {
+  const only = config.lineDirections;
+  if (!only || !evaluation.events.length) return evaluation;
+  const events = evaluation.events.filter((event) => !only[event.lineType] || only[event.lineType] === event.direction);
+  if (events.length === evaluation.events.length) return evaluation;
+  return { ...evaluation, events, ...consolidate(events, evaluation.notes) };
 }
 
 /** Exits the remaining open quantity (stop, target, a manual exit, an opposite signal or an emergency). */
@@ -1124,7 +1493,7 @@ function settleExit(state: AlgoState, input: AdvanceInput, fill: Extract<Fill, {
     state.position = null;
     state.recovery = null;
   }
-  if (strategyToday(state) <= -input.config.maxDailyLoss) state.riskLocked = true;
+  if (strategyToday(state) <= -lossLimit(input.config)) state.riskLocked = true;
 }
 
 /** Wilder's ADX of the candles (completed, oldest first), or null with too few. */
@@ -1171,6 +1540,13 @@ function supertrendUp(candles: Candle[], period: number, multiplier: number): bo
   return up;
 }
 
+/** The loss that stops new entries for the session: Mathi Hourly Zone Strategy's own limit is off (Infinity) unless set. */
+export function lossLimit(config: AlgoConfig) {
+  if (config.engine !== "hourly") return config.maxDailyLoss;
+  const limit = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly }.maxSessionLoss;
+  return limit > 0 ? limit : Infinity;
+}
+
 /** The strategy's own result today (real and shadow trades): its daily loss limit acts on its signals either way. */
 function strategyToday(state: AlgoState) {
   return state.realizedToday + (state.shadowToday ?? 0);
@@ -1207,6 +1583,7 @@ function deriveStatus(state: AlgoState): AlgoStatus {
 function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
   const { config } = input;
   if (config.engine === "primary") return primaryCoordinate(line, candles, input, state);
+  if (config.engine === "hourly") return hourlyCoordinate(line, candles, input, state);
   const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
   const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
   // Breakout buffer: a line counts only when the close is clearly beyond it.
@@ -1247,7 +1624,7 @@ function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInp
   }
   const directions = new Set(all.map((item) => item.direction));
   const mode = confirmationMode(config);
-  if (mode !== "single") return confirmBreakout(mode, line, all, directions, thinLine, input, state);
+  if (mode !== "single") return confirmBreakout(mode, line, all, directions, thinLine, input, state, candles);
   if (thinLine && !all.length) return { ...line, strategies: all, decision: "NO_SIGNAL", explanation: thinLine };
   if (directions.size > 1) {
     return { ...line, strategies: all, decision: "CONFLICTING_SIGNAL", explanation: `Conflicting signals: ${all.map((item) => `${STRATEGY_LABEL[item.strategy]} ${item.direction}`).join(", ")}. Conflict policy: no entry.` };
@@ -1291,6 +1668,142 @@ function primaryCoordinate(line: CandleEvaluation, candles: Candle[], input: Adv
   return { ...base, strategies: [result.signal], decision: result.signal.direction, explanation: result.signal.reason, audit };
 }
 
+/**
+ * Mathi Hourly Zone Strategy's signal for one completed candle: its own hourly-pair rules only (the strategy lines
+ * and the other setups never signal). A pair skipped on this candle is logged as REJECTED with every reason and the
+ * exact OHLC values; the market analysis carries the pairs and today's trades for the chart.
+ */
+function hourlyCoordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
+  const { config } = input;
+  const sessionOpen = dayStart(input.sessionDate);
+  const { analysis } = analyzeMarket({ candles, sessionOpen, observationMinutes: 0, settings: { ...PATTERN_DEFAULTS, ...config.patterns }, enabled: {} });
+  const result = hourlySignal(candles, sessionOpen, { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly });
+  const before = state.analysis?.strategies.hourly?.lastSignal ?? null;
+  analysis.hourly = { ...result.state, trades: state.hourly?.trades ?? [] };
+  analysis.strategies.hourly = { enabled: true, status: result.state.status, direction: result.signal?.direction ?? null, trigger: result.signal?.level ?? null, waiting: !result.signal, lastSignal: result.signal ? { time: line.time, direction: result.signal.direction } : before };
+  state.analysis = analysis;
+  state.awaiting = null;
+  const base = { ...line, events: [], notes: [] };
+  if (result.signal) return { ...base, strategies: [result.signal], decision: result.signal.direction, stage: "SETUP_CONFIRMED", setupSide: result.signal.direction, explanation: result.signal.reason };
+  const skipped = result.decided?.status === "SKIPPED" ? result.decided : null;
+  if (skipped) {
+    const text = `SKIPPED — ${skipped.direction ?? "no direction"} pair ${hourClock(skipped.first.start)} + ${hourClock(skipped.first.end)}: ${skipped.reasons.join("; ")}. ${skipped.checks.join(" ")}`;
+    return { ...base, strategies: [], decision: "NO_SIGNAL", ...(skipped.side ? { setupSide: skipped.side } : {}), cancelled: text, explanation: `${text} ${result.state.status}` };
+  }
+  return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: result.state.status };
+}
+
+/**
+ * The hourly midpoint rule on the open trade: every full hour completed since the entry (the confirming hour's close),
+ * in order and once each. A LONG is kept while the hour closes above its midpoint, a SHORT while it closes below; any
+ * other close exits at the current premium. Returns whether an exit was started. Never a stop order: it acts only on
+ * a completed hour.
+ */
+async function hourlyMidpointExit(state: AlgoState, input: AdvanceInput, bid: number, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void) {
+  const position = state.position;
+  if (!position || position.exit) return false;
+  const open = dayStart(input.sessionDate);
+  const from = position.signalTime + 60;
+  const hours = hourlyCandles(input.candles.filter((candle) => sameSession(candle.time, open)), open, input.now)
+    .filter((hour) => isFullHour(hour) && hour.complete && hour.start >= from && hour.start > (position.hourChecked ?? -Infinity));
+  const trade = state.hourly?.trades.find((item) => item.entryKey === position.entryKey) ?? null;
+  const name = position.side === "CALL" ? "LONG (CALL)" : "SHORT (PUT)";
+  // Optional box exits, as on a TradingView position: NIFTY trading at the red edge (stop) or the green edge (target).
+  // Every completed minute since the entry is checked once, in order; a minute reaching both edges takes the stop.
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...input.config.hourly };
+  const setup = position.setup;
+  if ((settings.boxStop || settings.boxTarget) && setup && setup.invalidation !== setup.level) {
+    const call = position.side === "CALL";
+    const stopEdge = setup.invalidation;
+    const targetEdge = money(2 * setup.level - setup.invalidation);
+    const minutes = input.candles.filter((candle) => candle.time >= from && candle.time + 60 <= input.now && candle.time > (position.boxChecked ?? -Infinity) && sameSession(candle.time, open)).sort((a, b) => a.time - b.time);
+    for (const candle of minutes) {
+      position.boxChecked = candle.time;
+      const stopped = settings.boxStop && (call ? candle.low <= stopEdge : candle.high >= stopEdge);
+      const reached = settings.boxTarget && (call ? candle.high >= targetEdge : candle.low <= targetEdge);
+      if (stopped) {
+        await startExit(state, input, "BOX_STOP", { price: bid, note: `Box stop — NIFTY traded at ${(call ? candle.low : candle.high).toFixed(2)} in the ${hourClock(candle.time)} minute, ${call ? "at or below the box bottom" : "at or above the box top"} ${stopEdge.toFixed(2)}${reached ? " (the same minute also reached the target: the stop is taken)" : ""}: the ${name} is closed` }, log);
+        return true;
+      }
+      if (reached) {
+        await startExit(state, input, "BOX_TARGET", { price: bid, note: `Box target — NIFTY traded at ${(call ? candle.high : candle.low).toFixed(2)} in the ${hourClock(candle.time)} minute, ${call ? "at or above the box top" : "at or below the box bottom"} ${targetEdge.toFixed(2)}: the ${name} is closed` }, log);
+        return true;
+      }
+    }
+  }
+  if (!settings.midpointExit) return false;
+  for (const hour of hours) {
+    position.hourChecked = hour.start;
+    const decision = hourlyMidpointDecision(position.side, hour);
+    trade?.midpoints.push({ start: hour.start, end: hour.end, high: hour.high, low: hour.low, close: hour.close, mid: decision.mid, keep: decision.keep });
+    const span = `${hourClock(hour.start)}–${hourClock(hour.end)}`;
+    if (!decision.keep) {
+      await startExit(state, input, "MIDPOINT", { price: bid, note: `Hourly midpoint exit — the ${span} hour ${decision.text}: the ${name} is closed` }, log);
+      return true;
+    }
+    log({ key: `midpoint:${position.entryKey}:${hour.start}`, kind: "INFO", message: `Hourly midpoint: HOLD — the ${span} hour ${decision.text}; the ${name} stays open (target ₹${position.target} not reached yet).` });
+  }
+  return false;
+}
+
+/**
+ * The hourly early exit (`earlyExitMinutes` / `earlyExitPercent`, on the contract's expiry day `expiryEarlyExit…`):
+ * from that many minutes after the entry, a premium still more than that % below the entry price is sold. Returns
+ * whether an exit was started.
+ */
+async function hourlyEarlyExit(state: AlgoState, input: AdvanceInput, bid: number, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void) {
+  const position = state.position;
+  if (!position || position.exit) return false;
+  const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...input.config.hourly };
+  // Protect the gain: the premium has already traded high enough above the entry; back near the entry, it is sold.
+  if (settings.protectArmPercent > 0 && position.highest != null && position.highest >= money(position.avg * (1 + settings.protectArmPercent / 100))) {
+    const lock = money(position.avg * (1 + settings.protectLockPercent / 100));
+    if (bid <= lock) {
+      const best = ((position.highest - position.avg) / position.avg) * 100;
+      await startExit(state, input, "PROTECT", { price: bid, note: `Gain protected — the premium reached ₹${position.highest} (+${best.toFixed(1)}%, at least +${settings.protectArmPercent}%) and is back to ₹${bid} (at or below +${settings.protectLockPercent}%, ₹${lock})` }, log);
+      return true;
+    }
+  }
+  const expiryDay = position.contract.expiry === input.sessionDate && settings.expiryEarlyExitMinutes > 0;
+  const minutes = expiryDay ? settings.expiryEarlyExitMinutes : settings.earlyExitMinutes;
+  const percent = expiryDay ? settings.expiryEarlyExitPercent : settings.earlyExitPercent;
+  if (!(minutes > 0) || !(percent > 0)) return false;
+  const elapsed = (input.now - position.openedAt) / 60;
+  const floor = money(position.avg * (1 - percent / 100));
+  if (elapsed < minutes || bid >= floor) return false;
+  const down = ((position.avg - bid) / position.avg) * 100;
+  await startExit(state, input, "EARLY_EXIT", { price: bid, note: `Early exit — ${Math.round(elapsed)} minutes after the entry the premium ₹${bid} is ${down.toFixed(1)}% below the entry ₹${position.avg} (more than ${percent}% after ${minutes} minutes${expiryDay ? ", expiry day" : ""})` }, log);
+  return true;
+}
+
+const HOURLY_EXIT: Record<string, HourlyTradeStatus> = { PROTECT: "GAIN PROTECTED", EARLY_EXIT: "EARLY EXIT", BOX_STOP: "BOX STOP", BOX_TARGET: "BOX TARGET", TARGET: "TARGET HIT", MIDPOINT: "MIDPOINT EXIT", SQUARE_OFF: "SESSION CLOSED", SESSION_END: "SESSION CLOSED", SESSION_CLOSED: "SESSION CLOSED" };
+
+/** Keeps today's hourly trades (reference, target, outcome) from this check's entries and exits, for the chart and panel. */
+function trackHourly(state: AlgoState, events: AlgoEvent[]) {
+  const trades = [...(state.hourly?.trades ?? [])];
+  for (const event of events) {
+    const key = event.order?.key;
+    if (!key || !event.order || (event.order.status !== "FILLED" && event.order.status !== "PARTIAL")) continue;
+    if (event.kind === "ENTRY" && !trades.some((item) => item.entryKey === key)) {
+      const position = state.position?.entryKey === key ? state.position : null;
+      const setup = event.setup ?? position?.setup;
+      if (!setup) continue;
+      trades.push({
+        entryKey: key, decisionTime: event.time + 60, side: setup.direction, reference: setup.level, underlyingEntry: setup.underlyingEntry, entryTime: setup.entryTime,
+        premium: event.order.price ?? 0, target: event.target ?? position?.target ?? 0, status: "ENTERED", ...(event.shadow ? { shadow: true } : {}), midpoints: [],
+      });
+    }
+    if (event.kind === "EXIT") {
+      const trade = trades.find((item) => key.startsWith(`${item.entryKey}:exit:`));
+      if (!trade) continue;
+      const code = /Exit \(([A-Z_]+)\)/.exec(event.message)?.[1] ?? "";
+      Object.assign(trade, { status: HOURLY_EXIT[code] ?? "EXITED", exitTime: event.time, exitPremium: event.order.price, exitReason: code, pnl: event.pnl, adverse: event.adverse });
+    }
+  }
+  state.hourly = { trades };
+  if (state.analysis?.hourly) state.analysis.hourly = { ...state.analysis.hourly, trades };
+}
+
 /** The setup an entry is taken on: the first agreeing strategy's level and invalidation. */
 function setupOf(evaluation: CandleEvaluation, side: Side, plan: TradePlan | null = null): TradeSetup | undefined {
   const agreeing = (evaluation.strategies ?? []).filter((item) => item.direction === side);
@@ -1299,6 +1812,7 @@ function setupOf(evaluation: CandleEvaluation, side: Side, plan: TradePlan | nul
   return {
     strategy: primary.strategy, strategies: agreeing.map((item) => item.strategy), direction: side, level: primary.level, invalidation: primary.invalidation, underlyingEntry: evaluation.candle.close, entryTime: evaluation.time + 60,
     ...(plan ? { stopIndex: plan.stopIndex, targetIndex: plan.targetIndex, risk: plan.risk, score: plan.score.score, ...(plan.targetMode === "trail" ? { trail: true } : {}) } : {}),
+    ...(evaluation.entryType ? { entryType: evaluation.entryType } : {}),
   };
 }
 
@@ -1331,6 +1845,45 @@ function breakoutOf(waiting: NonNullable<AlgoState["awaiting"]>): Pick<CandleEva
   return waiting.candle ? { breakout: { time: waiting.time, candle: waiting.candle, events: waiting.events ?? [] } } : {};
 }
 
+/**
+ * The strong-breakout entry check on one completed candle of a waiting setup (see StrongBreakoutSettings). `candles`
+ * are the session's completed candles up to and including `candle`. Not a continuation (or too small a body): no entry,
+ * nothing to report. A continuation that is too far from the level, or against the trend: skipped, with the reason.
+ */
+export function strongBreakoutCheck(input: { side: Direction; level: number; candle: Candle; breakout: Candle; candles: Candle[]; settings: StrongBreakoutSettings }): { ok: true; detail: string } | { ok: false; skip: string | null } {
+  const { side, level, candle, breakout, candles, settings } = input;
+  const put = side === "PUT";
+  const continues = put ? candle.close < candle.open && candle.close < breakout.low : candle.close > candle.open && candle.close > breakout.high;
+  if (!continues) return { ok: false, skip: null };
+  const range = candle.high - candle.low;
+  const bodyPercent = range > 0 ? (Math.abs(candle.close - candle.open) / range) * 100 : 0;
+  if (bodyPercent < settings.minBodyPercent) return { ok: false, skip: null };
+  const distance = put ? level - candle.close : candle.close - level;
+  const upTo = candles.filter((item) => item.time <= candle.time);
+  if (settings.maxDistanceAtr > 0 && upTo.length >= 15) {
+    const recent = upTo.slice(-15);
+    const atr = recent.slice(1).map((c, i) => Math.max(c.high - c.low, Math.abs(c.high - recent[i].close), Math.abs(c.low - recent[i].close))).reduce((a, b) => a + b, 0) / 14;
+    if (atr > 0 && distance > settings.maxDistanceAtr * atr) {
+      return { ok: false, skip: `ENTRY SKIPPED — MOVE EXTENDED: the continuation closed ${distance.toFixed(2)} points past ${level.toFixed(2)}, more than ${settings.maxDistanceAtr} × ATR (${(settings.maxDistanceAtr * atr).toFixed(2)} points).` };
+    }
+  }
+  const against: string[] = [];
+  if ((settings.trend === "vwap" || settings.trend === "both") && upTo.length) {
+    const typical = (c: Candle) => (c.high + c.low + c.close) / 3;
+    const volume = upTo.reduce((sum, c) => sum + (c.volume ?? 0), 0);
+    const vwap = volume > 0 ? upTo.reduce((sum, c) => sum + typical(c) * (c.volume ?? 0), 0) / volume : upTo.reduce((sum, c) => sum + typical(c), 0) / upTo.length;
+    if (put ? candle.close >= vwap : candle.close <= vwap) against.push(`close ${candle.close.toFixed(2)} ${put ? "≥" : "≤"} VWAP ${vwap.toFixed(2)}`);
+  }
+  if ((settings.trend === "ema" || settings.trend === "both") && upTo.length >= 21) {
+    const closes = upTo.map((c) => c.close);
+    const fast = ema(closes, 9).at(-1);
+    const slow = ema(closes, 21).at(-1);
+    if (fast != null && slow != null && (put ? fast >= slow : fast <= slow)) against.push(`9 EMA ${fast.toFixed(2)} ${put ? "≥" : "≤"} 21 EMA ${slow.toFixed(2)}`);
+  }
+  if (against.length) return { ok: false, skip: `ENTRY SKIPPED — TREND AGAINST the strong breakout: ${against.join("; ")}.` };
+  return { ok: true, detail: `this ${put ? "bearish" : "bullish"} candle (${candle.open.toFixed(2)} → ${candle.close.toFixed(2)}, body ${bodyPercent.toFixed(0)}% of its range) closed ${put ? "below the breakout candle's low" : "above the breakout candle's high"} ${(put ? breakout.low : breakout.high).toFixed(2)}, ${distance.toFixed(2)} points past ${level.toFixed(2)}.` };
+}
+
 /** The breakout confirmation mode in force ("single" when the legacy second-candle filter is off). */
 export function confirmationMode(config: AlgoConfig): ConfirmationMode {
   const mode = config.confirmation?.mode ?? "single";
@@ -1347,7 +1900,7 @@ export function confirmationMode(config: AlgoConfig): ConfirmationMode {
  * waits at a time (a same-direction crossing while it waits is not a second setup); an opposite signal
  * cancels it. A signal from the observation window never waits into the trading window.
  */
-function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: CandleEvaluation, all: StrategySignal[], directions: Set<Direction>, thinLine: string, input: AdvanceInput, state: AlgoState): CandleEvaluation {
+function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: CandleEvaluation, all: StrategySignal[], directions: Set<Direction>, thinLine: string, input: AdvanceInput, state: AlgoState, candles: Candle[] = []): CandleEvaluation {
   const { config } = input;
   const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
   const settings = { ...ALGO_DEFAULTS.confirmation, ...config.confirmation };
@@ -1373,7 +1926,7 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
         const withBreak = settings.holdMustAgree === false || (put ? close <= open : close >= open);
         if (beyond && withBreak && !opposite(waiting.direction)) {
           const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
-          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — breakout held: the next candle (${open.toFixed(2)} → ${close.toFixed(2)}) closed ${put ? "below" : "above"} ${level.toFixed(2)} without moving back toward it. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, entryType: "HOLD", ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — breakout held: the next candle (${open.toFixed(2)} → ${close.toFixed(2)}) closed ${put ? "below" : "above"} ${level.toFixed(2)} without moving back toward it. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
         }
         const why = back ? `closed at ${close.toFixed(2)}, back ${put ? "above" : "below"} the line`
           : opposite(waiting.direction) ? `closed at ${close.toFixed(2)} with an opposite signal`
@@ -1391,7 +1944,19 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
       const moved = waiting.retest && (put ? close < open && close < waiting.retest.extreme : close > open && close > waiting.retest.extreme);
       if (moved) {
         const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
-        return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — retest held: price came back to ${level.toFixed(2)} at ${istClock(waiting.retest!.time)} without closing back across it, and this ${put ? "bearish" : "bullish"} candle closed at ${close.toFixed(2)}, ${put ? "below the retest low" : "above the retest high"} ${waiting.retest!.extreme.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+        return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, entryType: "RETEST", ...breakoutOf(waiting), explanation: `SETUP CONFIRMED — retest held: price came back to ${level.toFixed(2)} at ${istClock(waiting.retest!.time)} without closing back across it, and this ${put ? "bearish" : "bullish"} candle closed at ${close.toFixed(2)}, ${put ? "below the retest low" : "above the retest high"} ${waiting.retest!.extreme.toFixed(2)}. ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+      }
+      // Strong breakout: before any retest, a strong continuation beyond the breakout candle confirms it (when enabled).
+      const strong = { ...STRONG_BREAKOUT_DEFAULTS, ...settings.strongBreakout };
+      let skipped = "";
+      if (strong.enabled && !waiting.retest && waiting.candle) {
+        const session = candles.filter((candle) => candle.time <= line.time && sameSession(candle.time, dayStart(input.sessionDate)));
+        const verdict = strongBreakoutCheck({ side: waiting.direction, level, candle: line.candle, breakout: waiting.candle, candles: session, settings: strong });
+        if (verdict.ok) {
+          const names = waiting.signals.map((item) => STRATEGY_LABEL[item.strategy]).join(" + ");
+          return { ...line, strategies: waiting.signals, decision: waiting.direction, stage: "SETUP_CONFIRMED", setupSide: waiting.direction, entryType: "STRONG_BREAKOUT", ...breakoutOf(waiting), explanation: `STRONG BREAKOUT CONFIRMED — no retest needed: ${verdict.detail} ${names}: ${put ? "bearish" : "bullish"} signal from ${istClock(waiting.time)}.` };
+        }
+        skipped = verdict.skip ?? "";
       }
       const tolerance = level * (settings.retestTolerancePercent / 100);
       const touched = put ? high >= level - tolerance : low <= level + tolerance;
@@ -1401,7 +1966,9 @@ function confirmBreakout(mode: Exclude<ConfirmationMode, "single">, line: Candle
         ? `RETEST IN PROGRESS — the ${name}: this candle came back to the level (${put ? `high ${high.toFixed(2)}` : `low ${low.toFixed(2)}`}) and closed ${put ? "below" : "above"} it at ${close.toFixed(2)}; waiting for a ${put ? "bearish close below" : "bullish close above"} ${retest!.extreme.toFixed(2)}.`
         : waiting.retest
           ? `WAITING — the ${name}: retested at ${istClock(waiting.retest.time)}; waiting for a ${put ? "bearish close below" : "bullish close above"} ${waiting.retest.extreme.toFixed(2)}.`
-          : `WAITING — the ${name}: holding beyond the line; waiting for a retest of it.`;
+          : skipped
+            ? `${skipped} The ${name} still waits for a retest of the line.`
+            : `WAITING — the ${name}: holding beyond the line; waiting for a retest of it${strong.enabled ? " or a strong continuation" : ""}.`;
       return { ...line, strategies: all, decision: "NO_SIGNAL", stage: "WAITING", setupSide: waiting.direction, explanation: text };
     }
     // The setup ended: a new signal on this candle may start its own wait (logged with the cancellation).

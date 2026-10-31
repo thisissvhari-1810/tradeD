@@ -6,19 +6,20 @@ import { useDesk } from "@/components/shell";
 import { Confirm, Info, type AlgoData } from "@/components/algo/algo-panel";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { LiveSessionSwitch } from "@/components/algo/algo-live-session";
-import { variantTicker } from "@/components/algo/algo-start-button";
+import { HourlyRules } from "@/components/algo/algo-hourly";
+import { variantData, variantTicker } from "@/components/algo/algo-start-button";
 import { STRATEGY_NAME, type VariantStrategy } from "@/lib/algo/exclusive";
 
-/** A variant strategy's own view (settings, state, position, live session) from the Algo data. */
-export const variantData = (data: AlgoData, strategy: VariantStrategy) => (strategy === "MATHI_BANK" ? data.mathiBank : data.mathi5);
+export { variantData };
 
 const SUMMARY: Record<VariantStrategy, string> = {
   MATHI_5: "Same lines, entries, regime switch and exits as Mathi Strategy v18; only the target differs.",
   MATHI_BANK: "Mathi Strategy (+3% version) on BANKNIFTY: the same lines, 50% body break, retest and exits, on the ATM CE / PE of the nearest monthly BANKNIFTY expiry (BANKNIFTY has no weekly options). Its own settings, trades and results; Mathi Strategy is unchanged.",
+  MATHI_HOURLY: "Its own engine on the first two 1-hour NIFTY candles; Mathi Strategy is unchanged.",
 };
 
 /**
- * Mathi 5% and Mathi Bank Strategy: Mathi Strategy's engine with their own settings. Live mode runs one as live paper
+ * Mathi 5%, Mathi Bank Strategy and Mathi Hourly Zone Strategy: their own settings, sessions and trades. Live mode runs one as live paper
  * trading (its own session, state and trades); Demo mode runs it on the chart replay. Every entry and exit is decided by
  * the server.
  */
@@ -68,6 +69,7 @@ export function VariantPanel({ data, onData, strategy }: { data: AlgoData; onDat
       {error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{error}</p> : null}
       {own.problems.length ? <p className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro text-warning" role="alert">{own.problems.join(" ")}</p> : null}
 
+      {strategy === "MATHI_HOURLY" ? <HourlyRules data={data} onData={onData} /> : (
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-border-soft bg-sunken/50 p-2">
         <div className="col-span-2"><p className="eyebrow">{name} — rules</p></div>
         <Info label="Instrument" text={`${config.underlying} ATM CE / PE · ${strategy === "MATHI_BANK" ? "monthly expiry" : "nearest expiry"}`} />
@@ -79,6 +81,7 @@ export function VariantPanel({ data, onData, strategy }: { data: AlgoData; onDat
         <div className="col-span-2 min-w-0"><Info label="Time exit" text={hold} /></div>
         <p className="col-span-2 text-micro leading-snug text-muted">{SUMMARY[strategy]} Paper trading only — no real orders.</p>
       </dl>
+      )}
 
       {live ? (
         <>

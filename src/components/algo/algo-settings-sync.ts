@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { AlgoStrategy } from "@/lib/algo/exclusive";
+import { isAlgoStrategy, type AlgoStrategy } from "@/lib/algo/exclusive";
 
 /**
  * Keeps the chart's Algo (start dialog, replay panel) in step with the Algo settings panel in the Strategy
@@ -50,7 +50,7 @@ const SELECTED = "td-algo-strategy-change";
 export function readSelectedStrategy(): AlgoStrategy {
   try {
     const saved = localStorage.getItem(SELECTED_KEY);
-    return saved === "PRIMARY_STRATEGY" || saved === "MATHI_5" || saved === "MATHI_BANK" ? saved : "EXISTING_ALGO";
+    return isAlgoStrategy(saved) ? saved : "EXISTING_ALGO";
   } catch {
     return "EXISTING_ALGO";
   }

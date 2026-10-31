@@ -255,7 +255,9 @@ describe("chart drawings and dashboard wiring use the stored analysis", () => {
     const desk = readFileSync("src/components/chart-desk.tsx", "utf8");
     expect(desk).toMatch(/useLiveAlgoAnalysis\(\{ enabled: !replay\.active && !optionView && !live && canPaperTrade, symbol \}\)/);
     const hook = readFileSync("src/components/algo/use-live-analysis.ts", "utf8");
-    expect(hook).toMatch(/data\.config\.mode === "PAPER" && data\.config\.underlying === symbol && fresh/);
+    expect(hook).toMatch(/data\.config\.mode === "PAPER" && view\.config\.underlying === symbol && fresh/);
+    // Mathi Strategy's own analysis unless Mathi Hourly Zone Strategy is selected.
+    expect(hook).toMatch(/const view = hourly \? data\.mathiHourly : data;/);
   });
 
   it("the dashboard, drawer and Strategy tab read the run's stored analysis and confirmations (no separate calculation)", async () => {

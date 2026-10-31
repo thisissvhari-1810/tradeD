@@ -106,6 +106,7 @@ export function tradeRecord(trade: AlgoTrade, events: AlgoEvent[], settings: Alg
     ["Share of the body past the line (%)", signal.bodyShare == null ? "" : signal.bodyShare.toFixed(1)],
     ["Required share (%)", settings.crossRule === "body" ? String(settings.crossPercent || "any crossing") : "classic body crossing"],
     ["Breakout confirmation", CONFIRMATION_LABEL[confirmationMode(settings)]],
+    ["Entry type", trade.entryType === "STRONG_BREAKOUT" ? "Strong breakout (no retest)" : trade.entryType === "RETEST" ? "Retest" : trade.entryType === "HOLD" ? "Breakout hold" : "Signal candle"],
     ["Confirmation candle (IST)", trade.confirmedAt == null ? "None (entered on the signal candle)" : `${ist(trade.confirmedAt)}–${ist(trade.confirmedAt + 60)}`],
     ["Confirmation candle open / close", signal.confirming ? `${num(signal.confirming.candle.open)} / ${num(signal.confirming.candle.close)}` : ""],
     ["Why it entered", signal.reason],

@@ -1,5 +1,6 @@
 import type { AlgoEvent } from "./runner";
 import { STRATEGY_LABEL, type StrategyId } from "./patterns";
+import type { EntryType } from "./signals";
 
 /**
  * The Algo inside the chart's replay: pure rules shared by the server (which executes) and the chart
@@ -104,6 +105,8 @@ export function runStats(events: AlgoEvent[]): RunStats {
 export const EXIT_LABEL: Record<string, string> = {
   STOP: "Stop-loss",
   TARGET: "Target",
+  EARLY_EXIT: "Early exit",
+  PROTECT: "Gain protected",
   MANUAL: "Manual exit",
   EMERGENCY: "Emergency stop",
   SESSION_END: "Session end",
@@ -119,6 +122,9 @@ export const EXIT_LABEL: Record<string, string> = {
   SQUARE_OFF: "End-of-day square-off",
   OPPOSITE_SIGNAL: "Opposite signal",
   RISK: "Risk limit",
+  MIDPOINT: "Hourly midpoint",
+  BOX_STOP: "Position box stop",
+  BOX_TARGET: "Position box target",
 };
 
 const exitReasonOf = (message: string) => EXIT_REASON.exec(message)?.[1] ?? "OTHER";
@@ -319,6 +325,8 @@ export type AlgoTrade = {
   gross: number | null;
   /** Hold / retest: the candle that confirmed the setup (the signal candle is the crossing). */
   confirmedAt: number | null;
+  /** Which entry path confirmed the setup: HOLD, RETEST or STRONG_BREAKOUT (null: entered on the signal candle). */
+  entryType: EntryType | null;
   /** Largest fall of the premium below the entry while open, per unit (from the exit; null while open). */
   adverse: number | null;
   /** Largest rise of the premium above the entry while open, per unit (from the exit; null while open). */
@@ -369,6 +377,7 @@ export function algoTrades(events: AlgoEvent[], open: { entryKey: string; exitPe
       exitCharges: 0,
       signalTime: evaluation?.time ?? event.time,
       confirmedAt: entered?.breakout ? entered.time : null,
+      entryType: event.setup?.entryType ?? null,
       underlyingAtSignal: evaluation?.candle.close ?? null,
       entryTime: entryFillTime(event),
       entryPremium: event.order.price,

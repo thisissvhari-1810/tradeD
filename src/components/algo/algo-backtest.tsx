@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { api } from "@/components/api";
 import { cx } from "@/components/ui";
+import type { AlgoStrategy } from "@/lib/algo/exclusive";
 import { backtestCsv, backtestTotals, chooseOnTraining, CONFIRMATION_SHORT, lastTradingDays, SPLIT_LABEL, splitDates, tradingDays, variantLabel, type BacktestDay, type BacktestTotals, type BacktestVariant } from "@/lib/algo/backtest";
 
 const inr = (value: number | null | undefined) => (value == null ? "—" : `${value > 0 ? "+" : value < 0 ? "−" : ""}₹${Math.abs(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
@@ -18,7 +19,7 @@ const short = (variant: BacktestVariant) => (variant === "saved" ? "Saved" : var
  * days are split in time order into training / validation / out-of-sample parts; a variant is chosen on the
  * training days only and then reported on the other two.
  */
-export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { disabled: string | null; strategy?: "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" | "MATHI_BANK" }) {
+export function MultiDayBacktest({ disabled, strategy = "EXISTING_ALGO" }: { disabled: string | null; strategy?: AlgoStrategy }) {
   const [range] = useState(() => lastTradingDays(todayIst(), 20));
   const [from, setFrom] = useState(range[0]);
   const [to, setTo] = useState(range.at(-1)!);

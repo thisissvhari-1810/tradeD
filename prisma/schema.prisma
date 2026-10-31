@@ -1116,27 +1116,30 @@ model BrokerConsent {
 
 /// The Strategy Algo of one user: its settings and its runner state (see src/lib/algo/runner.ts).
 model AlgoSession {
-  id              String         @id @default(cuid())
-  userId          String         @unique
-  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  config          Json
-  state           Json
+  id                String         @id @default(cuid())
+  userId            String         @unique
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  config            Json
+  state             Json
   /// A short lease so two ticks never run the same session at once.
-  lockedUntil     DateTime       @default(now())
+  lockedUntil       DateTime       @default(now())
   /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO, PRIMARY_STRATEGY or MATHI_5).
-  activeStrategy  String         @default("NONE")
+  activeStrategy    String         @default("NONE")
   /// "Algo - Primary Strategy" (NIFTY ORB + VWAP) settings, independent of the existing algo's `config`.
-  primaryConfig   Json?
+  primaryConfig     Json?
   /// "Mathi 5%" (a copy of Mathi Strategy v18 with a +5% target): its own settings and live paper-trading state.
-  mathi5Config    Json?
-  mathi5State     Json?
-  mathiBankConfig Json?
-  mathiBankState  Json?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  events          AlgoEvent[]
-  runs            AlgoRun[]
-  backtests       AlgoBacktest[]
+  mathi5Config      Json?
+  mathi5State       Json?
+  mathiBankConfig   Json?
+  mathiBankState    Json?
+  /// "Mathi Hourly Zone Strategy — 5%" (its own engine on the first two 1-hour candles): its own settings and live paper-trading state.
+  mathiHourlyConfig Json?
+  mathiHourlyState  Json?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  events            AlgoEvent[]
+  runs              AlgoRun[]
+  backtests         AlgoBacktest[]
 }
 
 /// A saved multi-day backtest (simulated on historical data; never orders, never the ledger): its settings,

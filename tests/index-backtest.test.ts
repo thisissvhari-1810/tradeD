@@ -63,11 +63,11 @@ function optionTapes(ce: (minute: number) => [number, number, number, number] | 
   return tapes;
 }
 
-async function simulate(candles: Candle[], tapes: Map<string, Candle[]>, settings: AlgoConfig = config) {
+async function simulate(candles: Candle[], tapes: Map<string, Candle[]>, settings: AlgoConfig = config, regime?: { history: number[] }) {
   const lines = strategyLines(s1, settings.custom);
   const chain = expiredChain({ symbol: "FINNIFTY", date: DATE, expiry: "2026-10-27", lotSize: LOT, tapes });
   const adapter = createReplayAdapter({ candles, chain, config: settings, capital: 100_000, tapeOf: async (contract) => expiredTape(tapes, contract.securityId) });
-  const { events } = await simulateSession({ sessionId: "t", date: DATE, config: settings, candles, lines, adapter, startNote: "test" });
+  const { events } = await simulateSession({ sessionId: "t", date: DATE, config: settings, candles, lines, adapter, startNote: "test", regime });
   const expiry = { expiry: "2026-10-27", source: "data" as const, calendar: "2026-10-27", mismatch: false };
   return { events, trades: auditSession({ symbol: "FINNIFTY", date: DATE, events, tapes, expiry, slippageTicks: settings.slippageTicks }) };
 }
@@ -135,7 +135,7 @@ describe("entries, target hits and losing exits on the engine's own trades", () 
 
   it("a trade that never reaches +3% exits at the 45-minute checkpoint when the trend no longer agrees: a loss, all costs in", async () => {
     // The index drifts down after the entry; the option bleeds to ₹95.
-    const tapes = optionTapes((minute) => [96, 97, 94.5, 95]);
+    const tapes = optionTapes(() => [96, 97, 94.5, 95]);
     const { trades } = await simulate(indexSession((minute) => Math.max(24_004, 24_030 - (minute - 17) * 0.5)), tapes);
     expect(trades).toHaveLength(1);
     const trade = trades[0];
@@ -150,6 +150,20 @@ describe("entries, target hits and losing exits on the engine's own trades", () 
     expect([summary.wins, summary.losses, summary.winRate, summary.targetHits, summary.otherExits, summary.maxConsecutiveLosses]).toEqual([0, 1, 0, 0, 1, 1]);
     expect(summary.net).toBeCloseTo(trade.net!, 2);
     expect(summary.maxDrawdown).toBeCloseTo(-trade.net!, 2);
+  });
+
+  it("regime switch off: the signal is a shadow trade (kept out of the figures), its target exit still labelled Target", async () => {
+    const { trades } = await simulate(indexSession(), optionTapes(winning), config, { history: Array.from({ length: 30 }, () => -100) });
+    expect(trades).toHaveLength(1);
+    expect(trades[0]).toMatchObject({ shadow: true, exitReason: "Target", targetHit: true });
+    expect(summarize(trades, [DATE], 100_000).trades).toBe(0);
+  });
+
+  it("a line limited to one direction ignores crossings the other way (lineDirections, off by default)", async () => {
+    // The fixture breaks the previous-day high upwards: allowed only "DOWN" there is no trade; "UP" keeps it.
+    expect((await simulate(indexSession(), optionTapes(winning), { ...config, lineDirections: { "prev-high": "DOWN" } })).trades).toHaveLength(0);
+    expect((await simulate(indexSession(), optionTapes(winning), { ...config, lineDirections: { "prev-high": "UP" } })).trades).toHaveLength(1);
+    expect(config.lineDirections).toBeUndefined();
   });
 
   it("never lets a later candle change an earlier decision (no look-ahead)", async () => {
@@ -183,6 +197,23 @@ describe("missing and thin data", () => {
     const { trades } = await simulate(indexSession(), tapes);
     expect(trades[0].exitReason).toBe("Target");
     expect(trades[0].flags).toEqual(expect.arrayContaining(["TARGET_TOUCH_ONLY", "QTY_ABOVE_ENTRY_MINUTE_VOLUME", "MISSING_OPTION_MINUTES"]));
+  });
+
+  it("a zero-volume row is not a trade: an entry priced from one is flagged", async () => {
+    const { trades } = await simulate(indexSession(), optionTapes(winning, { volume: 0 }));
+    expect(trades[0].flags).toContain("STALE_ENTRY_PREMIUM");
+    expect(trades[0].evidence.entryVolume).toBe(0);
+  });
+
+  it("a fill at an open above the target is capped at the target in the conservative P&L", async () => {
+    // 09:34 opens at 103.50, above the 103.05 target: the engine fills 103.45; a resting sell at the target gets 103.00.
+    const tapes = optionTapes((minute) => (minute === 18 ? [100, 102, 99.5, 101.5] : minute === 19 ? [103.5, 104, 103.2, 103.8] : [103.8, 104, 103.5, 103.8]));
+    const trade = (await simulate(indexSession(), tapes)).trades[0];
+    expect(trade.exitPremium).toBe(103.45);
+    expect(trade.flags).toContain("GAP_FILL_ABOVE_TARGET");
+    expect(trade.netConservative).toBeCloseTo(trade.net! - 0.45 * trade.quantity, 2);
+    expect(summarize([trade], [DATE], 100_000).netConservative).toBeCloseTo(trade.netConservative!, 2);
+    expect(verifyTrade(trade, tapes.get("CE:24050")!, 1)).toEqual([]);
   });
 
   it("verification catches a trade that does not match its candles", async () => {
@@ -223,6 +254,17 @@ describe("window, expiries, charges and report figures", () => {
     expect(unknown).toEqual({ expiry: "2026-11-24", source: "calendar", calendar: "2026-11-24", mismatch: false });
   });
 
+  it("an illiquid series that hides its expiry day: the calendar expiry wins when it was a session", () => {
+    const day = (date: string, value: number) => {
+      const last = Date.parse(`${date}T09:59:00Z`) / 1000;
+      return new Map([["CE:66000", [{ time: last, open: value, high: value, low: value, close: value }]], ["PE:66000", [{ time: last, open: value, high: value, low: value, close: value }]]]);
+    };
+    const tapes: ExpiredTapes = new Map([["2026-09-28", day("2026-09-28", 300)], ["2026-09-29", day("2026-09-29", 250)], ["2026-10-27", day("2026-10-27", 1)]]);
+    const expiries = resolveExpiries(tapes, "MONTH", 14, new Set(["2026-09-28", "2026-09-29", "2026-10-27"]));
+    expect(expiries.get("2026-09-28")).toEqual({ expiry: "2026-09-29", source: "calendar", calendar: "2026-09-29", mismatch: false });
+    expect(expiries.get("2026-10-27")?.expiry).toBe("2026-10-27");
+  });
+
   it("statutory charge check: a known example", () => {
     // ₹1,00,000 premium turnover: buy = 20 + 35.03 + 0.10 + 3.00 + 18% × 55.13 = 68.05; sell = 20 + 35.03 + 0.10 + 100 + 9.92 = 165.05.
     expect(statutoryCharges("BUY", 100, 1_000)).toBeCloseTo(68.05, 2);
@@ -233,7 +275,7 @@ describe("window, expiries, charges and report figures", () => {
     const make = (id: number, net: number, extra: Partial<AuditTrade> = {}): AuditTrade => ({
       id: `X:${id}`, date: id < 3 ? "2026-10-01" : "2026-10-02", index: "X", optionSymbol: "X", right: id % 2 ? "CE" : "PE", side: id % 2 ? "CALL" : "PUT", expiry: null, strike: 1, lotSize: 1, lots: 1, quantity: 100, lines: [], shadow: false,
       signalTime: id * 100, entryTime: id * 100 + 60, entryPremium: 100, targetPremium: 103, exitTime: id * 100 + 120, exitPremium: 100 + net / 100, exitReason: net > 0 ? "Target" : "Time limit", targetHit: net > 0,
-      gross: net + 10, charges: 10, net, deployed: 10_000, returnPercent: net / 100, mfe: null, mae: null, mfePercent: null, maePercent: null, holdingMinutes: 10, flags: [], slippage: 10,
+      gross: net + 10, charges: 10, net, deployed: 10_000, returnPercent: net / 100, mfe: null, mae: null, mfePercent: null, maePercent: null, holdingMinutes: 10, flags: [], slippage: 10, netConservative: net,
       evidence: { signalCandle: null, targetCandle: null, heldMinutes: 1, missingMinutes: 0, entryVolume: null }, timeline: [], ...extra,
     });
     const trades = [make(1, 300), make(2, -500), make(3, -200), make(4, 100), make(5, 999, { shadow: true })];

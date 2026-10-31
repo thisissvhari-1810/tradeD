@@ -18,9 +18,11 @@ export const broadcastAlgoView = (data: AlgoData) => {
 export const algoPanelTicker = { mounted: 0 };
 /** Live Algo panels beside the chart: while one is mounted it reads the open trade's premium every 5 seconds. */
 export const algoLivePanel = { mounted: 0 };
-/** Mathi 5% panels on screen: while one is mounted it runs Mathi 5%'s live check, so the button does not repeat it. */
 /** Variant panels that are open (each checks its own strategy while mounted, so the button does not check it twice). */
-export const variantTicker: Record<VariantStrategy, { mounted: number }> = { MATHI_5: { mounted: 0 }, MATHI_BANK: { mounted: 0 } };
+export const variantTicker: Record<VariantStrategy, { mounted: number }> = { MATHI_5: { mounted: 0 }, MATHI_BANK: { mounted: 0 }, MATHI_HOURLY: { mounted: 0 } };
+
+/** A variant strategy's own view (settings, state, position, live session) from the Algo data. */
+export const variantData = (data: AlgoData, strategy: VariantStrategy) => (strategy === "MATHI_BANK" ? data.mathiBank : strategy === "MATHI_HOURLY" ? data.mathiHourly : data.mathi5);
 
 /**
  * Start Algo / Stop Algo on the live chart (paper trading only). Each Start begins a new session with its own
@@ -60,7 +62,7 @@ export function AlgoStartButton({ allowed, onUpgrade }: { allowed: boolean; onUp
 
   // The variants' live checks also run from here while their panel is not open.
   const activeVariants = VARIANT_STRATEGIES.filter((strategy) => {
-    const own = data ? (strategy === "MATHI_BANK" ? data.mathiBank : data.mathi5) : null;
+    const own = data ? variantData(data, strategy) : null;
     return Boolean(own?.state.running || own?.state.position || own?.state.pending);
   }).join(",");
   useEffect(() => {
@@ -74,10 +76,10 @@ export function AlgoStartButton({ allowed, onUpgrade }: { allowed: boolean; onUp
     return () => window.clearInterval(timer);
   }, [activeVariants, apply]);
 
-  // The button starts and stops the strategy selected in the Algo panel (Mathi Strategy, Mathi 5% or Mathi Bank Strategy).
+  // The button starts and stops the strategy selected in the Algo panel (Mathi Strategy or one of the variants).
   const [selected] = useSelectedStrategy();
   const variant = isVariantStrategy(selected) ? selected : null;
-  const view = variant ? (variant === "MATHI_BANK" ? data?.mathiBank : data?.mathi5) : data;
+  const view = variant ? (data ? variantData(data, variant) : undefined) : data;
   const name = variant ? STRATEGY_NAME[variant] : "Algo";
   const activation = view?.liveSession.activation ?? null;
   const running = Boolean(view?.state.running && activation && activation.endedAt == null);

@@ -7,20 +7,22 @@
  * protected. A lock whose owner is no longer active at all (a crash, an archived run) can be taken over.
  */
 
-export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" | "MATHI_BANK";
+export type AlgoStrategy = "EXISTING_ALGO" | "PRIMARY_STRATEGY" | "MATHI_5" | "MATHI_BANK" | "MATHI_HOURLY";
 export type LockOwner = "NONE" | AlgoStrategy;
-export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_5", "MATHI_BANK", "PRIMARY_STRATEGY"];
+export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_5", "MATHI_BANK", "MATHI_HOURLY", "PRIMARY_STRATEGY"];
 
-/** Strategies run by Mathi Strategy's engine with their own settings, live paper session, state and trade history. */
-export type VariantStrategy = "MATHI_5" | "MATHI_BANK";
-export const VARIANT_STRATEGIES: VariantStrategy[] = ["MATHI_5", "MATHI_BANK"];
-export const isVariantStrategy = (value: unknown): value is VariantStrategy => value === "MATHI_5" || value === "MATHI_BANK";
+/** Strategies with their own settings, live paper session, state and trade history: Mathi Strategy's engine with other
+ * settings (Mathi 5%, Mathi Bank), and Mathi Hourly Zone Strategy on its own engine with the same execution. */
+export type VariantStrategy = "MATHI_5" | "MATHI_BANK" | "MATHI_HOURLY";
+export const VARIANT_STRATEGIES: VariantStrategy[] = ["MATHI_5", "MATHI_BANK", "MATHI_HOURLY"];
+export const isVariantStrategy = (value: unknown): value is VariantStrategy => value === "MATHI_5" || value === "MATHI_BANK" || value === "MATHI_HOURLY";
 
 export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Mathi Strategy",
   PRIMARY_STRATEGY: "Algo - Primary Strategy",
   MATHI_5: "Mathi 5%",
   MATHI_BANK: "Mathi Bank Strategy",
+  MATHI_HOURLY: "Mathi Hourly Zone Strategy — 5%",
 };
 /** The short line after the name in the strategy selector. */
 export const STRATEGY_TAGLINE: Record<AlgoStrategy, string> = {
@@ -28,16 +30,18 @@ export const STRATEGY_TAGLINE: Record<AlgoStrategy, string> = {
   PRIMARY_STRATEGY: "NIFTY ORB + VWAP",
   MATHI_5: "Mathi v18 with +5% target",
   MATHI_BANK: "Mathi 3% for BANKNIFTY",
+  MATHI_HOURLY: "First two 1-hour candles, +5%",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE once 50% of a candle's body crosses an enabled line and the break holds on the next candle; +3% premium target, no stop-loss, 3 trades a session.",
   PRIMARY_STRATEGY: "NIFTY 50 options: opening-range breakout confirmed by session VWAP and the trend (9 / 21 EMA).",
   MATHI_5: "A separate copy of Mathi Strategy v18: the same lines, confirmation, exits and 3 trades a session, with a +5% premium target.",
   MATHI_BANK: "Mathi Strategy (+3% version) on BANKNIFTY: the same strategy lines, 50% body break and retest, ATM CE / PE of the nearest monthly BANKNIFTY expiry, with its own settings, trades and results.",
+  MATHI_HOURLY: "NIFTY 50 ATM options from the first two 1-hour candles: a red 09:15 candle sets a LONG reference (ATM CALL), a green one a SHORT reference (ATM PUT) at its close; the 10:15 candle must close in the zone. Entry from 11:15, +5% premium target, no stop-loss order, exit when a completed hour closes on the wrong side of its midpoint.",
 };
 
 export function isAlgoStrategy(value: unknown): value is AlgoStrategy {
-  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY" || value === "MATHI_5" || value === "MATHI_BANK";
+  return value === "EXISTING_ALGO" || value === "PRIMARY_STRATEGY" || value === "MATHI_5" || value === "MATHI_BANK" || value === "MATHI_HOURLY";
 }
 
 export function lockOwnerOf(value: unknown): LockOwner {

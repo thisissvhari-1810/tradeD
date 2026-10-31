@@ -21,7 +21,7 @@ export function featureStatus(data: AlgoData, strategy: AlgoStrategy) {
     return { label: activity?.running ? `Running${extra}` : `Stopping${extra}`, tone: "bg-profit-soft text-profit", owns: true, blocked: false };
   }
   if (owner !== "NONE") return { label: `Blocked: ${STRATEGY_NAME[owner]} is running`, tone: "bg-sunken text-muted", owns: false, blocked: true };
-  const problems = strategy === "PRIMARY_STRATEGY" ? data.primaryProblems : strategy === "MATHI_5" ? data.mathi5.problems : strategy === "MATHI_BANK" ? data.mathiBank.problems : data.problems;
+  const problems = strategy === "PRIMARY_STRATEGY" ? data.primaryProblems : strategy === "MATHI_5" ? data.mathi5.problems : strategy === "MATHI_BANK" ? data.mathiBank.problems : strategy === "MATHI_HOURLY" ? data.mathiHourly.problems : data.problems;
   return { label: problems.length ? "Settings need attention" : "Ready (stopped)", tone: problems.length ? "bg-warning-soft text-warning" : "bg-info-soft text-info", owns: false, blocked: false };
 }
 

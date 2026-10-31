@@ -92,7 +92,12 @@ export type CandleEvaluation = {
   cancelled?: string;
   /** SETUP_CONFIRMED: the crossing that started the setup (its candle and lines); this candle only confirmed it. */
   breakout?: { time: number; candle: Candle; events: CrossEvent[] };
+  /** SETUP_CONFIRMED: which entry path confirmed it (hold, retest, or a strong breakout without a retest). */
+  entryType?: EntryType;
 };
+
+/** How a breakout setup was confirmed for entry. */
+export type EntryType = "HOLD" | "RETEST" | "STRONG_BREAKOUT";
 
 /** Same IST trading day (a session's first candle is never paired with the previous day's last). */
 export function sameSession(a: number, b: number) {

@@ -3,6 +3,7 @@ import { rateLimit } from "@/lib/security/rate-limit";
 import { requireUser } from "@/server/auth";
 import { mutation, query } from "@/server/http";
 import { algoCommand, algoHistory, algoReport, algoView, backtestDay, backtestRecords, marketPlan } from "@/server/algo";
+import { indexBacktestReport } from "@/server/index-backtest";
 import { ALGO_SESSION_ID, algoRequest } from "@/lib/algo/request";
 
 /** The Strategy Algo of the signed-in user: settings, state, position and signal log. */
@@ -11,6 +12,8 @@ export const GET = query(async (request: Request) => {
   const params = new URL(request.url).searchParams;
   // Home → Algo History: archived replay sessions only (read-only; never touches the active session).
   if (params.get("history") === "1") return Response.json(await algoHistory(user), { headers: { "Cache-Control": "no-store" } });
+  // Backtests → index comparison: the stored results of `npm run backtest:indices` (read-only).
+  if (params.get("indexBacktest") === "1") return Response.json(await indexBacktestReport(), { headers: { "Cache-Control": "no-store" } });
   // One session's full record, for its downloadable report (only the user's own sessions).
   const report = params.get("report");
   if (report) {

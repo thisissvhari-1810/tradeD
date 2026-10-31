@@ -112,12 +112,15 @@ export type ExpiryInfo = { expiry: string | null; source: "data" | "calendar" | 
  * contracts are cross-checked against the calendar rule (last Tuesday), which ignores holiday shifts; a session after
  * the last expiry seen in the data falls back to the calendar rule and says so.
  */
-export function resolveExpiries(tapes: ExpiredTapes, cycle: ExpiryCycle, tolerance: number): Map<string, ExpiryInfo> {
+export function resolveExpiries(tapes: ExpiredTapes, cycle: ExpiryCycle, tolerance: number, sessions?: Set<string>): Map<string, ExpiryInfo> {
   const fromData = weeklyExpiries(tapes, tolerance);
   const out = new Map<string, ExpiryInfo>();
   for (const [day, expiry] of fromData) {
     const calendar = cycle === "MONTH" ? monthlyExpiry(day) : null;
-    if (expiry) out.set(day, { expiry, source: "data", calendar, mismatch: calendar != null && calendar !== expiry });
+    // An earlier calendar expiry that was a trading session did expire then: illiquid options can end that day with
+    // stale premiums that still look like time value. A calendar date that was not a session (a holiday) defers to the data.
+    if (expiry && calendar && calendar < expiry && sessions?.has(calendar)) out.set(day, { expiry: calendar, source: "calendar", calendar, mismatch: false });
+    else if (expiry) out.set(day, { expiry, source: "data", calendar, mismatch: calendar != null && calendar !== expiry });
     else out.set(day, { expiry: calendar, source: calendar ? "calendar" : "none", calendar, mismatch: false });
   }
   return out;
@@ -127,15 +130,16 @@ export function resolveExpiries(tapes: ExpiredTapes, cycle: ExpiryCycle, toleran
 
 export type TradeFlag =
   | "STALE_ENTRY_PREMIUM" | "STALE_EXIT_PREMIUM" | "TARGET_TOUCH_ONLY" | "GAP_FILL_ABOVE_TARGET"
-  | "QTY_ABOVE_ENTRY_MINUTE_VOLUME" | "MISSING_OPTION_MINUTES" | "OPEN_AT_END" | "EXPIRY_FROM_CALENDAR" | "EXPIRY_CALENDAR_MISMATCH";
+  | "QTY_ABOVE_ENTRY_MINUTE_VOLUME" | "MISSING_OPTION_MINUTES" | "TARGET_MINUTE_NOT_TRADED" | "OPEN_AT_END" | "EXPIRY_FROM_CALENDAR" | "EXPIRY_CALENDAR_MISMATCH";
 
 export const FLAG_TEXT: Record<TradeFlag, string> = {
-  STALE_ENTRY_PREMIUM: "No option trade in the signal minute: the entry used the last earlier premium (within the engine's 10-minute fill limit).",
-  STALE_EXIT_PREMIUM: "No option trade in the exit minute: the exit used the last earlier premium.",
+  STALE_ENTRY_PREMIUM: "No option traded in the signal minute (no candle, or a zero-volume row carrying an earlier price): the entry price was not a traded price.",
+  STALE_EXIT_PREMIUM: "No option traded in the exit minute: the exit used a carried-forward price.",
   TARGET_TOUCH_ONLY: "The option only touched the target (high < target + 1 tick): a resting sell at the target might not have filled.",
-  GAP_FILL_ABOVE_TARGET: "The target minute opened above the target: filled at that open (better than the target).",
+  GAP_FILL_ABOVE_TARGET: "The target minute opened above the target and the engine filled at that open, better than the target. A resting sell at the target fills at the target: the conservative P&L caps it there.",
+  TARGET_MINUTE_NOT_TRADED: "The minute that reached the target had zero traded volume: the target price was never actually traded.",
   QTY_ABOVE_ENTRY_MINUTE_VOLUME: "Order quantity is larger than the contracts traded in the entry minute: the fill size is optimistic.",
-  MISSING_OPTION_MINUTES: "Some minutes while the trade was open have no option candle (no trades): MFE/MAE and exits use the last premium.",
+  MISSING_OPTION_MINUTES: "Some minutes while the trade was open had no option trades: MFE/MAE and exits use carried-forward premiums.",
   OPEN_AT_END: "No exit fill recorded: excluded from P&L.",
   EXPIRY_FROM_CALENDAR: "The expiry date comes from the calendar rule (last Tuesday), not from the data.",
   EXPIRY_CALENDAR_MISMATCH: "The expiry seen in the data differs from the calendar rule (an exchange-holiday shift).",
@@ -179,6 +183,8 @@ export type AuditTrade = {
   flags: TradeFlag[];
   /** Slippage included in the fill prices (entry + exit ticks × quantity), ₹. */
   slippage: number;
+  /** Net P&L with a fill above the target capped at the target less slippage (what a resting sell at the target gets). */
+  netConservative: number | null;
   evidence: { signalCandle: Candle | null; targetCandle: Candle | null; heldMinutes: number; missingMinutes: number; entryVolume: number | null };
   timeline: Array<{ time: number; text: string }>;
 };
@@ -195,10 +201,13 @@ function auditTrade(trade: AlgoTrade, input: { symbol: string; date: string; eve
   const right = trade.right === "PE" ? "PE" : "CE";
   const tape = input.tapes.get(`${right}:${trade.strike}`) ?? [];
   const at = (time: number) => tape.find((candle) => candle.time === time) ?? null;
+  // A row with zero volume is the provider carrying the last price forward: nothing traded in that minute.
+  const traded = (candle: Candle | null) => candle != null && (candle.volume == null || candle.volume > 0);
   // The premium the entry used is the signal minute's close (the minute that ends at the entry time).
   const signalCandle = at(trade.entryTime - 60);
   const end = trade.exitTime ?? Infinity;
   const held = tape.filter((candle) => candle.time >= trade.entryTime && candle.time + 60 <= end);
+  const heldTraded = held.filter((candle) => traded(candle)).length;
   const heldMinutes = trade.exitTime != null ? Math.max(0, Math.round((trade.exitTime - trade.entryTime) / 60)) : 0;
   // The exit's own reason code: a shadow exit's message starts "SHADOW Exit (…)", which algoTrades labels only "Exit".
   const exitEvent = input.events.filter((event) => event.kind === "EXIT" && event.order?.key.startsWith(`${trade.entryKey}:exit`)).at(-1);
@@ -207,14 +216,15 @@ function auditTrade(trade: AlgoTrade, input: { symbol: string; date: string; eve
   const targetHit = exitReason === "Target";
   const targetCandle = targetHit && trade.exitTime != null ? at(trade.exitTime - 60) : null;
   const flags: TradeFlag[] = [];
-  if (!signalCandle) flags.push("STALE_ENTRY_PREMIUM");
-  if (trade.exitTime != null && !targetHit && !at(trade.exitTime - 60)) flags.push("STALE_EXIT_PREMIUM");
+  if (!traded(signalCandle)) flags.push("STALE_ENTRY_PREMIUM");
+  if (trade.exitTime != null && !targetHit && !traded(at(trade.exitTime - 60))) flags.push("STALE_EXIT_PREMIUM");
   if (targetCandle && trade.target != null) {
     if (targetCandle.open >= trade.target) flags.push("GAP_FILL_ABOVE_TARGET");
     else if (targetCandle.high < trade.target + TICK) flags.push("TARGET_TOUCH_ONLY");
+    if (!traded(targetCandle)) flags.push("TARGET_MINUTE_NOT_TRADED");
   }
-  if (signalCandle && signalCandle.volume != null && signalCandle.volume > 0 && trade.quantity > signalCandle.volume) flags.push("QTY_ABOVE_ENTRY_MINUTE_VOLUME");
-  if (held.length < heldMinutes) flags.push("MISSING_OPTION_MINUTES");
+  if (signalCandle && traded(signalCandle) && signalCandle.volume != null && trade.quantity > signalCandle.volume) flags.push("QTY_ABOVE_ENTRY_MINUTE_VOLUME");
+  if (heldTraded < heldMinutes) flags.push("MISSING_OPTION_MINUTES");
   if (trade.exitTime == null || trade.realized == null) flags.push("OPEN_AT_END");
   if (input.expiry?.source === "calendar") flags.push("EXPIRY_FROM_CALENDAR");
   if (input.expiry?.mismatch) flags.push("EXPIRY_CALENDAR_MISMATCH");
@@ -225,6 +235,8 @@ function auditTrade(trade: AlgoTrade, input: { symbol: string; date: string; eve
   const charges = round(trade.entryCharges + trade.exitCharges);
   const paid = trade.entryPremium * trade.quantity;
   const expiry = input.expiry?.expiry ?? (trade.expiry || null);
+  const capped = trade.target != null ? round(Math.max(TICK, trade.target - input.slippageTicks * TICK)) : null;
+  const excess = flags.includes("GAP_FILL_ABOVE_TARGET") && capped != null && trade.exitPremium != null ? Math.max(0, trade.exitPremium - capped) * trade.quantity : 0;
   return {
     id: `${input.symbol}:${input.date}:${trade.number}`,
     date: input.date,
@@ -259,7 +271,9 @@ function auditTrade(trade: AlgoTrade, input: { symbol: string; date: string; eve
     holdingMinutes: trade.durationMinutes,
     flags,
     slippage: round(input.slippageTicks * TICK * trade.quantity * (trade.exitTime != null ? 2 : 1)),
-    evidence: { signalCandle, targetCandle, heldMinutes, missingMinutes: Math.max(0, heldMinutes - held.length), entryVolume: signalCandle?.volume ?? null },
+    // Sell charges stay at the higher fill's (a few rupees more): the conservative figure is never flattered.
+    netConservative: trade.realized == null ? null : round(trade.realized - excess),
+    evidence: { signalCandle, targetCandle, heldMinutes, missingMinutes: Math.max(0, heldMinutes - heldTraded), entryVolume: signalCandle?.volume ?? null },
     timeline: tradeTimeline(input.events, trade.entryKey).map((event) => ({ time: event.time, text: event.text })),
   };
 }
@@ -360,6 +374,10 @@ export type IndexSummary = {
   worstMaePercent: number | null;
   avgMaePercent: number | null;
   flagged: number;
+  /** Net P&L with every fill above the target capped at the target (see GAP_FILL_ABOVE_TARGET). */
+  netConservative: number;
+  /** Entries whose signal minute had no option trade (STALE_ENTRY_PREMIUM). */
+  staleEntries: number;
   exits: Record<string, number>;
   daily: DayRow[];
 };
@@ -430,6 +448,8 @@ export function summarize(trades: AuditTrade[], sessions: string[], capital: num
     worstMaePercent: mae.length ? Math.max(...mae) : null,
     avgMaePercent: average(mae),
     flagged: ordered.filter((trade) => trade.flags.length).length,
+    netConservative: sum(closed, (trade) => trade.netConservative ?? trade.net!),
+    staleEntries: ordered.filter((trade) => trade.flags.includes("STALE_ENTRY_PREMIUM")).length,
     exits,
     daily,
   };
@@ -465,7 +485,10 @@ export type IndexResult = {
   trades: AuditTrade[];
   shadowTrades: AuditTrade[];
   summary: IndexSummary | null;
+  /** Cost checks on the same trades: statutory charges instead of the app's model, and more slippage on both fills. */
   sensitivity: { statutoryCharges: number | null; netAtStatutoryCharges: number | null; stressSlippageTicks: number; netAtStressSlippage: number | null } | null;
+  /** The trades an index NOT_BACKTESTED for untradeable premiums would have had (diagnostics only, in no figure). */
+  untradeableTrades?: AuditTrade[];
   dataQuality: { duplicates: number; outsideSession: number; invalid: number; incompleteSessions: string[]; offsetsWithData: string[]; requestFailures: string[]; verification: { checked: number; problems: Array<{ id: string; problems: string[] }> } };
 };
 
@@ -486,6 +509,9 @@ export const DEFINITIONS: Record<string, string> = {
   "Gross profit / loss": "Sum of the gross P&L of the trades that made money / lost money before charges.",
   Charges: "The app's own option charge model on every order (₹20 brokerage, exchange 0.05%, SEBI 0.01%, stamp 0.03% on buys, STT 0.06% on sells, GST 18%): an estimate, not a contract note. A statutory-rate check is shown alongside.",
   "Net P&L": "Gross P&L − charges, summed over closed real trades. Shadow trades (regime switch off) are never included.",
+  "Conservative net P&L": "Net P&L with every fill above the +3% target capped at the target less 1 tick: the engine fills a target at a minute's open when it opens above the target, but a resting sell at the target fills at the target.",
+  "Slippage stress": "The same trades with 5 ticks (₹0.25) of slippage on each fill instead of 1: net − 4 extra ticks × 2 fills × quantity.",
+  "Tradeable data": "An index is NOT BACKTESTED when most of its entries fall in minutes where the chosen option did not trade (zero volume): those premiums are carried-forward prices, not fills.",
   "Return on deployed capital": "Net P&L ÷ premium paid on all closed trades × 100.",
   "Return on account capital": "Net P&L ÷ ₹1,00,000 × 100. Every session starts from the same ₹1,00,000 virtual account (not compounded).",
   "Maximum drawdown": "Largest fall from a peak of the cumulative net P&L, trade by trade in time order, starting at ₹0; also shown as % of ₹1,00,000.",

@@ -1,6 +1,7 @@
-import type { Drawing } from "@/components/drawing-model";
+import { positionPoints, type Drawing } from "@/components/drawing-model";
 import type { ChartMarker } from "@/components/chart-panel";
 import type { MarketAnalysis, PatternState } from "@/lib/algo/patterns";
+import type { HourlyState } from "@/lib/algo/hourly-zone";
 
 /**
  * The Algo's market analysis drawn on the chart from the same stored analysis the dashboard reads.
@@ -13,7 +14,7 @@ import type { MarketAnalysis, PatternState } from "@/lib/algo/patterns";
 export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined, colors: { trendline: string; neckline: string; resistance?: string; support?: string }): Drawing[] {
   if (!analysis || !analysis.observationComplete) return [];
   const lastCandle = analysis.asOf - 60;
-  const list: Drawing[] = [];
+  const list: Drawing[] = hourlyDrawings(analysis.hourly, lastCandle, colors);
   // Only what the switched-on strategies use is drawn.
   const on = (id: "trendline" | "w" | "m" | "orb") => analysis.strategies[id]?.enabled !== false;
   for (const line of on("trendline") ? [analysis.resistance, analysis.support] : []) {
@@ -73,5 +74,49 @@ export function algoPivotMarkers(analysis: MarketAnalysis | null | undefined, co
   }
   if (analysis.strategies.w?.enabled !== false) add(analysis.w);
   if (analysis.strategies.m?.enabled !== false) add(analysis.m);
+  return list;
+}
+
+const price = (value: number) => value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Mathi Hourly Zone Strategy on the chart: each pair's reference as a Long / Short position zone (the same boxes as the
+ * drawing tool: the permitted side in green over a LONG reference / under a SHORT one, the losing side in red), fixed at
+ * the first candle's close, spanning the two hours it reads and, once traded, the trade to its exit. Its one label
+ * says the direction, reference, status and the option's entry and +5% target (an option price, not an index level).
+ * Each midpoint the trade was checked against is a short dashed line across its hour. A doji is a dotted line only.
+ */
+export function hourlyDrawings(hourly: HourlyState | null | undefined, lastCandle: number, colors: { neckline: string; resistance?: string; support?: string }): Drawing[] {
+  if (!hourly) return [];
+  const list: Drawing[] = [];
+  const trades = hourly.trades ?? [];
+  for (const pair of hourly.pairs) {
+    const id = `algo:hourly:${pair.decisionTime}`;
+    if (!pair.direction) {
+      list.push({ id: `${id}:doji`, kind: "trend", points: [{ time: pair.first.start, price: pair.reference }, { time: Math.min(pair.decisionTime, lastCandle), price: pair.reference }], color: colors.neckline, width: 1, dash: "dotted", locked: true });
+      list.push({ id: `${id}:doji-label`, kind: "text", points: [{ time: pair.first.start, price: pair.reference }], text: `Doji ref ${price(pair.reference)} · SKIPPED`, color: colors.neckline, locked: true });
+      continue;
+    }
+    const trade = trades.find((item) => item.decisionTime === pair.decisionTime) ?? null;
+    const status = trade ? trade.status : pair.status;
+    const right = Math.max(pair.first.start + 60, Math.min(trade ? trade.exitTime ?? lastCandle : pair.second?.complete ? pair.decisionTime - 60 : lastCandle, lastCandle));
+    // The box as the strategy reads it (its edges when set), else the first candle's range.
+    const height = pair.box ? pair.box.top - pair.reference : Math.max(pair.first.high - pair.first.low, pair.reference * 0.0005);
+    const long = pair.direction === "LONG";
+    const option = trade ? ` · ${trade.side} ₹${price(trade.premium)} → ₹${price(trade.target)} (+${Math.round((trade.target / trade.premium - 1) * 1000) / 10}%)${trade.exitPremium != null ? ` · exit ₹${price(trade.exitPremium)}` : ""}` : "";
+    list.push({
+      id,
+      kind: long ? "long" : "short",
+      points: positionPoints({ left: pair.first.start, right, entry: pair.reference, stop: long ? pair.reference - height : pair.reference + height, target: long ? pair.reference + height : pair.reference - height }),
+      text: `${pair.direction} ref ${price(pair.reference)} · ${status}${trade?.shadow ? " (shadow)" : ""}${option}`,
+      color: long ? colors.support ?? colors.neckline : colors.resistance ?? colors.neckline,
+      width: 1,
+      locked: true,
+    });
+    for (const check of trade?.midpoints ?? []) {
+      if (check.end - 60 > lastCandle) continue;
+      list.push({ id: `${id}:mid:${check.start}`, kind: "trend", points: [{ time: check.start, price: check.mid }, { time: check.end - 60, price: check.mid }], color: check.keep ? colors.neckline : colors.resistance ?? colors.neckline, width: 1, dash: "dashed", locked: true });
+    }
+  }
   return list;
 }
