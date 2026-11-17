@@ -1116,23 +1116,26 @@ model BrokerConsent {
 
 /// The Strategy Algo of one user: its settings and its runner state (see src/lib/algo/runner.ts).
 model AlgoSession {
-  id                String         @id @default(cuid())
-  userId            String         @unique
-  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  config            Json
-  state             Json
+  id                 String         @id @default(cuid())
+  userId             String         @unique
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  config             Json
+  state              Json
   /// A short lease so two ticks never run the same session at once.
-  lockedUntil       DateTime       @default(now())
-  /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO or MATHI_HOURLY).
-  activeStrategy    String         @default("NONE")
+  lockedUntil        DateTime       @default(now())
+  /// The exclusive execution lock: which algo feature may place new orders (NONE, EXISTING_ALGO, MATHI_HOURLY or MATHI_CHANNEL).
+  activeStrategy     String         @default("NONE")
   /// "Mathi Hourly Zone Strategy — 5%" (its own engine on the first two 1-hour candles): its own settings and live paper-trading state.
-  mathiHourlyConfig Json?
-  mathiHourlyState  Json?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  events            AlgoEvent[]
-  runs              AlgoRun[]
-  backtests         AlgoBacktest[]
+  mathiHourlyConfig  Json?
+  mathiHourlyState   Json?
+  /// "Mathi Trend Channel" (its own engine: a parallel channel on 3-minute candles): its own settings and live paper-trading state.
+  mathiChannelConfig Json?
+  mathiChannelState  Json?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  events             AlgoEvent[]
+  runs               AlgoRun[]
+  backtests          AlgoBacktest[]
 }
 
 /// A saved multi-day backtest (simulated on historical data; never orders, never the ledger): its settings,
@@ -1174,7 +1177,7 @@ model AlgoRun {
   underlying       String
   /// Settings snapshot taken when the run was confirmed (changes apply to the next run).
   config           Json
-  /// The algo feature that owns this run: EXISTING_ALGO or MATHI_HOURLY (trade attribution and history).
+  /// The algo feature that owns this run: EXISTING_ALGO, MATHI_HOURLY or MATHI_CHANNEL (trade attribution and history).
   strategy         String       @default("EXISTING_ALGO")
   /// The strategy lines for the replayed date, fixed for the run.
   lines            Json

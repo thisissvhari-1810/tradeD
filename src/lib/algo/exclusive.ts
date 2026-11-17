@@ -7,32 +7,35 @@
  * protected. A lock whose owner is no longer active at all (a crash, an archived run) can be taken over.
  */
 
-export type AlgoStrategy = "EXISTING_ALGO" | "MATHI_HOURLY";
+export type AlgoStrategy = "EXISTING_ALGO" | "MATHI_HOURLY" | "MATHI_CHANNEL";
 export type LockOwner = "NONE" | AlgoStrategy;
-export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_HOURLY"];
+export const ALGO_STRATEGIES: AlgoStrategy[] = ["EXISTING_ALGO", "MATHI_HOURLY", "MATHI_CHANNEL"];
 
-/** Strategies with their own settings, live paper session, state and trade history: Mathi Hourly Zone Strategy on its
- * own engine with the same execution as Mathi Strategy. */
-export type VariantStrategy = "MATHI_HOURLY";
-export const VARIANT_STRATEGIES: VariantStrategy[] = ["MATHI_HOURLY"];
-export const isVariantStrategy = (value: unknown): value is VariantStrategy => value === "MATHI_HOURLY";
+/** Strategies with their own settings, live paper session, state and trade history: Mathi Hourly Zone Strategy and
+ * Mathi Trend Channel, each on its own engine with the same execution as Mathi Strategy. */
+export type VariantStrategy = "MATHI_HOURLY" | "MATHI_CHANNEL";
+export const VARIANT_STRATEGIES: VariantStrategy[] = ["MATHI_HOURLY", "MATHI_CHANNEL"];
+export const isVariantStrategy = (value: unknown): value is VariantStrategy => value === "MATHI_HOURLY" || value === "MATHI_CHANNEL";
 
 export const STRATEGY_NAME: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Mathi Strategy",
   MATHI_HOURLY: "Mathi Hourly Zone Strategy — 5%",
+  MATHI_CHANNEL: "Mathi Trend Channel",
 };
 /** The short line after the name in the strategy selector. */
 export const STRATEGY_TAGLINE: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Existing Strategy",
   MATHI_HOURLY: "First two 1-hour candles, +5%",
+  MATHI_CHANNEL: "3-minute parallel channel breakout",
 };
 export const STRATEGY_DESCRIPTION: Record<AlgoStrategy, string> = {
   EXISTING_ALGO: "Strategy-line breakouts: ATM CE / PE once 50% of a candle's body crosses an enabled line and the break holds on the next candle; +3% premium target, no stop-loss, 3 trades a session.",
   MATHI_HOURLY: "NIFTY 50 ATM options from the first two 1-hour candles: a red 09:15 candle sets a LONG reference (ATM CALL), a green one a SHORT reference (ATM PUT) at its close; the 10:15 candle must close in the zone. Entry from 11:15, +5% premium target, no stop-loss order, exit when a completed hour closes on the wrong side of its midpoint.",
+  MATHI_CHANNEL: "NIFTY 50 ATM options on 3-minute candles: the first deep-swing combination after the 09:15 candle (2 highs + 1 low, or 2 lows + 1 high) sets a primary trendline and its exact parallel clone. A close beyond the channel and the horizontal swing level, then a next candle beyond the breakout candle's high / low, buys the ATM CALL / PUT; +5% premium target, no stop-loss, 1 trade a session.",
 };
 
 export function isAlgoStrategy(value: unknown): value is AlgoStrategy {
-  return value === "EXISTING_ALGO" || value === "MATHI_HOURLY";
+  return value === "EXISTING_ALGO" || value === "MATHI_HOURLY" || value === "MATHI_CHANNEL";
 }
 
 export function lockOwnerOf(value: unknown): LockOwner {

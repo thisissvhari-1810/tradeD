@@ -13,8 +13,10 @@ import { ConfirmationList, MarketAnalysisSection, StrategyRows, waitingMessage }
 import { STRATEGY_LABEL } from "@/lib/algo/patterns";
 import { EngineCard, MarketPlanSection, MathiStatus } from "@/components/algo/algo-engine";
 import { HourlyToday } from "@/components/algo/algo-hourly";
+import { ChannelToday } from "@/components/algo/algo-channel";
+import { variantData } from "@/components/algo/algo-start-button";
 import { useSelectedStrategy, useUnsavedSettings } from "@/components/algo/algo-settings-sync";
-import { blockedMessage, STRATEGY_NAME } from "@/lib/algo/exclusive";
+import { blockedMessage, isVariantStrategy, STRATEGY_NAME } from "@/lib/algo/exclusive";
 import type { Confirmation } from "@/lib/algo/confirmations";
 
 const inr = (value: number | null | undefined, signed = false) => (value == null || !Number.isFinite(value) ? "—" : money(value, signed));
@@ -97,7 +99,7 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-3">
         <Bot className="h-4 w-4 text-primary" aria-hidden />
         <h2 className="text-base font-semibold">Algo</h2>
-        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "MATHI_HOURLY" ? "Mathi Hourly" : "Mathi"}</span>
+        <span className="min-w-0 truncate text-xs font-medium text-text-2" title={STRATEGY_NAME[feature]}>{feature === "MATHI_HOURLY" ? "Mathi Hourly" : feature === "MATHI_CHANNEL" ? "Mathi Channel" : "Mathi"}</span>
         <span className={cx("whitespace-nowrap rounded-pill px-2 py-0.5 text-xs font-semibold", badge.tone)} role="status">{badge.label}</span>
         <span className={cx("rounded-pill bg-demo-soft px-2 py-0.5 text-xs font-medium text-demo", position && !open && "max-lg:hidden")}>Simulated</span>
         {position && !open ? <LiveMoney value={position.unrealized} signed tone className="font-semibold lg:hidden" /> : null}
@@ -158,12 +160,13 @@ export function AlgoReplayPanel({ algo, cursor, chartSymbol, onHistory, selected
 
         {/* Market analysis and the four strategies, from the run's stored analysis (the chart draws the same). */}
         {run?.strategy === "MATHI_HOURLY" ? <HourlyToday state={state} position={position} config={run.config} /> : null}
-        {run && run.strategy !== "MATHI_HOURLY" ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} signal={latestSignal(run.events)} /> : null}
-        {run && run.strategy !== "MATHI_HOURLY" ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
+        {run?.strategy === "MATHI_CHANNEL" ? <ChannelToday state={state} position={position} /> : null}
+        {run && !isVariantStrategy(run.strategy) ? <MathiStatus state={state} config={run.config} mode="Chart replay" now={cursor} signal={latestSignal(run.events)} /> : null}
+        {run && !isVariantStrategy(run.strategy) ? <EngineCard state={state} config={run.config} date={run.date} now={cursor} unrealized={run.position?.unrealized ?? null} available={account?.cashAvailable ?? null} position={run.position ? { quantity: run.position.quantity, lots: run.position.lots, avg: run.position.avg, stop: run.position.stop, target: run.position.target, entryCharges: run.position.entryCharges, premium: run.position.premium, unrealized: run.position.unrealized } : null} /> : null}
         {run ? <ReportDownload runId={run.id} /> : null}
         {data ? <MarketPlanSection date={run?.date ?? (cursor != null ? new Date((cursor + 19_800) * 1000).toISOString().slice(0, 10) : null)} /> : null}
-        {run && run.strategy !== "MATHI_HOURLY" ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
-        {run && run.strategy !== "MATHI_HOURLY" ? <StrategyRows analysis={state?.analysis} positionOpen={Boolean(position)} /> : null}
+        {run && !isVariantStrategy(run.strategy) ? <MarketAnalysisSection analysis={state?.analysis} symbol={run.underlying} time={cursor} /> : null}
+        {run && !isVariantStrategy(run.strategy) ? <StrategyRows analysis={state?.analysis} positionOpen={Boolean(position)} /> : null}
 
         {/* 2. Strategy and replay status */}
         {run && diagnostics ? (
@@ -531,7 +534,7 @@ export function AlgoStartDialog({ algo, date, cursor, speed, onCancel, onStart, 
   const [selected] = useSelectedStrategy();
   // The run's own feature (a resume), else the one selected for this new session.
   const strategy = algo.run?.strategy ?? selected;
-  const config = strategy === "MATHI_HOURLY" ? (data ? { ...data.mathiHourly.config, mode: "REPLAY" as const } : undefined) : data?.config;
+  const config = isVariantStrategy(strategy) ? (data ? { ...variantData(data, strategy).config, mode: "REPLAY" as const } : undefined) : data?.config;
   const run = algo.run;
   const unsaved = useUnsavedSettings();
   // Always confirm with the settings saved right now (they may have been changed since the chart loaded them).

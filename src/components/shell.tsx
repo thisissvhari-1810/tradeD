@@ -95,6 +95,7 @@ const NAV: NavItem[] = [
   { href: "/alerts", label: "Alerts", icon: Bell, rail: false },
   { href: "/backtests", label: "Backtests", title: "Mathi Strategy index backtests", icon: FlaskConical, rail: false },
   { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
+  { href: "/fib-h0h4", label: "H0–H4 Fib", title: "5-Minute H0–H4 Fibonacci Breakout (paper)", icon: Activity },
 ];
 
 /** The phone's bottom bar: five destinations; everything else is in the header's menu. */

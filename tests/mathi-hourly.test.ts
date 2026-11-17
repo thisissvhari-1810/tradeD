@@ -855,6 +855,15 @@ describe("early exit: a trade still well below its entry is cut before the hourl
     expect(clock(exit.time)).toBe("11:30");
     expect(clock(exits((await replay(candles, config)).events)[0].time)).toBe("11:45");
   });
+  it("a risky-time trade (half the lots) waits for its own setting (45 minutes); a normal trade keeps 30", async () => {
+    const risky = { skipRiskyTimes: true, riskyAction: "half" as const, riskyOptionLevelMin: 0, riskyOptionLevelMax: 100 };
+    const config = early({ earlyExitMinutes: 30, earlyExitPercent: 3, ...risky, riskyEarlyExitMinutes: 45, riskyEarlyExitPercent: 3 });
+    const exit = exits((await replay(candles, config)).events)[0];
+    expect(exit.message).toMatch(/^Exit \(EARLY_EXIT\).*45 minutes after the entry.*risky-time trade/);
+    expect(clock(exit.time)).toBe("12:00");
+    expect(HOURLY_SETTINGS_DEFAULTS).toMatchObject({ riskyEarlyExitMinutes: 0, riskyEarlyExitPercent: 0 });
+    expect(MATHI_HOURLY_DEFAULTS.hourly).toMatchObject({ riskyEarlyExitMinutes: 45, riskyEarlyExitPercent: 5 });
+  });
 });
 
 describe("10–11. the hourly midpoint rule (completed hours only)", () => {

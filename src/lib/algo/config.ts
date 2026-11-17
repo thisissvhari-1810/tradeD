@@ -5,6 +5,7 @@ import { EXIT_MANAGEMENT_DEFAULTS, type ExitManagement } from "./trend-exit";
 import { PATTERN_DEFAULTS, STRATEGY_IDS, type PatternSettings } from "./patterns";
 import { ALLOCATION_DEFAULTS, RISK_DEFAULTS, type AllocationSettings, type RiskSettings } from "./sizing";
 import { HOURLY_SETTINGS_DEFAULTS, type HourlySettings } from "./hourly-zone";
+import { CHANNEL_LIMITS, CHANNEL_SETTINGS_DEFAULTS, type ChannelSettings } from "./trend-channel";
 
 /**
  * Reads and validates Algo settings (the server applies this to every save, so limits are never only a
@@ -101,8 +102,9 @@ export function readAlgoConfig(raw: unknown): AlgoConfig {
     // Mathi Strategy trades strategy-line crossings only; the other setups cannot be switched on for it.
     strategies: { ...ALGO_DEFAULTS.strategies },
     // Any other saved engine (such as the removed "primary") reads as Mathi Strategy's.
-    engine: row.engine === "hourly" ? "hourly" : "existing",
+    engine: row.engine === "hourly" ? "hourly" : row.engine === "channel" ? "channel" : "existing",
     ...(row.engine === "hourly" ? { hourly: hourlyOf(row.hourly) } : {}),
+    ...(row.engine === "channel" ? { channel: channelOf(row.channel) } : {}),
     // Settings saved before version 2 with the old 15-minute default move to 30 once; a later choice is kept.
     observationMinutes: !early || !Number.isFinite(num(row.observationMinutes)) ? ALGO_DEFAULTS.observationMinutes : num(row.observationMinutes),
     settingsVersion: ALGO_DEFAULTS.settingsVersion,
@@ -224,11 +226,35 @@ function strongBreakoutOf(value: unknown): StrongBreakoutSettings {
   };
 }
 
+/** Mathi Trend Channel's settings; unknown values fall back to the defaults (never loosened: validated below). */
+function channelOf(value: unknown): ChannelSettings {
+  const row = (value && typeof value === "object" ? value : {}) as Raw;
+  const d = CHANNEL_SETTINGS_DEFAULTS;
+  const pick = (key: "left" | "right" | "minSwingAtr" | "zonePercent" | "minBreakoutBody" | "minMomentumPercent" | "retestCandles" | "retestTolerancePercent") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
+  return {
+    left: pick("left"),
+    right: pick("right"),
+    minSwingAtr: pick("minSwingAtr"),
+    zonePercent: pick("zonePercent"),
+    minBreakoutBody: pick("minBreakoutBody"),
+    minMomentumPercent: pick("minMomentumPercent"),
+    retest: row.retest === "after" || row.retest === "instead" ? row.retest : "off",
+    retestCandles: pick("retestCandles"),
+    retestTolerancePercent: pick("retestTolerancePercent"),
+    fallback: row.fallback === "daymove" || row.fallback === "channel" ? row.fallback : "off",
+    gapRule: typeof row.gapRule === "boolean" ? row.gapRule : d.gapRule,
+    skipExpiryDay: typeof row.skipExpiryDay === "boolean" ? row.skipExpiryDay : d.skipExpiryDay,
+    fallbackTime: typeof row.fallbackTime === "string" && /^\d{2}:\d{2}$/.test(row.fallbackTime) ? row.fallbackTime : d.fallbackTime,
+    requireLevel: typeof row.requireLevel === "boolean" ? row.requireLevel : d.requireLevel,
+    patterns: row.patterns === "A" || row.patterns === "B" ? row.patterns : "both",
+  };
+}
+
 /** Mathi Hourly Zone Strategy's settings; unknown values fall back to the defaults (never loosened: validated below). */
 function hourlyOf(value: unknown): HourlySettings {
   const row = (value && typeof value === "object" ? value : {}) as Raw;
   const d = HOURLY_SETTINGS_DEFAULTS;
-  const pick = (key: "dojiTolerance" | "zoneMinPoints" | "zoneMaxPoints" | "boxSize" | "boxMinPoints" | "skipWickPercent" | "skipWickPoints" | "maxRejectionWickPercent" | "maxLossWickPercent" | "minSecondBodyPercent" | "gapPoints" | "crossTolerance" | "redAgainstFlip" | "redRedDailyCall" | "redGreenDailyPut" | "greenRedPut" | "greenRedTolerance" | "thinWickPut" | "thinWickCall" | "dearFlipPremium" | "dearFlipBody" | "greenRedHighGap" | "greenRedDrawnWick" | "redRedWaitWick" | "redRedWaitBody" | "greenGreenWaitWick" | "redGreenOpenFlip" | "redRedWaitOppWick" | "redRedWaitOppPoints" | "redRedDrawnLowerWick" | "redRedDrawnUpperWick" | "wickPutPercent" | "wickPutTouch" | "wickCallAnyTrendShare" | "greenRedTrendMaxRange" | "redGreenBodyTolerance" | "redGreenWaitPremium" | "earlyExitMinutes" | "earlyExitPercent" | "protectArmPercent" | "protectLockPercent" | "ggWaitFirstHourMin" | "ggWaitFirstHourMax" | "callWaitDayMoveMin" | "callWaitDayMoveMax" | "dte3OppWick" | "maxOptionLevel" | "weakTargetPercent" | "weakBodyPoints" | "weakMinDaysToExpiry" | "expiryEarlyExitMinutes" | "expiryEarlyExitPercent" | "trendTolerance" | "redRedMaxLowerWick" | "wickCall" | "bodyCrossPoints" | "maxSessionLoss") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
+  const pick = (key: "dojiTolerance" | "zoneMinPoints" | "zoneMaxPoints" | "boxSize" | "boxMinPoints" | "skipWickPercent" | "skipWickPoints" | "maxRejectionWickPercent" | "maxLossWickPercent" | "minSecondBodyPercent" | "gapPoints" | "crossTolerance" | "redAgainstFlip" | "redRedDailyCall" | "redGreenDailyPut" | "greenRedPut" | "greenRedTolerance" | "thinWickPut" | "thinWickCall" | "dearFlipPremium" | "dearFlipBody" | "greenRedHighGap" | "greenRedDrawnWick" | "redRedWaitWick" | "redRedWaitBody" | "greenGreenWaitWick" | "redGreenOpenFlip" | "redRedWaitOppWick" | "redRedWaitOppPoints" | "redRedDrawnLowerWick" | "redRedDrawnUpperWick" | "wickPutPercent" | "wickPutTouch" | "wickCallAnyTrendShare" | "greenRedTrendMaxRange" | "redGreenBodyTolerance" | "redGreenWaitPremium" | "earlyExitMinutes" | "earlyExitPercent" | "protectArmPercent" | "protectLockPercent" | "ggWaitFirstHourMin" | "ggWaitFirstHourMax" | "callWaitDayMoveMin" | "callWaitDayMoveMax" | "dte3OppWick" | "maxOptionLevel" | "weakTargetPercent" | "riskyWeakMovePoints" | "riskyOptionLevelMin" | "riskyOptionLevelMax" | "weakBodyPoints" | "weakMinDaysToExpiry" | "expiryEarlyExitMinutes" | "expiryEarlyExitPercent" | "riskyEarlyExitMinutes" | "riskyEarlyExitPercent" | "trendTolerance" | "redRedMaxLowerWick" | "wickCall" | "bodyCrossPoints" | "maxSessionLoss") => (Number.isFinite(num(row[key])) ? num(row[key]) : d[key]);
   return {
     dojiTolerance: pick("dojiTolerance"),
     zoneMinPoints: pick("zoneMinPoints"),
@@ -283,12 +309,19 @@ function hourlyOf(value: unknown): HourlySettings {
     dte3OppWick: pick("dte3OppWick"),
     maxOptionLevel: pick("maxOptionLevel"),
     weakTargetPercent: pick("weakTargetPercent"),
+    skipRiskyTimes: typeof row.skipRiskyTimes === "boolean" ? row.skipRiskyTimes : d.skipRiskyTimes,
+    riskyAction: row.riskyAction === "half" || row.riskyAction === "skip" ? row.riskyAction : d.riskyAction,
+    riskyWeakMovePoints: pick("riskyWeakMovePoints"),
+    riskyOptionLevelMin: pick("riskyOptionLevelMin"),
+    riskyOptionLevelMax: pick("riskyOptionLevelMax"),
     weakBodyPoints: pick("weakBodyPoints"),
     weakMinDaysToExpiry: pick("weakMinDaysToExpiry"),
     protectLockPercent: pick("protectLockPercent"),
     earlyExitPercent: pick("earlyExitPercent"),
     expiryEarlyExitMinutes: pick("expiryEarlyExitMinutes"),
     expiryEarlyExitPercent: pick("expiryEarlyExitPercent"),
+    riskyEarlyExitMinutes: pick("riskyEarlyExitMinutes"),
+    riskyEarlyExitPercent: pick("riskyEarlyExitPercent"),
     greenRedDailyTrend: typeof row.greenRedDailyTrend === "boolean" ? row.greenRedDailyTrend : d.greenRedDailyTrend,
     greenGreenWaitBy: typeof row.greenGreenWaitBy === "string" && /^(\d\d:\d\d)?$/.test(row.greenGreenWaitBy) ? row.greenGreenWaitBy : d.greenGreenWaitBy,
     redRedWaitOppWick: pick("redRedWaitOppWick"),
@@ -414,6 +447,21 @@ export function algoConfigProblems(config: AlgoConfig): string[] {
     if (!(hourly.boxMinPoints >= 0 && hourly.boxMinPoints <= 1_000)) problems.push("The minimum box size must be 0 (off) to 1,000 points.");
     if (hourly.boxStop && hourly.boxMode === "off") problems.push("The box stop needs a position box edge.");
     if (hourly.boxTarget && hourly.boxMode === "off") problems.push("The box target needs a position box edge.");
+  }
+  if (config.engine === "channel") {
+    const channel = { ...CHANNEL_SETTINGS_DEFAULTS, ...config.channel };
+    const l = CHANNEL_LIMITS;
+    if (config.underlying !== "NIFTY") problems.push("Mathi Trend Channel trades NIFTY 50 options only.");
+    if (!Number.isInteger(channel.left) || channel.left < l.left[0] || channel.left > l.left[1]) problems.push(`The swing's left candles must be ${l.left[0]} to ${l.left[1]}.`);
+    if (!Number.isInteger(channel.right) || channel.right < l.right[0] || channel.right > l.right[1]) problems.push(`The swing's right (confirming) candles must be ${l.right[0]} to ${l.right[1]}.`);
+    if (!(channel.minSwingAtr >= l.minSwingAtr[0] && channel.minSwingAtr <= l.minSwingAtr[1])) problems.push(`The deep-swing cutoff must be ${l.minSwingAtr[0]} to ${l.minSwingAtr[1]} × the average range.`);
+    if (!(channel.zonePercent >= l.zonePercent[0] && channel.zonePercent <= l.zonePercent[1])) problems.push(`The horizontal zone width must be ${l.zonePercent[0]}% to ${l.zonePercent[1]}%.`);
+    if (!(channel.minBreakoutBody >= l.minBreakoutBody[0] && channel.minBreakoutBody <= l.minBreakoutBody[1])) problems.push("The breakout candle's minimum body must be 0 (off) to 100% of its range.");
+    if (!(channel.minMomentumPercent >= l.minMomentumPercent[0] && channel.minMomentumPercent <= l.minMomentumPercent[1])) problems.push("The 15-minute momentum must be 0 (off) to 2%.");
+    if (!Number.isInteger(channel.retestCandles) || channel.retestCandles < l.retestCandles[0] || channel.retestCandles > l.retestCandles[1]) problems.push(`The retest window must be ${l.retestCandles[0]} to ${l.retestCandles[1]} candles.`);
+    if (!(channel.retestTolerancePercent >= l.retestTolerancePercent[0] && channel.retestTolerancePercent <= l.retestTolerancePercent[1])) problems.push("The retest tolerance must be 0% to 1%.");
+    const minute = Number(channel.fallbackTime.slice(0, 2)) * 60 + Number(channel.fallbackTime.slice(3, 5));
+    if (!(minute >= 9 * 60 + 30 && minute <= 15 * 60 && (minute - 555) % 3 === 0)) problems.push("The daily trade time must be 09:30 to 15:00 IST, on the 3-minute grid (e.g. 13:00, 14:00).");
   }
   if (!Number.isInteger(config.observationMinutes) || config.observationMinutes < 0 || config.observationMinutes > 120) problems.push("The observation period must be 0 to 120 minutes.");
   const pattern = config.patterns;

@@ -3,6 +3,7 @@ import { candleExit, protectiveLevels, protectiveProblem, quoteExit, resolveAtm,
 import { consolidate, evaluateCandle, sameSession, type CandleEvaluation } from "./signals";
 import { analyzeMarket, PATTERN_DEFAULTS, STRATEGY_IDS, STRATEGY_LABEL, type Direction, type ExistingStrategyId, type MarketAnalysis, type PatternSettings, type StrategySignal } from "./patterns";
 import { HOURLY_SETTINGS_DEFAULTS, hourlyCandles, hourlyMidpointDecision, hourlySignal, isFullHour, istClock as hourClock, type HourlySettings, type HourlyTrade, type HourlyTradeStatus } from "./hourly-zone";
+import { CHANNEL_SETTINGS_DEFAULTS, channelSignal, istClock as barClock, type ChannelSettings } from "./trend-channel";
 import { changedConfirmations, tradeConfirmations, type Confirmation, type TradeSetup } from "./confirmations";
 import { ema } from "@/lib/market/indicators";
 import { allocateLots, ALLOCATION_DEFAULTS, planTrade, RISK_DEFAULTS, type AllocationSettings, type CapitalPlan, type RiskSettings, type TradePlan } from "./sizing";
@@ -69,10 +70,12 @@ export type AlgoConfig = {
   minScore: number;
   /** Which strategies may signal: the line break and the price-action add-ons (the existing Algo Trade). */
   strategies: Record<ExistingStrategyId, boolean>;
-  /** Which feature's signals these settings drive: the existing Algo Trade or Mathi Hourly Zone Strategy. */
-  engine: "existing" | "hourly";
+  /** Which feature's signals these settings drive: the existing Algo Trade, Mathi Hourly Zone Strategy or Mathi Trend Channel. */
+  engine: "existing" | "hourly" | "channel";
   /** Mathi Hourly Zone Strategy settings (zone, skip rule, pair schedule, session-loss limit); used only when engine is "hourly". */
   hourly?: HourlySettings;
+  /** Mathi Trend Channel settings (swing cutoff, horizontal zones, channel-only research mode); used only when engine is "channel". */
+  channel?: ChannelSettings;
   /** Minutes after the session open that are analysis only: no new entries (30 = 09:15–09:45). */
   observationMinutes: number;
   /** Settings format: 4 = the early-session strategy (9:15–10:30, risk sizing); 3 = trade filters; 2 = observation. */
@@ -290,6 +293,14 @@ export const MATHI_HOURLY_DEFAULTS: AlgoConfig = {
     redGreenWaitPremium: 150,
     // Four-year correlation rules (checked on Oct 2022 – Oct 2026 with real option premiums): 777 / 205 against 766 / 216.
     ggWaitFirstHourMin: 78.8, ggWaitFirstHourMax: 105.6, callWaitDayMoveMin: 25, callWaitDayMoveMax: 79.6, dte3OppWick: 34.8,
+    // F10: a trade every market day at the 5% target; at risky times — NIFTY only 0–50 points in the trade's direction
+    // since the 09:15 open, or a fairly dear option (level 0.215–0.25) — the trade is taken with half the lots.
+    // ("skip" instead gave 500 / 100 on 600 of 987 days, every year profitable.)
+    // F11: a risky-time trade's early exit waits 45 minutes (−5%, expiry day included): 800 / 185 against F10's 780 / 205,
+    // better in three of the four years (60 minutes: 811 / 174, but 2022–23 worse).
+    weakTargetPercent: 0, weakBodyPoints: 25.5, weakMinDaysToExpiry: 3,
+    skipRiskyTimes: true, riskyAction: "half", riskyWeakMovePoints: 50, riskyOptionLevelMin: 0.215, riskyOptionLevelMax: 0.25,
+    riskyEarlyExitMinutes: 45, riskyEarlyExitPercent: 5,
     redGreenOpenFlip: 1.9, redRedWaitOppWick: 30.4, redRedWaitOppPoints: 20,
     boxMode: "off", gapPoints: 0, dailyFallback: true, fallbackTime: "13:15",
   },
@@ -301,6 +312,30 @@ export const MATHI_HOURLY_DEFAULTS: AlgoConfig = {
   // The last entry is 14:15 (the 12:15 + 13:15 pair); the 13:15 + 14:15 pair, decided at 15:15, is not traded.
   entryCutoff: "14:15",
   squareOff: "15:20",
+  maxHoldMinutes: 0,
+  exitManagement: { ...EXIT_MANAGEMENT_DEFAULTS, mode: "fixed" },
+  regime: { enabled: false, lookback: 30 },
+  confirmation: { ...ALGO_DEFAULTS.confirmation, mode: "single" },
+  intrabar: false,
+};
+
+/**
+ * Mathi Trend Channel: its own engine (the first valid deep-swing combination on 3-minute NIFTY candles, a primary
+ * trendline and its exact parallel clone, horizontal swing zones, a channel + level breakout and next-candle
+ * confirmation; see trend-channel.ts) on the ATM CALL / PUT, +5% on the executed option premium and no stop-loss order.
+ * one trade a session. The rest of execution and risk is Mathi Strategy's, unchanged: the 45-minute trend checkpoint,
+ * capital sizing, the 15:20 square-off. Its own confirmation replaces the line retest; no regime switch, no forming-candle entries.
+ */
+export const MATHI_CHANNEL_DEFAULTS: AlgoConfig = {
+  ...ALGO_DEFAULTS,
+  engine: "channel",
+  channel: CHANNEL_SETTINGS_DEFAULTS,
+  // +3% on the executed option premium (1 Nov 2026; was +5%): 5 years 1,142 / 88 against 1,079 / 151.
+  target: { mode: "percent", value: 3 },
+  stopLoss: false,
+  // One trade a session (31 Oct 2026).
+  maxTrades: 1,
+  // No time limit (1 Nov 2026): held until the +5% target or the 15:20 square-off; no 45-minute checkpoint.
   maxHoldMinutes: 0,
   exitManagement: { ...EXIT_MANAGEMENT_DEFAULTS, mode: "fixed" },
   regime: { enabled: false, lookback: 30 },
@@ -344,6 +379,8 @@ export type OpenPosition = {
   highest?: number;
   /** Paper monitoring: the latest option candle (start time) already checked for the target / stop. */
   checkedThrough?: number | null;
+  /** Mathi Hourly Zone Strategy: a risky-time trade, taken with half the lots (its own early exit). */
+  riskyHalf?: boolean;
   /** Mathi Hourly Zone Strategy: the latest completed hour (its start) already checked by the midpoint rule. */
   hourChecked?: number | null;
   /** Mathi Hourly Zone Strategy: the latest NIFTY minute (its start) already checked against the box edges. */
@@ -393,6 +430,8 @@ export type AlgoState = {
   hourlyWait?: { session: string; at: number; side: Side; level: number; note: string } | null;
   /** The session the market-condition filter (`maxOptionLevel`) closed to new hourly entries. */
   hourlyBlockedSession?: string | null;
+  /** The session whose hourly trade is a risky-time trade taken with half the lots (`riskyAction` "half"). */
+  hourlyHalfSession?: string | null;
   lastSignal: { time: number; decision: string; explanation: string } | null;
   lastOrder: { time: number; status: string; message: string } | null;
   /** The latest market analysis (opening range, trend, trendlines, W / M, strategy statuses). */
@@ -798,11 +837,11 @@ async function correlationRule(state: AlgoState, input: AdvanceInput, evaluation
  * The market-condition filter (`maxOptionLevel`): once the option to buy is too dear for the day, the session takes no
  * hourly trade. Returns the reason, or null when the entry may go on.
  */
-async function optionLevelBlock(state: AlgoState, input: AdvanceInput, right: Right): Promise<string | null> {
+async function optionLevelBlock(state: AlgoState, input: AdvanceInput, right: Right, evaluation: CandleEvaluation): Promise<string | null> {
   const { config, adapter, now } = input;
   const settings = { ...HOURLY_SETTINGS_DEFAULTS, ...config.hourly };
-  if (config.engine !== "hourly" || !(settings.maxOptionLevel > 0)) return null;
-  if (state.hourlyBlockedSession === input.sessionDate) return "Market filter: options are too dear today — no hourly trade this session.";
+  if (config.engine !== "hourly" || (!(settings.maxOptionLevel > 0) && !settings.skipRiskyTimes)) return null;
+  if (state.hourlyBlockedSession === input.sessionDate) return "Market filter: no hourly trade this session (blocked earlier today).";
   if (state.position || state.tradesToday >= config.maxTrades) return null;
   let chain: ChainInput;
   try { chain = await adapter.chain(right, config.expiry); } catch { return null; }
@@ -813,9 +852,31 @@ async function optionLevelBlock(state: AlgoState, input: AdvanceInput, right: Ri
   const days = expiry && /^\d{4}-\d{2}-\d{2}$/.test(expiry) ? Math.max(0, Math.round((Date.parse(`${expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000)) : 3;
   const price = money(atm.contract.ask + config.slippageTicks * TICK);
   const level = (100 * price) / spot / Math.sqrt(days + 1);
-  if (level <= settings.maxOptionLevel) return null;
-  state.hourlyBlockedSession = input.sessionDate;
-  return `Market filter: the ATM ${right} costs ₹${price} — option level ${level.toFixed(3)} (premium ${((100 * price) / spot).toFixed(2)}% of NIFTY ÷ √${days + 1} days) is above ${settings.maxOptionLevel}: no hourly trade this session.`;
+  const levelText = `option level ${level.toFixed(3)} (the ATM ${right} at ₹${price} is ${((100 * price) / spot).toFixed(2)}% of NIFTY ÷ √${days + 1} days)`;
+  if (settings.maxOptionLevel > 0 && level > settings.maxOptionLevel) {
+    state.hourlyBlockedSession = input.sessionDate;
+    return `Market filter: ${levelText} is above ${settings.maxOptionLevel}: no hourly trade this session.`;
+  }
+  if (settings.skipRiskyTimes) {
+    // Each decision is judged on its own: a half-size mark from an earlier, unfilled decision does not carry over.
+    if (state.hourlyHalfSession === input.sessionDate) state.hourlyHalfSession = null;
+    const pairs = state.analysis?.hourly?.pairs ?? [];
+    const pair = pairs.find((item) => item.decisionTime === evaluation.time + 60);
+    const opening = pairs.at(0)?.first;
+    const move = pair?.second && opening ? (pair.second.close - opening.open) * (right === "CE" ? 1 : -1) : null;
+    const weakMove = move != null && move >= 0 && move < settings.riskyWeakMovePoints;
+    const fairlyDear = level > settings.riskyOptionLevelMin && level <= settings.riskyOptionLevelMax;
+    if (weakMove || fairlyDear) {
+      if (settings.riskyAction === "half") {
+        state.hourlyHalfSession = input.sessionDate;
+        return null;
+      }
+      state.hourlyBlockedSession = input.sessionDate;
+      const why = weakMove ? `NIFTY is only ${move!.toFixed(1)} points in the trade's direction since the 09:15 open (under ${settings.riskyWeakMovePoints})` : `the ${levelText} is fairly dear (${settings.riskyOptionLevelMin}–${settings.riskyOptionLevelMax})`;
+      return `Risky time: ${why} — no hourly trade this session.`;
+    }
+  }
+  return null;
 }
 
 async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: CandleEvaluation, log: (event: Omit<AlgoEvent, "time"> & { time?: number }) => void, flipped = false): Promise<{ ok: boolean; message: string; reasons?: string[]; plan?: TradePlan | null; capital?: CapitalPlan | null }> {
@@ -838,7 +899,7 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   const right: Right = side === "CALL" ? "CE" : "PE";
   const key = entryKey(input.sessionId, evaluation.time, config.underlying, side);
   const reasons: string[] = [];
-  const marketBlock = await optionLevelBlock(state, input, right);
+  const marketBlock = await optionLevelBlock(state, input, right, evaluation);
   if (marketBlock) return { ok: false, message: marketBlock, reasons: [marketBlock] };
 
   if (!state.entries) reasons.push("Algo is disabled for new entries.");
@@ -995,6 +1056,10 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
   const contract = atm.contract;
   // Days to the contract's expiry: a far expiry is skipped, or needs a slower retest (each off unless set).
   const daysToExpiry = /^\d{4}-\d{2}-\d{2}$/.test(contract.expiry) ? Math.round((Date.parse(`${contract.expiry}T00:00:00Z`) - Date.parse(`${input.sessionDate}T00:00:00Z`)) / 86_400_000) : null;
+  // Mathi Trend Channel: optionally no trade on the contract's expiry day (`skipExpiryDay`, off by default).
+  if (config.engine === "channel" && daysToExpiry === 0 && { ...CHANNEL_SETTINGS_DEFAULTS, ...config.channel }.skipExpiryDay) {
+    return reject(state, evaluation.time, key, [`EXPIRY DAY — ${right} ${contract.strike} expires today (${contract.expiry}): Mathi Trend Channel does not trade on expiry day.`], log);
+  }
   if (daysToExpiry != null && (filters.maxDaysToExpiry ?? 0) > 0 && daysToExpiry > filters.maxDaysToExpiry!) {
     return reject(state, evaluation.time, key, [`FAR EXPIRY — ${right} ${contract.strike} expires ${contract.expiry}, ${daysToExpiry} days away (limit ${filters.maxDaysToExpiry}): the option is dear and needs a bigger NIFTY move for +${config.target.value}%. Not traded.`], log);
   }
@@ -1062,6 +1127,8 @@ async function tryEntry(state: AlgoState, input: AdvanceInput, evaluation: Candl
     if (!allocated.ok) return { ...reject(state, evaluation.time, key, [allocated.reason], log), capital };
     lots = allocated.plan.lots;
   }
+  // Mathi Hourly risky time with `riskyAction` "half": the trade is taken with half the lots (at least one).
+  if (config.engine === "hourly" && state.hourlyHalfSession === input.sessionDate) lots = Math.max(1, Math.floor(lots / 2));
   const quantity = lots * contract.lotSize;
   const charges = adapter.charges("BUY", price, quantity);
   const cost = price * quantity + charges;
@@ -1147,6 +1214,7 @@ function openPosition(state: AlgoState, pending: PendingEntry, fill: Extract<Fil
     stop, target, entryCharges: fill.charges, openedAt: input.now, signalTime: pending.signalTime, lineIds: pending.lineIds, exit: null, exitAttempts: 0,
     ...(pending.wallet ? { wallet: pending.wallet } : {}),
     ...(pending.setup ? { setup: { ...pending.setup, entryTime: input.now } } : {}),
+    ...(input.config.engine === "hourly" && state.hourlyHalfSession === input.sessionDate ? { riskyHalf: true } : {}),
   };
   state.pending = null;
   state.tradesToday += 1;
@@ -1529,6 +1597,7 @@ function deriveStatus(state: AlgoState): AlgoStatus {
 function coordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
   const { config } = input;
   if (config.engine === "hourly") return hourlyCoordinate(line, candles, input, state);
+  if (config.engine === "channel") return channelCoordinate(line, candles, input, state);
   const enabled = { ...ALGO_DEFAULTS.strategies, ...config.strategies };
   const filters = { ...ALGO_DEFAULTS.filters, ...config.filters };
   // Breakout buffer: a line counts only when the close is clearly beyond it.
@@ -1610,6 +1679,33 @@ function hourlyCoordinate(line: CandleEvaluation, candles: Candle[], input: Adva
 }
 
 /**
+ * Mathi Trend Channel's signal for one completed 1-minute candle: its own channel rules only (the strategy lines and the
+ * other setups never signal). Decisions happen when a 3-minute candle completes: a breakout, a WATCH (channel only) and
+ * a confirmation that failed are logged with their prices; a confirmed breakout is the entry signal.
+ */
+function channelCoordinate(line: CandleEvaluation, candles: Candle[], input: AdvanceInput, state: AlgoState): CandleEvaluation {
+  const { config } = input;
+  const sessionOpen = dayStart(input.sessionDate);
+  const { analysis } = analyzeMarket({ candles, sessionOpen, observationMinutes: 0, settings: { ...PATTERN_DEFAULTS, ...config.patterns }, enabled: {} });
+  const prevClose = input.lines.find((item) => item.type === "prev-close")?.price ?? null;
+  const result = channelSignal(candles, sessionOpen, { ...CHANNEL_SETTINGS_DEFAULTS, ...config.channel }, line.time + 60, prevClose);
+  const before = state.analysis?.strategies.channel?.lastSignal ?? null;
+  analysis.channel = result.state;
+  analysis.strategies.channel = { enabled: true, status: result.state.status, direction: result.signal?.direction ?? null, trigger: result.signal?.level ?? null, waiting: !result.signal, lastSignal: result.signal ? { time: line.time, direction: result.signal.direction } : before };
+  state.analysis = analysis;
+  state.awaiting = null;
+  const base = { ...line, events: [], notes: [] };
+  if (result.signal) return { ...base, strategies: [result.signal], decision: result.signal.direction, stage: "SETUP_CONFIRMED", setupSide: result.signal.direction, explanation: result.signal.reason };
+  const notes = result.latest.map((setup) => setup.reasons.at(-1)).join(" ");
+  const failed = result.decided?.status === "FAILED" ? result.decided : null;
+  if (failed) {
+    const text = `SKIPPED — ${failed.direction} breakout at ${barClock(failed.time)}: ${failed.reasons.at(-1)}`;
+    return { ...base, strategies: [], decision: "NO_SIGNAL", setupSide: failed.direction, cancelled: text, explanation: `${notes} ${result.state.status}`.trim() };
+  }
+  return { ...base, strategies: [], decision: "NO_SIGNAL", explanation: `${notes} ${result.state.status}`.trim() };
+}
+
+/**
  * The hourly midpoint rule on the open trade: every full hour completed since the entry (the confirming hour's close),
  * in order and once each. A LONG is kept while the hour closes above its midpoint, a SHORT while it closes below; any
  * other close exits at the current premium. Returns whether an exit was started. Never a stop order: it acts only on
@@ -1680,15 +1776,16 @@ async function hourlyEarlyExit(state: AlgoState, input: AdvanceInput, bid: numbe
       return true;
     }
   }
-  const expiryDay = position.contract.expiry === input.sessionDate && settings.expiryEarlyExitMinutes > 0;
-  const minutes = expiryDay ? settings.expiryEarlyExitMinutes : settings.earlyExitMinutes;
-  const percent = expiryDay ? settings.expiryEarlyExitPercent : settings.earlyExitPercent;
+  const risky = position.riskyHalf === true && settings.riskyEarlyExitMinutes > 0 && settings.riskyEarlyExitPercent > 0;
+  const expiryDay = !risky && position.contract.expiry === input.sessionDate && settings.expiryEarlyExitMinutes > 0;
+  const minutes = risky ? settings.riskyEarlyExitMinutes : expiryDay ? settings.expiryEarlyExitMinutes : settings.earlyExitMinutes;
+  const percent = risky ? settings.riskyEarlyExitPercent : expiryDay ? settings.expiryEarlyExitPercent : settings.earlyExitPercent;
   if (!(minutes > 0) || !(percent > 0)) return false;
   const elapsed = (input.now - position.openedAt) / 60;
   const floor = money(position.avg * (1 - percent / 100));
   if (elapsed < minutes || bid >= floor) return false;
   const down = ((position.avg - bid) / position.avg) * 100;
-  await startExit(state, input, "EARLY_EXIT", { price: bid, note: `Early exit — ${Math.round(elapsed)} minutes after the entry the premium ₹${bid} is ${down.toFixed(1)}% below the entry ₹${position.avg} (more than ${percent}% after ${minutes} minutes${expiryDay ? ", expiry day" : ""})` }, log);
+  await startExit(state, input, "EARLY_EXIT", { price: bid, note: `Early exit — ${Math.round(elapsed)} minutes after the entry the premium ₹${bid} is ${down.toFixed(1)}% below the entry ₹${position.avg} (more than ${percent}% after ${minutes} minutes${risky ? ", risky-time trade" : expiryDay ? ", expiry day" : ""})` }, log);
   return true;
 }
 

@@ -890,7 +890,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   }, []);
   const algoMarkers = useMemo<ChartMarker[]>(() => [
     ...autoMarkers,
-    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
+    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted, { profit: desk.appearance.tokens.profit, loss: desk.appearance.tokens.loss, warning: desk.appearance.tokens.warning }).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
     ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
   ], [autoMarkers, algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor]);
   // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).

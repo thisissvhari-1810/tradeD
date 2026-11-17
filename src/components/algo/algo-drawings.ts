@@ -2,6 +2,7 @@ import { positionPoints, type Drawing } from "@/components/drawing-model";
 import type { ChartMarker } from "@/components/chart-panel";
 import type { MarketAnalysis, PatternState } from "@/lib/algo/patterns";
 import type { HourlyState } from "@/lib/algo/hourly-zone";
+import type { ChannelState } from "@/lib/algo/trend-channel";
 
 /**
  * The Algo's market analysis drawn on the chart from the same stored analysis the dashboard reads.
@@ -14,7 +15,7 @@ import type { HourlyState } from "@/lib/algo/hourly-zone";
 export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined, colors: { trendline: string; neckline: string; resistance?: string; support?: string }): Drawing[] {
   if (!analysis || !analysis.observationComplete) return [];
   const lastCandle = analysis.asOf - 60;
-  const list: Drawing[] = hourlyDrawings(analysis.hourly, lastCandle, colors);
+  const list: Drawing[] = [...hourlyDrawings(analysis.hourly, lastCandle, colors), ...channelDrawings(analysis.channel, lastCandle, colors)];
   // Only what the switched-on strategies use is drawn.
   const on = (id: "trendline" | "w" | "m" | "orb") => analysis.strategies[id]?.enabled !== false;
   for (const line of on("trendline") ? [analysis.resistance, analysis.support] : []) {
@@ -54,10 +55,10 @@ export function algoAnalysisDrawings(analysis: MarketAnalysis | null | undefined
   return list;
 }
 
-/** Tiny squares on the W / M pattern pivots (no text). */
-export function algoPivotMarkers(analysis: MarketAnalysis | null | undefined, color: string): ChartMarker[] {
+/** Tiny squares on the W / M pattern pivots (no text); Mathi Trend Channel's breakout and confirmation candles. */
+export function algoPivotMarkers(analysis: MarketAnalysis | null | undefined, color: string, tones?: { profit: string; loss: string; warning: string }): ChartMarker[] {
   if (!analysis || !analysis.observationComplete) return [];
-  const list: ChartMarker[] = [];
+  const list: ChartMarker[] = channelMarkers(analysis.channel, color, tones ?? { profit: color, loss: color, warning: color });
   const add = (pattern: PatternState | null) => {
     if (!pattern || pattern.status === "INVALIDATED" || pattern.status === "EXPIRED") return;
     for (const pivot of [pattern.first, pattern.middle, pattern.second]) {
@@ -117,6 +118,64 @@ export function hourlyDrawings(hourly: HourlyState | null | undefined, lastCandl
       if (check.end - 60 > lastCandle) continue;
       list.push({ id: `${id}:mid:${check.start}`, kind: "trend", points: [{ time: check.start, price: check.mid }, { time: check.end - 60, price: check.mid }], color: check.keep ? colors.neckline : colors.resistance ?? colors.neckline, width: 1, dash: "dashed", locked: true });
     }
+  }
+  return list;
+}
+
+/**
+ * Mathi Trend Channel on the chart: the primary trendline (solid) through its two swings and the clone (dashed) through
+ * the third, both rays to the right. The clone's second point is its anchor moved by the primary's own time and price
+ * step, so the two lines are drawn with one slope at any zoom or scale. The swing points are labelled (H1, L1, H2 / L1,
+ * H1, L2); every horizontal zone is a full-width line with its price on the axis (dotted once broken); each breakout
+ * candle's high and low are short lines across it and the next candle.
+ */
+export function channelDrawings(channel: ChannelState | null | undefined, lastCandle: number, colors: { neckline: string; resistance?: string; support?: string }): Drawing[] {
+  if (!channel) return [];
+  const list: Drawing[] = [];
+  const resistance = colors.resistance ?? colors.neckline;
+  const support = colors.support ?? colors.neckline;
+  const pattern = channel.pattern;
+  if (pattern && channel.upper && channel.lower) {
+    const primary = pattern.kind === "A" ? channel.upper : channel.lower;
+    const clone = pattern.kind === "A" ? channel.lower : channel.upper;
+    const [a, b] = primary.through;
+    const [c] = clone.through;
+    const color = pattern.kind === "A" ? resistance : support;
+    const other = pattern.kind === "A" ? support : resistance;
+    list.push({ id: `algo:channel:primary:${a.time}:${b.time}`, kind: "ray", points: [{ time: a.time, price: a.price }, { time: b.time, price: b.price }], color, width: 2, dash: "solid", locked: true });
+    list.push({ id: `algo:channel:clone:${c.time}`, kind: "ray", points: [{ time: c.time, price: c.price }, { time: c.time + (b.time - a.time), price: c.price + clone.slope * (b.x - a.x) }], color: other, width: 2, dash: "dashed", locked: true });
+    list.push({ id: `algo:channel:label:primary`, kind: "text", points: [{ time: b.time, price: b.price }], text: `Primary (${pattern.kind === "A" ? "H1–H2" : "L1–L2"})`, color, locked: true });
+    list.push({ id: `algo:channel:label:clone`, kind: "text", points: [{ time: c.time, price: c.price }], text: `Parallel clone (${c.label})`, color: other, locked: true });
+    for (const point of pattern.points) {
+      list.push({ id: `algo:channel:swing:${point.label}:${point.time}`, kind: "text", points: [{ time: point.time, price: point.price }], text: `${point.label} ${price(point.price)}`, color: point.kind === "HIGH" ? resistance : support, locked: true });
+    }
+  }
+  for (const zone of channel.zones) {
+    const top = zone.kind === "RESISTANCE";
+    list.push({ id: `algo:channel:zone:${zone.kind}:${zone.members[0].time}`, kind: "hline", points: [{ time: zone.members[0].time, price: top ? zone.high : zone.low }], color: top ? resistance : support, width: 1, dash: zone.brokenAt != null ? "dotted" : "dashed", locked: true });
+  }
+  for (const setup of channel.setups) {
+    if (setup.status === "WATCH") continue;
+    const right = Math.min(setup.confirm ? setup.confirm.end - 60 : setup.end - 60, lastCandle);
+    for (const [side, value] of [["high", setup.high], ["low", setup.low]] as const) {
+      list.push({ id: `algo:channel:bo:${setup.id}:${side}`, kind: "trend", points: [{ time: setup.time, price: value }, { time: Math.max(setup.time + 60, right), price: value }], color: colors.neckline, width: 1, dash: "dotted", locked: true });
+    }
+  }
+  return list;
+}
+
+/** Mathi Trend Channel's candles: a WATCH (circle), a breakout / breakdown (arrow) and its next candle (square: confirmed or not). */
+export function channelMarkers(channel: ChannelState | null | undefined, muted: string, tones: { profit: string; loss: string; warning: string }): ChartMarker[] {
+  if (!channel) return [];
+  const list: ChartMarker[] = [];
+  for (const setup of channel.setups) {
+    const call = setup.direction === "CALL";
+    if (setup.status === "WATCH") {
+      list.push({ id: `algo:channel:watch:${setup.id}`, time: setup.time, position: call ? "aboveBar" : "belowBar", shape: "circle", color: tones.warning, text: "", size: 0.5 });
+      continue;
+    }
+    list.push({ id: `algo:channel:break:${setup.id}`, time: setup.time, position: call ? "belowBar" : "aboveBar", shape: call ? "arrowUp" : "arrowDown", color: call ? tones.profit : tones.loss, text: call ? "BO" : "BD", size: 0.7 });
+    if (setup.confirm) list.push({ id: `algo:channel:confirm:${setup.id}`, time: setup.confirm.time, position: call ? "belowBar" : "aboveBar", shape: "square", color: setup.status === "CONFIRMED" ? (call ? tones.profit : tones.loss) : muted, text: setup.status === "CONFIRMED" ? (call ? "CALL" : "PUT") : "skip", size: 0.6 });
   }
   return list;
 }

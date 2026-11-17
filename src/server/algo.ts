@@ -14,7 +14,7 @@ import { dhanExpiredOptions, dhanOptionSession } from "@/server/dhan-market";
 import type { ChainInput, Right } from "@/lib/algo/options";
 export { liveAdapter } from "@/lib/algo/live";
 import { acquireLock, isAlgoStrategy, isVariantStrategy, lockOwnerOf, releaseLock, STRATEGY_NAME, type AlgoStrategy, type LockStore, type OwnerActivity, type VariantStrategy } from "@/lib/algo/exclusive";
-import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI_HOURLY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
+import { advance, initialState, regimeStatus, startExit, ALGO_DEFAULTS, MATHI_CHANNEL_DEFAULTS, MATHI_HOURLY_DEFAULTS, type AlgoConfig, type AlgoEvent, type AlgoState, type ContractRef, type ExecutionAdapter, type Fill, type Mark } from "@/lib/algo/runner";
 import type { SessionUser } from "@/server/auth";
 import { gateFor } from "@/server/live-gate";
 import { getCandles, getS1Data, sessionMinuteTape } from "@/server/market";
@@ -194,14 +194,16 @@ async function freeLock(sessionId: string, strategy: AlgoStrategy) {
 
 /**
  * Strategies with their own settings, live paper state, order keys and stored events (never Mathi Strategy's): Mathi
- * Hourly Zone Strategy on its own engine (its defaults carry engine "hourly"), through the same runner and execution.
+ * Hourly Zone Strategy (engine "hourly") and Mathi Trend Channel (engine "channel"), each on its own engine through the
+ * same runner and execution.
  */
 const VARIANTS = {
   MATHI_HOURLY: { defaults: MATHI_HOURLY_DEFAULTS, config: "mathiHourlyConfig", state: "mathiHourlyState", mode: "MATHI_HOURLY", run: "MH" },
+  MATHI_CHANNEL: { defaults: MATHI_CHANNEL_DEFAULTS, config: "mathiChannelConfig", state: "mathiChannelState", mode: "MATHI_CHANNEL", run: "MC" },
 } as const satisfies Record<VariantStrategy, { defaults: AlgoConfig; config: string; state: string; mode: string; run: string }>;
-type VariantColumns = { mathiHourlyConfig: Prisma.JsonValue | null; mathiHourlyState: Prisma.JsonValue | null };
+type VariantColumns = { mathiHourlyConfig: Prisma.JsonValue | null; mathiHourlyState: Prisma.JsonValue | null; mathiChannelConfig: Prisma.JsonValue | null; mathiChannelState: Prisma.JsonValue | null };
 
-/** A variant's settings read with its own engine and fixed underlying (Mathi Hourly Zone: NIFTY). */
+/** A variant's settings read with its own engine and fixed underlying (both variants: NIFTY). */
 function variantSettings(raw: unknown, strategy: VariantStrategy): AlgoConfig {
   const defaults = VARIANTS[strategy].defaults;
   const read: AlgoConfig = { ...readAlgoConfig(raw && typeof raw === "object" ? { ...raw, engine: defaults.engine } : defaults), engine: defaults.engine, mode: "PAPER" };
@@ -469,6 +471,7 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
   const latestRun = replays[0]?.runId ?? null;
   const liveSession = await liveSessionView(session.id, config, state, unrealized);
   const mathiHourly = await variantView(user, session, "MATHI_HOURLY");
+  const mathiChannel = await variantView(user, session, "MATHI_CHANNEL");
   const owner = lockOwnerOf(session.activeStrategy);
   return {
     config,
@@ -486,6 +489,8 @@ export async function algoView(user: SessionUser, chartSession: string | null = 
     liveSession,
     /** Mathi Hourly Zone Strategy — 5%: its settings, live paper session, open trade and recent events (its own, apart from Mathi Strategy's). */
     mathiHourly,
+    /** Mathi Trend Channel: its settings, live paper session, open trade and recent events (its own, apart from the others'). */
+    mathiChannel,
     /** The Algo wallet (paper and chart replay). A position from before the wallet existed is flagged. */
     account: { ...wallet, legacyPosition: onLegacyAccount(state) },
     ...(await chartView(user, session.id, chartSession)),
@@ -603,7 +608,7 @@ export async function algoCommand(user: SessionUser, command: AlgoCommand) {
       case "save": {
         if (isVariantStrategy(command.strategy)) {
           const strategy = command.strategy;
-          // Each variant keeps its own engine; Mathi Hourly Zone Strategy always trades NIFTY.
+          // Each variant keeps its own engine; Mathi Hourly Zone Strategy and Mathi Trend Channel always trade NIFTY.
           const next = variantSettings(command.config, strategy);
           const problems = algoConfigProblems(next);
           if (problems.length) throw new AppError(problems.join(" "), 400, "INVALID_ALGO_SETTINGS");
@@ -858,7 +863,7 @@ export async function tickAllSessions(): Promise<{ ran: number; checks: Schedule
   const userOf = (row: Row["user"]): SessionUser => ({ id: row.id, email: row.email, name: row.name, role: row.role, status: row.status, tradingEnabled: row.tradingEnabled, mfaEnabled: row.mfaEnabled, features: featuresOf(row), premium: premiumFrom(row.role, row.subscriptions ?? []), createdAt: row.createdAt });
   return runScheduledChecks<Row>(sessions, {
     id: (session) => session.id,
-    strategies: ["MATHI_HOURLY", "MATHI"],
+    strategies: ["MATHI_HOURLY", "MATHI_CHANNEL", "MATHI"],
     stateOf: (session, strategy) => (strategy === "MATHI" ? stateOf(session) : variantStateOf(session, strategy)),
     withLease,
     reload: (id) => prisma.algoSession.findUniqueOrThrow({ where: { id }, include }),

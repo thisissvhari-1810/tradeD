@@ -6,7 +6,8 @@ import { api } from "@/components/api";
 import { cx } from "@/components/ui";
 import type { AlgoData } from "@/components/algo/algo-panel";
 import { announceSaved } from "@/components/algo/algo-settings-sync";
-import { ALGO_STRATEGIES, STRATEGY_DESCRIPTION, STRATEGY_NAME, STRATEGY_TAGLINE, type AlgoStrategy } from "@/lib/algo/exclusive";
+import { variantData } from "@/components/algo/algo-start-button";
+import { ALGO_STRATEGIES, isVariantStrategy, STRATEGY_DESCRIPTION, STRATEGY_NAME, STRATEGY_TAGLINE, type AlgoStrategy } from "@/lib/algo/exclusive";
 
 /** What each feature is doing right now, from the server's lock and its runs / session. */
 export function featureStatus(data: AlgoData, strategy: AlgoStrategy) {
@@ -17,7 +18,7 @@ export function featureStatus(data: AlgoData, strategy: AlgoStrategy) {
     return { label: activity?.running ? `Running${extra}` : `Stopping${extra}`, tone: "bg-profit-soft text-profit", owns: true, blocked: false };
   }
   if (owner !== "NONE") return { label: `Blocked: ${STRATEGY_NAME[owner]} is running`, tone: "bg-sunken text-muted", owns: false, blocked: true };
-  const problems = strategy === "MATHI_HOURLY" ? data.mathiHourly.problems : data.problems;
+  const problems = isVariantStrategy(strategy) ? variantData(data, strategy).problems : data.problems;
   return { label: problems.length ? "Settings need attention" : "Ready (stopped)", tone: problems.length ? "bg-warning-soft text-warning" : "bg-info-soft text-info", owns: false, blocked: false };
 }
 

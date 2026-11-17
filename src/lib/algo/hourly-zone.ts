@@ -190,6 +190,10 @@ export type HourlySettings = {
    * normal early exit applies that day too. */
   expiryEarlyExitMinutes: number;
   expiryEarlyExitPercent: number;
+  /** The early exit for a risky-time trade (taken with half the lots, `riskyAction` "half"), expiry day included: these
+   * trades often dip first and then reach the target, so they get more time. 0 = the normal early exit applies. */
+  riskyEarlyExitMinutes: number;
+  riskyEarlyExitPercent: number;
   /** Protect the gain (0 = off): once the premium has traded `protectArmPercent` % above the entry, a fall back to
    * `protectLockPercent` % above it sells the option, so a trade that was nearly at the target does not turn into a loss.
    * The +5% target is unchanged. */
@@ -212,6 +216,15 @@ export type HourlySettings = {
   maxOptionLevel: number;
   /** Weak-setup target (%, 0 = off): instead of the session target, this smaller target when the traded pair's second
    * candle body is under `weakBodyPoints` points, or the contract is `weakMinDaysToExpiry` or more days from expiry. */
+  /** Skip risky times (off by default): no trade that session when, at the decision, NIFTY has moved only
+   * 0–`riskyWeakMovePoints` points in the trade's direction since the 09:15 open, or the option level (premium as a % of
+   * NIFTY ÷ √(days to expiry + 1)) is between `riskyOptionLevelMin` and `riskyOptionLevelMax`. */
+  skipRiskyTimes: boolean;
+  /** At a risky time: "skip" — no trade that session; "half" — the trade is still taken, with half the lots. */
+  riskyAction: "skip" | "half";
+  riskyWeakMovePoints: number;
+  riskyOptionLevelMin: number;
+  riskyOptionLevelMax: number;
   weakTargetPercent: number;
   weakBodyPoints: number;
   weakMinDaysToExpiry: number;
@@ -267,7 +280,7 @@ export type HourlySettings = {
   maxSessionLoss: number;
 };
 
-export const HOURLY_SETTINGS_DEFAULTS: HourlySettings = { dojiTolerance: 0, zoneMinPoints: 0, zoneMaxPoints: 0, skipCandle: "second", skipPart: "body", skipSide: "against", skipWickPercent: 0, skipWickPoints: 4, skipWickFor: "short", bodyCrossPoints: 0, pairStep: "sliding", boxMode: "off", boxSize: 0, boxSkip: true, boxLongLowFree: false, boxCheck: "wick", maxRejectionWickPercent: 0, maxLossWickPercent: 0, minSecondBodyPercent: 0, oppositeOnFail: "off", directionFrom: "position", gapPoints: 0, dailyFallback: true, trendFilter: false, trendTolerance: 0, crossFlip: "off", crossTolerance: 0, redAgainstFlip: 0, redRedDailyCall: 0, redGreenDailyPut: 0, greenRedPut: 0, greenRedMode: "daily", greenRedTolerance: 0, greenRedTrendFree: false, greenRedAtMid: false, greenRedToleranceMode: "all", redRedMaxLowerWick: 0, wickCall: 0, wickCallMode: "override", wickCallAnyTrendDays: "", wickCallAnyTrendShare: 0, wickPutPercent: 0, wickPutTrend: false, wickPutTouch: 0, shortAboveTrend: "check", thinWickPut: 0, thinWickCall: 0, dearFlipPremium: 0, dearFlipBody: 50, greenRedHighGap: 0, greenRedDrawnWick: 0, redRedWaitWick: 0, redRedWaitBody: 0, greenGreenWaitWick: 0, greenGreenWaitBy: "", greenGreenWaitNoDearFlip: false, greenRedDailyTrend: false, greenRedDrawnWickTrend: false, greenRedTrendMaxRange: 0, redGreenBodyTolerance: 0, redGreenWaitPremium: 0, earlyExitMinutes: 0, earlyExitPercent: 0, expiryEarlyExitMinutes: 0, expiryEarlyExitPercent: 0, protectArmPercent: 0, protectLockPercent: 0, ggWaitFirstHourMin: 0, ggWaitFirstHourMax: 0, callWaitDayMoveMin: 0, callWaitDayMoveMax: 0, dte3OppWick: 0, maxOptionLevel: 0, weakTargetPercent: 0, weakBodyPoints: 0, weakMinDaysToExpiry: 0, redGreenOpenFlip: 0, redRedWaitOppWick: 0, redRedWaitOppPoints: 0, redRedDrawnLowerWick: 0, redRedDrawnUpperWick: 0, fallbackTime: "13:15", longLowBelowBoxPoints: -1, boxMinPoints: 0, boxStop: false, boxTarget: false, midpointExit: true, referencePrice: "close", maxSessionLoss: 0 };
+export const HOURLY_SETTINGS_DEFAULTS: HourlySettings = { dojiTolerance: 0, zoneMinPoints: 0, zoneMaxPoints: 0, skipCandle: "second", skipPart: "body", skipSide: "against", skipWickPercent: 0, skipWickPoints: 4, skipWickFor: "short", bodyCrossPoints: 0, pairStep: "sliding", boxMode: "off", boxSize: 0, boxSkip: true, boxLongLowFree: false, boxCheck: "wick", maxRejectionWickPercent: 0, maxLossWickPercent: 0, minSecondBodyPercent: 0, oppositeOnFail: "off", directionFrom: "position", gapPoints: 0, dailyFallback: true, trendFilter: false, trendTolerance: 0, crossFlip: "off", crossTolerance: 0, redAgainstFlip: 0, redRedDailyCall: 0, redGreenDailyPut: 0, greenRedPut: 0, greenRedMode: "daily", greenRedTolerance: 0, greenRedTrendFree: false, greenRedAtMid: false, greenRedToleranceMode: "all", redRedMaxLowerWick: 0, wickCall: 0, wickCallMode: "override", wickCallAnyTrendDays: "", wickCallAnyTrendShare: 0, wickPutPercent: 0, wickPutTrend: false, wickPutTouch: 0, shortAboveTrend: "check", thinWickPut: 0, thinWickCall: 0, dearFlipPremium: 0, dearFlipBody: 50, greenRedHighGap: 0, greenRedDrawnWick: 0, redRedWaitWick: 0, redRedWaitBody: 0, greenGreenWaitWick: 0, greenGreenWaitBy: "", greenGreenWaitNoDearFlip: false, greenRedDailyTrend: false, greenRedDrawnWickTrend: false, greenRedTrendMaxRange: 0, redGreenBodyTolerance: 0, redGreenWaitPremium: 0, earlyExitMinutes: 0, earlyExitPercent: 0, expiryEarlyExitMinutes: 0, expiryEarlyExitPercent: 0, riskyEarlyExitMinutes: 0, riskyEarlyExitPercent: 0, protectArmPercent: 0, protectLockPercent: 0, ggWaitFirstHourMin: 0, ggWaitFirstHourMax: 0, callWaitDayMoveMin: 0, callWaitDayMoveMax: 0, dte3OppWick: 0, maxOptionLevel: 0, skipRiskyTimes: false, riskyAction: "skip", riskyWeakMovePoints: 50, riskyOptionLevelMin: 0.215, riskyOptionLevelMax: 0.25, weakTargetPercent: 0, weakBodyPoints: 0, weakMinDaysToExpiry: 0, redGreenOpenFlip: 0, redRedWaitOppWick: 0, redRedWaitOppPoints: 0, redRedDrawnLowerWick: 0, redRedDrawnUpperWick: 0, fallbackTime: "13:15", longLowBelowBoxPoints: -1, boxMinPoints: 0, boxStop: false, boxTarget: false, midpointExit: true, referencePrice: "close", maxSessionLoss: 0 };
 
 const HOUR = 3_600;
 /** The cash session: 09:15–15:30 IST. */

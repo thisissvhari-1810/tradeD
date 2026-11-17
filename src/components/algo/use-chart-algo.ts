@@ -260,7 +260,7 @@ export function useChartAlgo(input: {
     return true;
   }, [command, date, forgetSession]);
 
-  // Ready to trade the replay: Mathi Strategy in chart-replay mode, or a variant (Mathi Hourly Zone Strategy), which runs
+  // Ready to trade the replay: Mathi Strategy in chart-replay mode, or a variant (Mathi Hourly Zone Strategy, Mathi Trend Channel), which runs
   // the replay with its own settings (always chart replay there).
   const replayReady = isVariantStrategy(selected) || isVariantStrategy(run?.strategy) || data?.config.mode === "REPLAY";
   const gate: PlayGate | null = cursor == null ? null : playGate({

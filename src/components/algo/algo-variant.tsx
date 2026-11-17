@@ -7,13 +7,14 @@ import { Confirm, type AlgoData } from "@/components/algo/algo-panel";
 import { MultiDayBacktest } from "@/components/algo/algo-backtest";
 import { LiveSessionSwitch } from "@/components/algo/algo-live-session";
 import { HourlyRules } from "@/components/algo/algo-hourly";
+import { ChannelRules } from "@/components/algo/algo-channel";
 import { variantData, variantTicker } from "@/components/algo/algo-start-button";
 import { STRATEGY_NAME, type VariantStrategy } from "@/lib/algo/exclusive";
 
 export { variantData };
 
 /**
- * Mathi Hourly Zone Strategy: its own settings, sessions and trades. Live mode runs it as live paper
+ * Mathi Hourly Zone Strategy or Mathi Trend Channel: its own settings, sessions and trades. Live mode runs it as live paper
  * trading (its own session, state and trades); Demo mode runs it on the chart replay. Every entry and exit is decided by
  * the server.
  */
@@ -62,7 +63,7 @@ export function VariantPanel({ data, onData, strategy }: { data: AlgoData; onDat
       {error ? <p className="rounded-md border border-loss/30 bg-loss-soft px-2 py-1.5 text-micro text-loss" role="alert">{error}</p> : null}
       {own.problems.length ? <p className="rounded-md border border-warning/30 bg-warning-soft px-2 py-1.5 text-micro text-warning" role="alert">{own.problems.join(" ")}</p> : null}
 
-      <HourlyRules data={data} onData={onData} />
+      {strategy === "MATHI_CHANNEL" ? <ChannelRules data={data} onData={onData} /> : <HourlyRules data={data} onData={onData} />}
 
       {live ? (
         <>
