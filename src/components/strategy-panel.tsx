@@ -465,11 +465,11 @@ function LineRows({ title, value, onChange }: { title: string; value: StrategyLi
   );
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+export function Row({ label, children }: { label: string; children: ReactNode }) {
   return <div className="flex min-h-7 items-center justify-between gap-2"><span className="min-w-0 truncate text-muted" title={label}>{label}</span>{children}</div>;
 }
 
-function Color({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+export function Color({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <span className="flex items-center gap-1.5">
       <span className="num text-micro text-muted">{value.toUpperCase()}</span>
@@ -478,7 +478,7 @@ function Color({ label, value, onChange }: { label: string; value: string; onCha
   );
 }
 
-function Width({ label, value, onChange }: { label: string; value: StrategyLine["width"]; onChange: (value: StrategyLine["width"]) => void }) {
+export function Width({ label, value, onChange }: { label: string; value: StrategyLine["width"]; onChange: (value: StrategyLine["width"]) => void }) {
   return (
     <select className="compact-field w-[9.5rem] shrink-0" aria-label={label} value={value} onChange={(event) => onChange(Number(event.target.value) as StrategyLine["width"])}>
       {WIDTHS.map((width) => <option key={width} value={width}>{width} px</option>)}
@@ -486,7 +486,7 @@ function Width({ label, value, onChange }: { label: string; value: StrategyLine[
   );
 }
 
-function Dash({ label, value, onChange }: { label: string; value: LineDash; onChange: (value: LineDash) => void }) {
+export function Dash({ label, value, onChange }: { label: string; value: LineDash; onChange: (value: LineDash) => void }) {
   return (
     <select className="compact-field w-[9.5rem] shrink-0" aria-label={label} value={value} onChange={(event) => onChange(event.target.value as LineDash)}>
       {DASHES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
@@ -494,7 +494,7 @@ function Dash({ label, value, onChange }: { label: string; value: LineDash; onCh
   );
 }
 
-function Switch({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (value: boolean) => void }) {
+export function Switch({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (value: boolean) => void }) {
   return (
     <button
       type="button"

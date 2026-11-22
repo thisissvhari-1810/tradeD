@@ -17,6 +17,9 @@ import { DrawingList } from "@/components/drawing-editor";
 import { loadDrawings, saveDrawings } from "@/components/drawing-model";
 import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
+import { LineDrawPanel } from "@/components/line-draw/line-draw-panel";
+import { useLineDrawings } from "@/components/line-draw/use-line-drawings";
+import { appliesTo, buildLineOverlays, needsMarketData, type LineDrawing } from "@/lib/chart/line-drawings";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
@@ -345,6 +348,34 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
       window.removeEventListener("resize", place);
     };
   }, [strategyOpen]);
+  // Line Strategy Draw: saved line drawings (server), independent of the Strategy. Its panel opens below its button.
+  const lineDraw = useLineDrawings();
+  const [lineOpen, setLineOpen] = useState(false);
+  const [lineLeft, setLineLeft] = useState<number | null>(null);
+  const [linePreview, setLinePreview] = useState<LineDrawing | null>(null);
+  const [levels, setLevels] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
+  const lineButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const area = chartAreaRef.current;
+    if (!lineOpen || !area) return;
+    const place = () => {
+      const button = lineButtonRef.current;
+      if (!button) return;
+      const box = area.getBoundingClientRect();
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const width = Math.min(21.25 * rem, box.width - 16);
+      const left = button.getBoundingClientRect().left - box.left;
+      setLineLeft(Math.max(8, Math.min(left, box.width - width - 8)));
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(area);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [lineOpen]);
   /** Chosen sessions for the strategy; empty = automatic (live day or replay date, and the session before it). */
   const [strategyDates, setStrategyDates] = useState({ current: "", previous: "" });
   const [s1, setS1] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
@@ -1272,7 +1303,48 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, replay.date, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
-  const chartOverlays = useMemo(() => (algoDrawings.length || autoDrawings.length ? [...strategyOverlay, ...autoDrawings, ...algoDrawings] : strategyOverlay), [strategyOverlay, autoDrawings, algoDrawings]);
+  // Line Strategy Draw: the saved drawings for this chart (the one being edited replaces / joins them as a preview).
+  // Stock and index charts only; their levels come from the same session data the Strategy uses.
+  const lineSet = useMemo(() => {
+    if (optionView) return [] as LineDrawing[];
+    const saved = linePreview ? lineDraw.drawings.filter((item) => item.id !== linePreview.id) : lineDraw.drawings;
+    return [...saved, ...(linePreview ? [linePreview] : [])].filter((item) => item.enabled && appliesTo(item, symbol, timeframe));
+  }, [optionView, linePreview, lineDraw.drawings, symbol, timeframe]);
+  const levelSession = replay.active && replay.date ? replay.date : "live";
+  const levelKey = !optionView && needsMarketData(lineSet) ? `${symbol}|${levelSession}` : null;
+  const levelData = levels && levels.key === levelKey ? levels.data : null;
+  useEffect(() => {
+    if (!levelKey) return;
+    let stop = false;
+    const [levelSymbol, session] = levelKey.split("|");
+    const load = () => {
+      api<S1Data>(`/api/market/levels?symbol=${encodeURIComponent(levelSymbol)}${session === "live" ? "" : `&date=${encodeURIComponent(session)}`}`)
+        .then((data) => { if (!stop) setLevels({ key: levelKey, data, error: "" }); })
+        .catch((reason: unknown) => {
+          if (!stop) setLevels((current) => ({ key: levelKey, data: current?.key === levelKey ? current.data : null, error: reason instanceof Error ? reason.message : "Levels could not be loaded." }));
+        });
+    };
+    load();
+    // Live: refresh each minute so the open and 09:15 levels appear once they exist (the server caches).
+    const timer = session === "live" ? window.setInterval(load, 60_000) : null;
+    return () => {
+      stop = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [levelKey]);
+  const lineCursor = replay.active && levelData?.date === replay.date ? (replay.cursor ?? 0) : null;
+  const lineOverlay = useMemo(
+    () => (lineSet.length ? buildLineOverlays(lineSet, { symbol, span: timeframe, data: levelData, cursor: lineCursor }) : NO_OVERLAY),
+    [lineSet, symbol, timeframe, levelData, lineCursor],
+  );
+  const lineNote = optionView
+    ? "Line drawings show on the stock or index chart, not on an option contract."
+    : levels?.key === levelKey && levels.error ? levels.error
+    : levelData && levelData.status !== "ready" && levelData.message ? levelData.message : "";
+  const chartOverlays = useMemo(
+    () => (algoDrawings.length || autoDrawings.length || lineOverlay.length ? [...strategyOverlay, ...lineOverlay, ...autoDrawings, ...algoDrawings] : strategyOverlay),
+    [strategyOverlay, lineOverlay, autoDrawings, algoDrawings],
+  );
   // Strategy drawings are derived, not stored: each refresh reconciles to the same ids. The log below
   // shows that (created / updated / retained / removed). On in development, or with
   // localStorage "td-debug-strategy" = "1"; it runs only when the strategy result changes.
@@ -1425,11 +1497,25 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             aria-label="Strategy"
             title={strategyAllowed ? "Automatic Trading Strategy" : "Automatic Trading Strategy (Premium)"}
             className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", strategyOn ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
-            onClick={() => (strategyAllowed ? setStrategyOpen((value) => !value) : setUpgradeFor("strategy"))}
+            onClick={() => { setLineOpen(false); setLinePreview(null); if (strategyAllowed) setStrategyOpen((value) => !value); else setUpgradeFor("strategy"); }}
           >
             {strategyAllowed ? null : <Crown className="h-3.5 w-3.5 text-gold" aria-hidden />}
             Strategy
             {strategyOn ? <span aria-hidden className={cx("h-1.5 w-1.5 rounded-full", strategyDot)} /> : null}
+          </button>
+          <button
+            type="button"
+            ref={lineButtonRef}
+            aria-expanded={lineOpen}
+            aria-pressed={lineOverlay.length > 0}
+            aria-label="Line Strategy Draw"
+            title="Line Strategy Draw: your saved strategy lines and price levels"
+            className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", lineSet.length > 0 ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
+            onClick={() => { setStrategyOpen(false); setLineOpen((value) => !value); }}
+          >
+            <span className="max-sm:hidden">Line Strategy Draw</span>
+            <span className="sm:hidden">Lines</span>
+            {lineSet.length > 0 ? <span className="num rounded-full bg-primary/15 px-1.5 text-micro">{lineSet.length}</span> : null}
           </button>
           {!live || replay.active ? null : <AlgoStartButton allowed={strategyAllowed} onUpgrade={() => setUpgradeFor("strategy")} />}
           {live || !canReplay ? null : <button type="button" aria-pressed={replay.active} className={cx("h-8 shrink-0 rounded-input", !replay.active && "max-lg:hidden", " px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] motion-reduce:transition-none", replay.active ? "bg-demo-soft text-demo hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")} onClick={() => (replay.active ? requestExitReplay() : setReplay((current) => ({ ...current, active: true, status: "loading", cursor: null, date: current.date || previousWeekday(new Date()) })))}>{replay.active ? "Exit replay" : "Replay"}</button>}
@@ -1588,6 +1674,22 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
                 autoTrend={autoTrend}
                 onAutoTrend={changeAutoTrend}
                 trend={trend}
+              />
+            ) : null}
+            {lineOpen ? (
+              <LineDrawPanel
+                drawings={lineDraw.drawings}
+                run={lineDraw.run}
+                busy={lineDraw.busy}
+                error={lineDraw.error}
+                onClose={() => { setLineOpen(false); setLinePreview(null); }}
+                left={lineLeft}
+                symbol={symbol}
+                span={timeframe}
+                data={levelData}
+                cursor={lineCursor}
+                dataNote={lineNote}
+                onPreview={setLinePreview}
               />
             ) : null}
             {chainOpen ? (

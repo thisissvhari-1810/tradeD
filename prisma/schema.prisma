@@ -154,6 +154,7 @@ model User {
   xpEvents            XpEvent[]
   academyDays         AcademyDay[]
   algoSession         AlgoSession?
+  chartLineDrawings   ChartLineDrawing[]
 }
 
 /// TradeD Academy: one row per user and lesson (lesson content lives in code, identified by slug).
@@ -1219,4 +1220,24 @@ model AlgoEvent {
 
   @@unique([sessionId, runId, key])
   @@index([sessionId, mode, time])
+}
+
+/// Line Strategy Draw: a user's saved, named sets of chart price levels (drawing only; no trading effect).
+model ChartLineDrawing {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  /// "*" = every symbol, else one symbol (e.g. NIFTY, BANKNIFTY).
+  symbol    String   @default("*")
+  /// "all" = every timeframe, else one chart span (e.g. 5m).
+  timeframe String   @default("all")
+  enabled   Boolean  @default(true)
+  position  Int      @default(0)
+  /// { lines: LevelLine[] } validated by src/lib/chart/line-drawings.ts normalizeConfig.
+  config    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, position])
 }

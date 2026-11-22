@@ -5,6 +5,7 @@ import type { IChartApi, ISeriesApi, Logical, SeriesType, UTCTimestamp } from "l
 import { screenXToTime, timeToScreenX } from "@/components/chart-coords";
 import { DrawingProperties, applyListAction } from "@/components/drawing-editor";
 import { STRATEGY_PREFIX } from "@/components/strategy-overlay";
+import { LINES_PREFIX } from "@/lib/chart/line-drawings";
 import { DrawingEditBar, type EditAction } from "@/components/drawing-edit-bar";
 import { FIB_CHANNEL_RATIOS, FIB_FAN_RATIOS, GANN_FAN, GANN_RATIOS, RECTANGLE_CENTER, barsBetween, centerSegment, defaultTextStyle, dragBox, dedupePoints, drawingVisible, editPosition, isPositionHandle, positionGeometry, positionMetrics, positionPoints, setAnchor, duplicateDrawing, fibExtensionPrice, fibLevelSet, fibTimes, FULL_SPAN_KINDS, hexAlpha, levelColor, isBoxHandle, isClosedShape, measureGestureDown, measureGestureFinish, measureGestureMove, measureLines, measureStats, measureTone, overRightPriceScale, pitchforkOrigin, placeMeasureCard, pointsNeeded, preferredTemplate, regressionLine, resizeBox, screenAngle, shiftDrawing, zoomPriceRange, type Drawing, type DrawTool, type MagnetMode, type MeasureGesture, type Point } from "@/components/drawing-model";
 
@@ -944,8 +945,8 @@ export function DrawingLayer({
           const dash = mark.pattern === "dashed" ? "6 4" : mark.pattern === "dotted" ? "1.5 3" : undefined;
           const ink = mark.kind === "handle" ? "" : doomed ? "var(--loss)" : mark.color;
           const pointer = tool === "eraser" ? "pointer" : undefined;
-          // Strategy overlays never take the pointer, so the chart still pans and zooms through them.
-          const passive = mark.id.startsWith(STRATEGY_PREFIX);
+          // Strategy and Line Strategy Draw overlays never take the pointer, so the chart still pans and zooms through them.
+          const passive = mark.id.startsWith(STRATEGY_PREFIX) || mark.id.startsWith(LINES_PREFIX);
           const hit = passive ? "none" : hitAll;
           const hitStroke = passive ? "none" : hitStrokeAll;
           if (mark.kind === "hline") {
