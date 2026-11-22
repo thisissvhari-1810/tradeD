@@ -13,7 +13,24 @@ type Status = {
   expiresAt: string | null;
   expired: boolean;
   updatedAt: string | null;
+  renewal?: {
+    lastCheckAt: string | null;
+    lastAttemptAt: string | null;
+    lastResult: string | null;
+    lastMessage: string | null;
+    renewedAt: string | null;
+    stopped: boolean;
+  };
 };
+
+/** One line on the automatic token renewal (scheduler calls /api/market/token-renewal; see token-renewal.ts). */
+function renewalText(renewal: Status["renewal"]) {
+  if (!renewal?.lastCheckAt) return "Not running yet: the renewal scheduler has not called the app.";
+  const checked = Date.now() - Date.parse(renewal.lastCheckAt) > 30 * 60_000 ? ` Last check ${istTime(renewal.lastCheckAt)} - the scheduler may be stopped.` : "";
+  if (renewal.stopped || renewal.lastResult === "failed") return `Last renewal failed${renewal.lastAttemptAt ? ` (${istTime(renewal.lastAttemptAt)})` : ""}: ${renewal.lastMessage ?? "unknown error"}.${checked}`;
+  if (renewal.renewedAt) return `On. Last renewed ${istTime(renewal.renewedAt)} (renews after 15:40 IST every day).${checked}`;
+  return `On. Renews after 15:40 IST; no renewal needed yet.${checked}`;
+}
 
 export default function AdminPage() {
   const desk = useDesk();
@@ -55,7 +72,7 @@ export default function AdminPage() {
         <PageHeader eyebrow={<><Badge tone="primary">Super admin</Badge> Operations</>} title="Administration" description="Market-data connection and demo capital for student accounts." />
         <Section
           title="Market data connection"
-          description="Paste the client id and access token for the connected market-data account. The token is stored on the server and is not shown again."
+          description="Paste the client id and access token for the connected market-data account once. The token is stored on the server, is not shown again, and is renewed automatically every evening after the market closes (like Neural Core); paste a new one only if renewal fails or the token expired."
           actions={status ? <Badge tone={status.expired ? "loss" : status.tokenSource === "missing" ? "warning" : "profit"} dot>{status.expired ? "Expired" : status.tokenSource === "missing" ? "No token" : "Connected"}</Badge> : null}
         >
           <dl className="grid gap-x-6 gap-y-3 text-data sm:grid-cols-2 lg:grid-cols-4">
@@ -63,6 +80,7 @@ export default function AdminPage() {
             <div><dt className="text-muted">Access token</dt><dd className="mt-0.5 font-medium text-text">{status?.tokenSource === "missing" ? "Not set" : status?.tokenSource === "saved" ? "Saved in this dashboard" : status ? "Server environment" : "—"}</dd></div>
             <div><dt className="text-muted">Expiry</dt><dd className={`mt-0.5 font-medium ${status?.expired ? "text-loss" : "text-text"}`}>{status?.expiresAt ? istTime(status.expiresAt) : "Not available"}{status?.expired ? " · expired" : ""}</dd></div>
             <div><dt className="text-muted">Last saved</dt><dd className="mt-0.5 font-medium text-text">{status?.updatedAt ? istTime(status.updatedAt) : "—"}</dd></div>
+            <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Automatic renewal</dt><dd className={`mt-0.5 font-medium ${status?.renewal?.lastResult === "failed" || status?.renewal?.stopped ? "text-loss" : "text-text"}`}>{status ? renewalText(status.renewal) : "—"}</dd></div>
           </dl>
           <div className="mt-5 grid gap-3 border-t border-border-soft pt-5 md:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Client id

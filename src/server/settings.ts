@@ -99,6 +99,24 @@ export async function dhanTokenStatus() {
   };
 }
 
+// Written by src/server/market-token-renewal.ts (kept as a plain key here to avoid a circular import).
+const DHAN_RENEWAL_KEY = "market.dhanTokenRenewal";
+
+/** Automatic-renewal status for the Admin page: times, reasons and messages only, never a token. */
+async function tokenRenewalStatus() {
+  const row = await prisma.appSetting.findUnique({ where: { key: DHAN_RENEWAL_KEY } });
+  const state = asRecord(row?.value);
+  const text = (key: string) => (typeof state[key] === "string" && state[key] ? (state[key] as string) : null);
+  return {
+    lastCheckAt: text("lastCheckAt"),
+    lastAttemptAt: text("lastAttemptAt"),
+    lastResult: text("lastResult"),
+    lastMessage: text("lastMessage"),
+    renewedAt: text("renewedAt"),
+    stopped: Boolean(text("stoppedFor")),
+  };
+}
+
 export async function marketConnectionStatus() {
   const token = await dhanTokenStatus();
   const row = await prisma.appSetting.findUnique({ where: { key: DHAN_CLIENT_KEY } });
@@ -111,6 +129,7 @@ export async function marketConnectionStatus() {
     expiresAt: token.expiresAt,
     expired: token.expired,
     updatedAt: token.updatedAt,
+    renewal: await tokenRenewalStatus(),
   };
 }
 
@@ -137,6 +156,12 @@ export async function saveMarketConnection(actorId: string, input: { clientId?: 
       create: { key: DHAN_TOKEN_KEY, value: accessToken, updatedById: actorId },
       update: { value: accessToken, updatedById: actorId },
     });
+    // A pasted token starts the automatic renewal afresh (an old failure no longer applies).
+    const renewal = await prisma.appSetting.findUnique({ where: { key: DHAN_RENEWAL_KEY } });
+    if (renewal) {
+      const { lastCheckAt } = asRecord(renewal.value);
+      await prisma.appSetting.update({ where: { key: DHAN_RENEWAL_KEY }, data: { value: typeof lastCheckAt === "string" ? { lastCheckAt } : {} } });
+    }
   }
   return marketConnectionStatus();
 }
