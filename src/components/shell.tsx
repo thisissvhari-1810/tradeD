@@ -6,7 +6,7 @@ import type { Premium } from "@/lib/premium/entitlements";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, GraduationCap, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, Bot, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, GraduationCap, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
@@ -320,7 +320,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // Navigation follows the user's permissions; the server enforces the same rules on every request.
   const links = useMemo<NavItem[]>(() => {
     const allowed = NAV.filter((item) => !item.feature || !user?.features || user.features[item.feature]);
-    return user?.role === "SUPER_ADMIN" ? [...allowed, { href: "/admin", label: "Admin", icon: Settings }, { href: "/super-admin", label: "Users", title: "Super Admin", icon: ShieldCheck }] : allowed;
+    return user?.role === "SUPER_ADMIN" ? [...allowed, { href: "/automated", label: "Auto Trading", title: "Automated Trading (paper)", icon: Bot }, { href: "/admin", label: "Admin", icon: Settings }, { href: "/super-admin", label: "Users", title: "Super Admin", icon: ShieldCheck }] : allowed;
   }, [user]);
   const goTo = useCallback((href: string) => router.push(href), [router]);
   const unreadCount = notes.filter((note) => !note.read).length;
@@ -339,7 +339,7 @@ export function Shell({ children }: { children: ReactNode }) {
               const current = active(href);
               return (
                 <Fragment key={href}>
-                  {href === "/holdings" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
+                  {href === "/holdings" || href === "/automated" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
                   <Link
                     href={href}
                     aria-current={current ? "page" : undefined}

@@ -1241,3 +1241,203 @@ model ChartLineDrawing {
 
   @@index([userId, position])
 }
+
+// ───────────── Automated multi-strategy paper trading (src/lib/auto, src/server/auto) ─────────────
+// Paper only: nothing here is ever sent to a broker. Money in paise (Int). Dates are IST YYYY-MM-DD.
+
+/// The engine singleton ("main"): master switch, mode, the tick lease and the heartbeat.
+model AutoEngine {
+  id          String    @id
+  /// Master switch: off = no new entries anywhere (open positions are still managed).
+  enabled     Boolean   @default(true)
+  /// "PAPER" = simulated fills and wallets; "SHADOW" = signals are recorded only.
+  mode        String    @default("PAPER")
+  leaseId     String?
+  leaseUntil  DateTime?
+  heartbeatAt DateTime?
+  /// Last tick: duration, data health, errors (for the dashboard).
+  lastTick    Json?
+  config      Json?
+  updatedAt   DateTime  @updatedAt
+}
+
+/// One row per strategy: its switches and worker status.
+model AutoStrategy {
+  key        String    @id
+  name       String
+  enabled    Boolean   @default(true)
+  /// Paused = no new entries; an open position is still managed to its exit.
+  paused     Boolean   @default(false)
+  position   Int       @default(0)
+  lastRunAt  DateTime?
+  lastError  String?
+  lastSignal Json?
+  updatedAt  DateTime  @updatedAt
+}
+
+/// A strategy's trading day: its own fresh ₹20,000 wallet and the day's totals (one per strategy per date).
+model AutoDay {
+  id              String   @id @default(cuid())
+  strategyKey     String
+  date            String
+  openingPaise    Int
+  availablePaise  Int
+  investedPaise   Int      @default(0)
+  realizedPaise   Int      @default(0)
+  chargesPaise    Int      @default(0)
+  trades          Int      @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  skipped         Int      @default(0)
+  /// WAITING / WATCHING / IN_TRADE / NO_TRADE / DONE / CLOSED
+  status          String   @default("WAITING")
+  note            String   @default("")
+  /// Strategy state carried between checks (next trade number, last exit minute, …).
+  state           Json?
+  closedAt        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([strategyKey, date])
+  @@index([date])
+}
+
+/// Every signal a strategy produced (traded, skipped or shadow-only), with the reason.
+model AutoSignal {
+  id          String   @id @default(cuid())
+  strategyKey String
+  date        String
+  tradeNo     Int
+  /// TRADED / SKIPPED / SHADOW / PENDING
+  status      String
+  side        String
+  right       String
+  strike      Int
+  /// Breakout and confirmation candles (IST minute) and NIFTY at the decision.
+  breakoutMinute Int
+  confirmMinute  Int
+  level       Float
+  nifty       Float
+  vix         Float?
+  reason      String   @default("")
+  /// The candles and checks behind the decision.
+  detail      Json?
+  signalAt    DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([strategyKey, date, tradeNo])
+  @@index([date])
+}
+
+/// A position: entry, live management state and, once closed, the exit and P&L.
+model AutoTrade {
+  id            String    @id @default(cuid())
+  strategyKey   String
+  date          String
+  tradeNo       Int
+  /// OPEN / EXITING / CLOSED
+  status        String
+  side          String
+  right         String
+  strike        Int
+  expiry        String
+  securityId    String
+  symbol        String
+  lotSize       Int
+  lots          Int
+  quantity      Int
+  signalAt      DateTime
+  entryAt       DateTime
+  entryPaise    Int
+  entryBidPaise Int?
+  entryAskPaise Int?
+  entryChargesPaise Int
+  investedPaise Int
+  latencyMs     Int
+  /// Trail / target state and the last option candle read.
+  state         Json
+  targetPaise   Int?
+  stopPaise     Int?
+  lastPaise     Int?
+  lastAt        DateTime?
+  unrealizedPaise Int?
+  exitAt        DateTime?
+  exitPaise     Int?
+  exitBidPaise  Int?
+  exitChargesPaise Int?
+  exitReason    String?
+  /// The model exit (minute, trigger price) the decision came from.
+  exitModel     Json?
+  grossPaise    Int?
+  netPaise      Int?
+  notes         String    @default("")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([strategyKey, date, tradeNo])
+  @@index([date])
+  @@index([status])
+}
+
+/// Simulated orders, keyed so a repeated check can never fill twice.
+model AutoOrder {
+  id             String   @id @default(cuid())
+  idempotencyKey String   @unique
+  strategyKey    String
+  date           String
+  tradeId        String?
+  side           String
+  /// FILLED / REJECTED
+  status         String
+  quantity       Int
+  pricePaise     Int?
+  bidPaise       Int?
+  askPaise       Int?
+  quoteAt        DateTime?
+  chargesPaise   Int?
+  reason         String   @default("")
+  requestedAt    DateTime
+  filledAt       DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([strategyKey, date])
+}
+
+/// Open-position marks (one per check): bid / ask / last and the unrealized P&L.
+model AutoSnapshot {
+  id         String   @id @default(cuid())
+  tradeId    String
+  at         DateTime
+  bidPaise   Int?
+  askPaise   Int?
+  lastPaise  Int?
+  unrealizedPaise Int?
+  stopPaise  Int?
+
+  @@index([tradeId, at])
+}
+
+/// Execution log, system events and market-data health.
+model AutoEvent {
+  id          String   @id @default(cuid())
+  date        String
+  strategyKey String?
+  /// INFO / WARN / ERROR
+  level       String
+  /// SIGNAL / ORDER / EXIT / SKIP / DATA / SYSTEM
+  kind        String
+  message     String
+  data        Json?
+  at          DateTime @default(now())
+
+  @@index([date, at])
+  @@index([strategyKey, date])
+}
+
+/// The end-of-day report (frozen once written).
+model AutoReport {
+  date      String   @id
+  report    Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
