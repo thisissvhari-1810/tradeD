@@ -251,7 +251,8 @@ export async function getReplay(symbol: string, date: string): Promise<ReplaySes
   }
   const cacheKey = `${key}|${date}`;
   const hit = replayCache.get(cacheKey);
-  if (hit && Date.now() - hit.at < (hit.value.tape.length ? 10 * 60 * 1000 : 60 * 1000)) return hit.value;
+  // Today's session is still trading: keep it for a minute only, so new hours / candles appear.
+  if (hit && Date.now() - hit.at < (hit.value.tape.length && date !== today ? 10 * 60 * 1000 : 60 * 1000)) return hit.value;
   const stored = instrument?.dhanSecurityId ?? "";
   const name = index?.symbol ?? instrument!.symbol;
   let tape: Candle[] = [];

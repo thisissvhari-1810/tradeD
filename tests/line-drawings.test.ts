@@ -2,24 +2,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appliesTo,
   buildLineOverlays,
+  dayRequest,
+  defaultConfig,
+  LINE_STRATEGIES,
   LINES_PREFIX,
   MAX_LINE_DRAWINGS,
-  needsMarketData,
   newLine,
   normalizeConfig,
   normalizeSymbol,
   normalizeTimeframe,
+  resolveLevels,
   type LevelLine,
+  type LineDay,
   type LineDrawing,
+  type LineStrategyId,
 } from "@/lib/chart/line-drawings";
+import type { Candle } from "@/lib/algo/lines";
 import { s1Levels, type S1Data } from "@/lib/trading/s1";
 
 const OPEN = Date.UTC(2026, 10, 20, 3, 45) / 1000; // 09:15 IST
+const CLOSE = OPEN + 375 * 60;
 const data: S1Data = {
   symbol: "NIFTY",
   date: "2026-11-20",
   sessionOpen: OPEN,
-  sessionClose: OPEN + 375 * 60,
+  sessionClose: CLOSE,
   status: "ready",
   message: "",
   previous: { date: "2026-11-19", open: 24100, high: 24250, low: 24050, close: 24200 } as S1Data["previous"],
@@ -27,107 +34,154 @@ const data: S1Data = {
   firstMinute: { time: OPEN, open: 24180, high: 24210, low: 24160 },
   anchors: { before: OPEN - 2 * 86400, previous: OPEN - 86400, day: OPEN, after: OPEN + 86400 },
 };
+/** A full session of 1-minute candles: minute i trades around 24180 + i * 0.5 (high +2, low -2). */
+const tape: Candle[] = Array.from({ length: 375 }, (_, i) => {
+  const mid = 24180 + i * 0.5;
+  return { time: OPEN + i * 60, open: mid, high: mid + 2, low: mid - 2, close: mid + 0.25 };
+});
+const day: LineDay = { data, tape };
+const AFTER = CLOSE + 60;
 
 let n = 0;
-function drawing(lines: LevelLine[], patch: Partial<LineDrawing> = {}): LineDrawing {
+function drawing(strategy: LineStrategyId, lines?: LevelLine[], patch: Partial<LineDrawing> = {}): LineDrawing {
   n += 1;
-  return { id: `d${n}`, name: `D${n}`, symbol: "NIFTY", timeframe: "all", enabled: true, config: { lines }, createdAt: "", updatedAt: "", ...patch };
+  const config = defaultConfig(strategy);
+  return { id: `d${n}`, name: `D${n}`, symbol: "*", timeframe: "all", enabled: true, config: lines ? { ...config, lines } : config, createdAt: "", updatedAt: "", ...patch };
 }
-const ctx = { symbol: "NIFTY", span: "5m", data, cursor: null };
+const ctx = (cursor: number | null = null, now = AFTER, d: LineDay = day) => ({ symbol: "NIFTY", span: "5m", dayFor: () => ({ day: d, cursor, now }) });
+
+describe("strategy catalogue", () => {
+  it("lists our index strategies, each with its own default lines", () => {
+    expect(LINE_STRATEGIES.map((item) => item.id)).toEqual(["mathi", "hourly_zone", "second_hour", "breakout_0915", "minute_1315", "trend_channel"]);
+    for (const item of LINE_STRATEGIES) {
+      const config = defaultConfig(item.id);
+      expect(config).toMatchObject({ strategy: item.id, currentDay: "", previousDay: "" });
+      expect(config.lines.some((line) => line.visible)).toBe(true);
+      expect(new Set(config.lines.map((line) => line.id)).size).toBe(config.lines.length);
+    }
+  });
+});
+
+describe("levels", () => {
+  it("uses the Strategy's own S1 box levels and the previous day", () => {
+    const levels = s1Levels(data.previous, data.open, data.firstMinute)!;
+    const out = resolveLevels(day, null, AFTER);
+    expect(out.boxA_top?.value).toBe(levels.closeBox.top);
+    expect(out.boxB_bottom?.value).toBe(levels.openBox!.bottom);
+    expect([out.pdh?.value, out.pdl?.value, out.pdc?.value]).toEqual([24250, 24050, 24200]);
+    expect([out.or_high?.value, out.or_low?.value]).toEqual([24210, 24160]);
+  });
+
+  it("reads the 09:15 and 10:15 hours and the 13:15 candle from the day's candles", () => {
+    const out = resolveLevels(day, null, AFTER);
+    // Hour 1 = minutes 0..59, hour 2 = 60..119.
+    expect(out.h1_high?.value).toBe(24180 + 59 * 0.5 + 2);
+    expect(out.h1_low?.value).toBe(24180 - 2);
+    expect(out.h1_close?.value).toBe(24180 + 59 * 0.5 + 0.25);
+    expect(out.h2_high?.value).toBe(24180 + 119 * 0.5 + 2);
+    expect(out.h2_low?.value).toBe(24180 + 60 * 0.5 - 2);
+    expect(out.m1315_high?.value).toBe(24180 + 240 * 0.5 + 2);
+    expect(out.m1315_low?.start).toBe(OPEN + 240 * 60);
+  });
+
+  it("shows nothing before it existed (live clock or replay cursor)", () => {
+    const early = resolveLevels(day, OPEN + 30 * 60, AFTER);
+    expect(early.h1_high).toBeUndefined();
+    expect(early.or_high).toBeDefined();
+    const at1015 = resolveLevels(day, null, OPEN + 60 * 60);
+    expect(at1015.h1_high).toBeDefined();
+    expect(at1015.h2_high).toBeUndefined();
+    expect(resolveLevels(day, OPEN + 240 * 60, AFTER).m1315_high).toBeUndefined();
+    expect(resolveLevels(day, OPEN + 241 * 60, AFTER).m1315_high).toBeDefined();
+    expect(resolveLevels({ data, tape: null }, null, AFTER).h1_high).toBeUndefined();
+  });
+});
 
 describe("buildLineOverlays", () => {
-  it("draws previous-day, open and 09:15 levels from the session data", () => {
-    const d = drawing(["pdh", "pdl", "pdc", "pdm", "open", "or_high", "or_low"].map((kind) => newLine(kind as LevelLine["kind"])));
-    const out = buildLineOverlays([d], ctx);
-    const prices = out.map((item) => item.points[0].price).sort((a, b) => a - b);
-    expect(prices).toEqual([24050, 24150, 24160, 24180, 24200, 24210, 24250]);
-    expect(out.every((item) => item.id.startsWith(`${LINES_PREFIX}${d.id}:`) && item.locked)).toBe(true);
+  it("draws each enabled strategy's visible lines with stable ids", () => {
+    const second = drawing("second_hour");
+    const out = buildLineOverlays([second], ctx());
+    expect(out.map((item) => item.points[0].price)).toEqual([24180 + 119 * 0.5 + 2, 24180 + 60 * 0.5 - 2]);
+    expect(out.every((item) => item.id.startsWith(`${LINES_PREFIX}${second.id}:`) && item.locked)).toBe(true);
+    expect(buildLineOverlays([second], ctx()).map((item) => item.id)).toEqual(out.map((item) => item.id));
   });
 
-  it("uses the Strategy's own S1 box levels for strategy lines (no new calculation)", () => {
-    const levels = s1Levels(data.previous, data.open, data.firstMinute)!;
-    const d = drawing([newLine("boxA_top"), newLine("boxA_mid"), newLine("boxB_bottom")]);
-    const prices = buildLineOverlays([d], ctx).map((item) => item.points[0].price);
-    expect(prices).toEqual([levels.closeBox.top, levels.closeBox.mid, levels.openBox!.bottom]);
-  });
-
-  it("shows only enabled drawings for this symbol and timeframe, and only visible lines", () => {
-    const on = drawing([newLine("pdh")]);
-    const off = drawing([newLine("pdl")], { enabled: false });
-    const bank = drawing([newLine("pdc")], { symbol: "BANKNIFTY" });
-    const daily = drawing([newLine("pdm")], { timeframe: "1d" });
-    const every = drawing([newLine("open")], { symbol: "*" });
-    const hidden = drawing([{ ...newLine("or_high"), visible: false }]);
-    const ids = buildLineOverlays([on, off, bank, daily, every, hidden], ctx).map((item) => item.id.split(":")[1]);
-    expect(ids.sort()).toEqual([on.id, every.id].sort());
-    expect(appliesTo(daily, "NIFTY", "1d")).toBe(true);
-  });
-
-  it("gives every object a stable id, so re-rendering or toggling another drawing never duplicates lines", () => {
-    const a = drawing([newLine("pdh"), newLine("pdl")]);
-    const b = drawing([newLine("open")]);
-    const first = buildLineOverlays([a, b], ctx).map((item) => item.id);
-    const again = buildLineOverlays([a, b], ctx).map((item) => item.id);
-    const withoutB = buildLineOverlays([a, { ...b, enabled: false }], ctx).map((item) => item.id);
-    expect(again).toEqual(first);
-    expect(new Set(first).size).toBe(first.length);
-    expect(withoutB).toEqual(first.filter((id) => !id.includes(`:${b.id}:`)));
+  it("skips disabled strategies, rows without a strategy, other symbols and hidden lines", () => {
+    const on = drawing("breakout_0915");
+    const off = drawing("mathi", undefined, { enabled: false });
+    const legacy = { ...drawing("mathi"), config: { ...defaultConfig("mathi"), strategy: null } };
+    const bank = drawing("minute_1315", undefined, { symbol: "BANKNIFTY" });
+    const ids = new Set(buildLineOverlays([on, off, legacy, bank], ctx()).map((item) => item.id.split(":")[1]));
+    expect([...ids]).toEqual([on.id]);
+    expect(buildLineOverlays([on], { ...ctx(), symbol: "BANKNIFTY" })).toHaveLength(0); // the data is NIFTY's
+    expect(appliesTo(bank, "BANKNIFTY", "1d")).toBe(true);
   });
 
   it("merges the same price with the same style into one line, keeping both names", () => {
-    const one = drawing([{ ...newLine("pdc"), color: "#2962FF" }]);
-    const two = drawing([{ ...newLine("boxA_mid"), color: "#2962FF", dash: "solid" }]); // box A mid = previous close
-    const out = buildLineOverlays([one, two], ctx);
+    const a = drawing("mathi", [{ ...newLine("pdc"), color: "#2962FF" }]);
+    const b = drawing("mathi", [{ ...newLine("boxA_mid"), color: "#2962FF", dash: "solid" }]); // box A mid = previous close
+    const out = buildLineOverlays([a, b], ctx());
     expect(out).toHaveLength(1);
     expect(out[0].text).toContain("PDC");
     expect(out[0].text).toContain("A Mid");
-    const styled = drawing([{ ...newLine("pdc"), color: "#F23645" }]); // different style: its own line
-    expect(buildLineOverlays([one, styled], ctx)).toHaveLength(2);
   });
 
-  it("hides the open and 09:15 levels in replay until they were known", () => {
-    const d = drawing([newLine("pdh"), newLine("open"), newLine("or_high")]);
-    expect(buildLineOverlays([d], { ...ctx, cursor: OPEN - 60 })).toHaveLength(1);
-    expect(buildLineOverlays([d], { ...ctx, cursor: OPEN })).toHaveLength(2);
-    expect(buildLineOverlays([d], { ...ctx, cursor: OPEN + 60 })).toHaveLength(3);
-  });
-
-  it("draws custom prices without market data, and never another symbol's data", () => {
-    const d = drawing([newLine("custom", 24500), newLine("pdh")]);
-    const noData = buildLineOverlays([d], { ...ctx, data: null });
-    expect(noData.map((item) => item.points[0].price)).toEqual([24500]);
-    expect(buildLineOverlays([d], { ...ctx, data: { ...data, symbol: "BANKNIFTY" } })).toHaveLength(1);
-    expect(needsMarketData([drawing([newLine("custom", 1)])])).toBe(false);
-    expect(needsMarketData([d])).toBe(true);
+  it("draws the channel as a sloped segment to the close", () => {
+    const zig: Candle[] = Array.from({ length: 375 }, (_, i) => {
+      const mid = 24180 + 40 * Math.sin(i / 9) + i * 0.3;
+      return { time: OPEN + i * 60, open: mid - 1, high: mid + 3, low: mid - 3, close: mid + 1 };
+    });
+    const out = buildLineOverlays([drawing("trend_channel", [newLine("ch_upper"), newLine("ch_lower")])], ctx(null, AFTER, { data, tape: zig }));
+    expect(out).toHaveLength(2);
+    for (const item of out) {
+      expect(item.kind).toBe("trend");
+      expect(item.points[1].time).toBe(CLOSE);
+    }
   });
 
   it("applies label and extend settings", () => {
-    const line = { ...newLine("pdh"), showPrice: false, extend: "session" as const };
-    const [out] = buildLineOverlays([drawing([line])], ctx);
+    const [out] = buildLineOverlays([drawing("mathi", [{ ...newLine("pdh"), showPrice: false, extend: "session" }])], ctx());
     expect(out.text).toBe("PDH");
     expect(out.kind).toBe("trend");
     expect(out.points.map((point) => point.time)).toEqual([data.sessionOpen, data.sessionClose]);
-    const [full] = buildLineOverlays([drawing([{ ...newLine("pdl"), extend: "full", showName: false }])], ctx);
+    const [full] = buildLineOverlays([drawing("mathi", [{ ...newLine("pdl"), extend: "full", showName: false }])], ctx());
     expect(full.kind).toBe("hline");
     expect(full.text).toBe("24,050.00");
   });
 });
 
+describe("dates", () => {
+  it("uses the row's own days, else the replayed day, else live; same days share one request", () => {
+    const auto = drawing("mathi");
+    expect(dayRequest(auto, "nifty", null)).toMatchObject({ symbol: "NIFTY", date: null, previous: null, tape: false });
+    expect(dayRequest(auto, "NIFTY", "2026-11-18").date).toBe("2026-11-18");
+    const chosen = drawing("hourly_zone");
+    chosen.config = { ...chosen.config, currentDay: "2026-11-20", previousDay: "2026-11-18" };
+    expect(dayRequest(chosen, "NIFTY", "2026-11-10")).toMatchObject({ date: "2026-11-20", previous: "2026-11-18", tape: true });
+    expect(dayRequest(drawing("mathi"), "NIFTY", null).key).toBe(dayRequest(auto, "NIFTY", null).key);
+  });
+});
+
 describe("config validation", () => {
-  it("drops unknown kinds and bad prices, cleans colours, styles and ids", () => {
+  it("drops unknown kinds and strategies, cleans colours, styles, ids and dates", () => {
     const config = normalizeConfig({
+      strategy: "mathi",
+      currentDay: "2026-11-20",
+      previousDay: "2026-11-21",
       lines: [
         { kind: "pdh", id: "a", color: "red", width: 9, dash: "wavy", name: "  High  " },
         { kind: "bogus" },
-        { kind: "custom", price: -5 },
-        { kind: "custom", price: "24500.123", id: "a" },
+        { kind: "h2_high", id: "a" },
       ],
     });
-    expect(config.lines.map((line) => line.kind)).toEqual(["pdh", "custom"]);
+    expect(config.strategy).toBe("mathi");
+    expect(config.currentDay).toBe("2026-11-20");
+    expect(config.previousDay).toBe(""); // must be before the current day
+    expect(config.lines.map((line) => line.kind)).toEqual(["pdh", "h2_high"]);
     expect(config.lines[0]).toMatchObject({ name: "High", color: "#089981", width: 1, dash: "solid" });
-    expect(config.lines[1].price).toBe(24500.12);
     expect(new Set(config.lines.map((line) => line.id)).size).toBe(2);
-    expect(normalizeConfig(null)).toEqual({ lines: [] });
+    expect(normalizeConfig({ strategy: "nope", currentDay: "20-11-2026" })).toEqual({ strategy: null, currentDay: "", previousDay: "", lines: [] });
+    expect(normalizeConfig(null)).toEqual({ strategy: null, currentDay: "", previousDay: "", lines: [] });
     expect(normalizeTimeframe("5m")).toBe("5m");
     expect(normalizeTimeframe("7m")).toBe("all");
     expect(normalizeSymbol(" banknifty ")).toBe("BANKNIFTY");
@@ -178,12 +232,13 @@ describe("chart-lines persistence", () => {
   beforeEach(() => { rows.length = 0; });
 
   it("creates, edits one drawing without touching another, duplicates and deletes", async () => {
-    const config = { lines: [newLine("pdh"), newLine("custom", 24500)] };
+    const config = defaultConfig("mathi");
     let { drawings } = await mutateLineDrawings("u1", { action: "create", name: "Previous Day Levels", symbol: "nifty", timeframe: "5m", config });
-    await mutateLineDrawings("u1", { action: "create", name: "Custom", config: { lines: [newLine("custom", 100)] } });
+    await mutateLineDrawings("u1", { action: "create", name: "Custom", config: defaultConfig("minute_1315") });
     const [first, second] = await listLineDrawings("u1");
     expect(first).toMatchObject({ name: "Previous Day Levels", symbol: "NIFTY", timeframe: "5m", enabled: true });
-    expect(first.config.lines).toHaveLength(2);
+    expect(first.config.lines).toHaveLength(defaultConfig("mathi").lines.length);
+    expect(first.config.strategy).toBe("mathi");
     ({ drawings } = await mutateLineDrawings("u1", { action: "update", id: first.id, name: "PD Levels", enabled: false }));
     expect(drawings.find((item) => item.id === first.id)).toMatchObject({ name: "PD Levels", enabled: false });
     expect(drawings.find((item) => item.id === second.id)).toEqual(second);

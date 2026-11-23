@@ -373,7 +373,7 @@ function signed(value: number) {
 }
 
 /** A date picker with an Auto option: empty value means automatic. */
-function DateRow({ label, hint, value, auto, max, onChange }: { label: string; hint: string; value: string; auto: string; max: string; onChange: (value: string) => void }) {
+export function DateRow({ label, hint, value, auto, max, onChange }: { label: string; hint: string; value: string; auto: string; max: string; onChange: (value: string) => void }) {
   return (
     <div className="flex items-center gap-2">
       <span className="min-w-0 flex-1">
@@ -402,7 +402,7 @@ function DateRow({ label, hint, value, auto, max, onChange }: { label: string; h
 }
 
 /** The calendar day before a YYYY-MM-DD date. */
-function dayBefore(dateKey: string) {
+export function dayBefore(dateKey: string) {
   const [year, month, day] = dateKey.split("-").map(Number);
   if (!year || !month || !day) return dateKey;
   return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10);

@@ -1,19 +1,23 @@
 /**
- * Line Strategy Draw: saved, named sets of horizontal price levels drawn on the chart.
+ * Line Strategy Draw: each of our strategies' price lines, switched on per strategy, for a chosen current day and
+ * previous day (or Auto).
  *
- * This module is pure (no React, no database): the config shape and its validation (shared by the API and the
- * panel), the level catalogue, and buildLineOverlays(), which turns the saved drawings plus one session's market
- * data into read-only chart drawings. It never changes how the Strategy (S1) computes anything: the previous-day
- * and opening-range values and the Strategy box levels come from the same S1Data / s1Levels the Strategy uses.
+ * This module is pure (no React, no database): the strategy catalogue, the saved config and its validation (shared by
+ * the API and the panel), and buildLineOverlays(), which turns the enabled strategies plus each one's session data
+ * into read-only chart drawings. It never changes how any strategy computes or trades: every level comes from the same
+ * helpers the strategies use (S1 boxes from s1Levels, hourly candles from hourlyCandles, the channel from
+ * channelSignal).
  *
  * Every chart object it makes has an id `lines:<drawingId>:<lineId>`, so:
  *  - the chart draws it read-only and never saves it with the user's own drawings (like `strategy:` overlays);
- *  - the same id is produced on every render, so enabling, disabling or editing one drawing changes only its own
- *    objects and nothing accumulates.
+ *  - the same id is produced on every render, so switching one strategy on or off changes only its own objects.
  */
 import type { Drawing, DrawingTextStyle, LineDash } from "@/components/drawing-model";
 import { CHART_SPANS, type ChartSpan } from "@/lib/market/spans";
 import { s1Levels, s1Reveal, type S1Data } from "@/lib/trading/s1";
+import type { Candle } from "@/lib/algo/lines";
+import { hourlyCandles } from "@/lib/algo/hourly-zone";
+import { CHANNEL_SETTINGS_DEFAULTS, channelPriceAt, channelSignal } from "@/lib/algo/trend-channel";
 
 export const LINES_PREFIX = "lines:";
 export const MAX_LINE_DRAWINGS = 50;
@@ -25,7 +29,10 @@ export type LevelKind =
   | "or_high" | "or_low"
   | "boxA_top" | "boxA_mid" | "boxA_bottom"
   | "boxB_top" | "boxB_mid" | "boxB_bottom"
-  | "custom";
+  | "h1_high" | "h1_low" | "h1_close" | "h1_mid"
+  | "h2_high" | "h2_low"
+  | "m1315_high" | "m1315_low"
+  | "ch_upper" | "ch_lower";
 
 export type LineExtend = "right" | "session" | "full";
 
@@ -34,8 +41,6 @@ export type LevelLine = {
   id: string;
   kind: LevelKind;
   name: string;
-  /** Only for kind "custom". */
-  price?: number;
   visible: boolean;
   color: string;
   width: 1 | 2 | 3 | 4;
@@ -47,9 +52,12 @@ export type LevelLine = {
   extend: LineExtend;
 };
 
-export type LineDrawingConfig = { lines: LevelLine[] };
+export type LineStrategyId = "mathi" | "hourly_zone" | "second_hour" | "breakout_0915" | "minute_1315" | "trend_channel";
 
-/** A saved drawing as the API returns it. `symbol` "*" = every symbol; `timeframe` "all" = every timeframe. */
+/** `currentDay` / `previousDay`: YYYY-MM-DD, or "" for Auto. */
+export type LineDrawingConfig = { strategy: LineStrategyId | null; currentDay: string; previousDay: string; lines: LevelLine[] };
+
+/** A saved strategy row as the API returns it. `symbol` "*" = every symbol; `timeframe` "all" = every timeframe. */
 export type LineDrawing = {
   id: string;
   name: string;
@@ -61,56 +69,116 @@ export type LineDrawing = {
   updatedAt: string;
 };
 
-export const LEVELS: Record<LevelKind, { label: string; group: string; needs: "none" | "previous" | "open" | "opening" | "boxA" | "boxB" }> = {
-  pdh: { label: "Previous day high", group: "Previous day", needs: "previous" },
-  pdl: { label: "Previous day low", group: "Previous day", needs: "previous" },
-  pdc: { label: "Previous day close", group: "Previous day", needs: "previous" },
-  pdm: { label: "Previous day midpoint", group: "Previous day", needs: "previous" },
-  open: { label: "Today's open", group: "Today", needs: "open" },
-  or_high: { label: "09:15 candle high", group: "Today", needs: "opening" },
-  or_low: { label: "09:15 candle low", group: "Today", needs: "opening" },
-  boxA_top: { label: "Strategy box A top", group: "Strategy (S1)", needs: "boxA" },
-  boxA_mid: { label: "Strategy box A mid (prev close)", group: "Strategy (S1)", needs: "boxA" },
-  boxA_bottom: { label: "Strategy box A bottom", group: "Strategy (S1)", needs: "boxA" },
-  boxB_top: { label: "Strategy box B top", group: "Strategy (S1)", needs: "boxB" },
-  boxB_mid: { label: "Strategy box B mid (open)", group: "Strategy (S1)", needs: "boxB" },
-  boxB_bottom: { label: "Strategy box B bottom", group: "Strategy (S1)", needs: "boxB" },
-  custom: { label: "Custom price", group: "Custom", needs: "none" },
+/** Where a level's price comes from: the session levels (S1 data) or the day's 1-minute candles ("tape"). */
+type Needs = "previous" | "open" | "opening" | "boxA" | "boxB" | "tape";
+
+export const LEVELS: Record<LevelKind, { label: string; needs: Needs }> = {
+  pdh: { label: "Previous day high", needs: "previous" },
+  pdl: { label: "Previous day low", needs: "previous" },
+  pdc: { label: "Previous day close", needs: "previous" },
+  pdm: { label: "Previous day midpoint", needs: "previous" },
+  open: { label: "Today's open", needs: "open" },
+  or_high: { label: "09:15 candle high", needs: "opening" },
+  or_low: { label: "09:15 candle low", needs: "opening" },
+  boxA_top: { label: "Previous-day box top", needs: "boxA" },
+  boxA_mid: { label: "Previous-day box mid (prev close)", needs: "boxA" },
+  boxA_bottom: { label: "Previous-day box bottom", needs: "boxA" },
+  boxB_top: { label: "Today's-open box top", needs: "boxB" },
+  boxB_mid: { label: "Today's-open box mid (open)", needs: "boxB" },
+  boxB_bottom: { label: "Today's-open box bottom", needs: "boxB" },
+  h1_high: { label: "09:15 hour high", needs: "tape" },
+  h1_low: { label: "09:15 hour low", needs: "tape" },
+  h1_close: { label: "09:15 hour close", needs: "tape" },
+  h1_mid: { label: "09:15 hour midpoint", needs: "tape" },
+  h2_high: { label: "10:15 hour high", needs: "tape" },
+  h2_low: { label: "10:15 hour low", needs: "tape" },
+  m1315_high: { label: "13:15 candle high", needs: "tape" },
+  m1315_low: { label: "13:15 candle low", needs: "tape" },
+  ch_upper: { label: "Channel upper line", needs: "tape" },
+  ch_lower: { label: "Channel lower line", needs: "tape" },
 };
 export const LEVEL_KINDS = Object.keys(LEVELS) as LevelKind[];
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_COLORS: Record<LevelKind, string> = {
   pdh: "#089981", pdl: "#F23645", pdc: "#2962FF", pdm: "#787B86", open: "#F0B90B", or_high: "#15803D", or_low: "#15803D",
-  boxA_top: "#7E22CE", boxA_mid: "#7E22CE", boxA_bottom: "#7E22CE", boxB_top: "#C2410C", boxB_mid: "#C2410C", boxB_bottom: "#C2410C", custom: "#D4AF37",
+  boxA_top: "#7E22CE", boxA_mid: "#7E22CE", boxA_bottom: "#7E22CE", boxB_top: "#C2410C", boxB_mid: "#C2410C", boxB_bottom: "#C2410C",
+  h1_high: "#089981", h1_low: "#F23645", h1_close: "#2962FF", h1_mid: "#787B86", h2_high: "#15803D", h2_low: "#DC2626",
+  m1315_high: "#15803D", m1315_low: "#DC2626", ch_upper: "#0EA5E9", ch_lower: "#0EA5E9",
 };
 const SHORT_NAMES: Record<LevelKind, string> = {
   pdh: "PDH", pdl: "PDL", pdc: "PDC", pdm: "PD Mid", open: "Open", or_high: "9:15 High", or_low: "9:15 Low",
-  boxA_top: "A Top", boxA_mid: "A Mid", boxA_bottom: "A Bottom", boxB_top: "B Top", boxB_mid: "B Mid", boxB_bottom: "B Bottom", custom: "Level",
+  boxA_top: "A Top", boxA_mid: "A Mid", boxA_bottom: "A Bottom", boxB_top: "B Top", boxB_mid: "B Mid", boxB_bottom: "B Bottom",
+  h1_high: "H1 High", h1_low: "H1 Low", h1_close: "H1 Close", h1_mid: "H1 Mid", h2_high: "H2 High", h2_low: "H2 Low",
+  m1315_high: "13:15 High", m1315_low: "13:15 Low", ch_upper: "Channel Upper", ch_lower: "Channel Lower",
 };
 
-let seq = 0;
-export function newLineId() {
-  seq = (seq + 1) % 1_000_000;
-  return `l${Date.now().toString(36)}${seq.toString(36)}`;
-}
+/** Previous-day lines every strategy offers (off unless the strategy itself uses them). */
+const PREVIOUS: Array<{ kind: LevelKind; on?: boolean; name?: string }> = [{ kind: "pdh" }, { kind: "pdl" }, { kind: "pdc" }];
+
+/** Our strategies whose levels sit on the index chart, with the lines each one draws (`on` = shown by default). */
+export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; about: string; lines: Array<{ kind: LevelKind; on?: boolean; name?: string }> }> = [
+  {
+    id: "mathi",
+    name: "Mathi Strategy",
+    about: "Previous-day box (A), today's-open box (B), 09:15 high / low",
+    lines: [
+      { kind: "boxA_top", on: true }, { kind: "boxA_mid", on: true }, { kind: "boxA_bottom", on: true },
+      { kind: "boxB_top", on: true }, { kind: "boxB_mid", on: true }, { kind: "boxB_bottom", on: true },
+      { kind: "or_high", on: true }, { kind: "or_low", on: true }, { kind: "open" }, ...PREVIOUS,
+    ],
+  },
+  {
+    id: "hourly_zone",
+    name: "Mathi Hourly Zone Strategy — 5%",
+    about: "09:15 hour reference (its close), high / low and the 10:15 hour",
+    lines: [
+      { kind: "h1_close", on: true, name: "Reference (H1 close)" }, { kind: "h1_high", on: true }, { kind: "h1_low", on: true }, { kind: "h1_mid" },
+      { kind: "h2_high", on: true }, { kind: "h2_low", on: true }, ...PREVIOUS,
+    ],
+  },
+  {
+    id: "second_hour",
+    name: "Mathi Second Hour (Hourly Breakout)",
+    about: "10:15–11:15 candle: high = CALL level, low = PUT level",
+    lines: [{ kind: "h2_high", on: true, name: "CALL level (H2 high)" }, { kind: "h2_low", on: true, name: "PUT level (H2 low)" }, ...PREVIOUS],
+  },
+  {
+    id: "breakout_0915",
+    name: "Mathi Breakout – 9:15",
+    about: "09:15 1-minute candle high / low",
+    lines: [{ kind: "or_high", on: true, name: "CALL above 9:15 High" }, { kind: "or_low", on: true, name: "PUT below 9:15 Low" }, { kind: "open" }, ...PREVIOUS],
+  },
+  {
+    id: "minute_1315",
+    name: "Mathi 13:15 Minute",
+    about: "13:15 1-minute candle high / low",
+    lines: [{ kind: "m1315_high", on: true, name: "CALL above 13:15 High" }, { kind: "m1315_low", on: true, name: "PUT below 13:15 Low" }, ...PREVIOUS],
+  },
+  {
+    id: "trend_channel",
+    name: "Mathi Trend Channel",
+    about: "3-minute channel: primary trendline and its parallel clone",
+    lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, ...PREVIOUS],
+  },
+];
+export const LINE_STRATEGY_IDS = LINE_STRATEGIES.map((item) => item.id);
+export const strategyDef = (id: LineStrategyId | null) => LINE_STRATEGIES.find((item) => item.id === id) ?? null;
 
 /** A new line of a kind with that kind's default name, colour and style. */
-export function newLine(kind: LevelKind, price?: number): LevelLine {
+export function newLine(kind: LevelKind, patch: Partial<LevelLine> = {}): LevelLine {
   return {
-    id: newLineId(), kind, name: SHORT_NAMES[kind], ...(kind === "custom" ? { price: price ?? 0 } : {}), visible: true,
-    color: DEFAULT_COLORS[kind], width: 1, dash: kind === "pdm" || kind.endsWith("_mid") ? "dashed" : "solid", showPrice: true, showName: true,
-    extend: kind === "custom" ? "full" : "right",
+    id: kind, kind, name: SHORT_NAMES[kind], visible: true, color: DEFAULT_COLORS[kind], width: 1,
+    dash: kind === "pdm" || kind === "h1_mid" || kind.endsWith("_mid") ? "dashed" : "solid", showPrice: true, showName: true, extend: "right", ...patch,
   };
 }
 
-/** Starting points for a new drawing (configuration presets, not data). */
-export const TEMPLATES: Array<{ id: string; name: string; kinds: LevelKind[] }> = [
-  { id: "blank", name: "Custom Strategy Lines", kinds: [] },
-  { id: "previous", name: "Previous Day Levels", kinds: ["pdh", "pdl", "pdc", "pdm"] },
-  { id: "opening", name: "Opening Levels", kinds: ["open", "or_high", "or_low"] },
-  { id: "mathi", name: "Mathi Strategy Lines", kinds: ["boxA_top", "boxA_mid", "boxA_bottom", "boxB_top", "boxB_mid", "boxB_bottom", "or_high", "or_low"] },
-];
+/** A strategy's starting config: its lines with their defaults, both days on Auto. */
+export function defaultConfig(id: LineStrategyId): LineDrawingConfig {
+  const def = strategyDef(id)!;
+  return { strategy: id, currentDay: "", previousDay: "", lines: def.lines.map((item) => newLine(item.kind, { visible: Boolean(item.on), ...(item.name ? { name: item.name } : {}) })) };
+}
 
 function cleanLine(value: unknown, index: number, seen: Set<string>): LevelLine | null {
   if (!value || typeof value !== "object") return null;
@@ -120,11 +188,9 @@ function cleanLine(value: unknown, index: number, seen: Set<string>): LevelLine 
   let id = typeof row.id === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(row.id) ? row.id : `l${index}`;
   while (seen.has(id)) id = `${id}_${index}`;
   seen.add(id);
-  const price = kind === "custom" ? Number(row.price) : undefined;
-  if (kind === "custom" && !(Number.isFinite(price) && (price as number) > 0 && (price as number) < 10_000_000)) return null;
   const name = typeof row.name === "string" ? row.name.trim().slice(0, 40) : "";
   return {
-    id, kind, name: name || SHORT_NAMES[kind], ...(kind === "custom" ? { price: Math.round((price as number) * 100) / 100 } : {}),
+    id, kind, name: name || SHORT_NAMES[kind],
     visible: row.visible !== false,
     color: typeof row.color === "string" && HEX.test(row.color) ? row.color : DEFAULT_COLORS[kind],
     width: row.width === 2 || row.width === 3 || row.width === 4 ? row.width : 1,
@@ -135,11 +201,17 @@ function cleanLine(value: unknown, index: number, seen: Set<string>): LevelLine 
   };
 }
 
-/** Validates a config from the client or the database; unknown kinds, bad colours or prices are dropped / defaulted. */
+/** Validates a config from the client or the database; unknown kinds, bad colours or dates are dropped / defaulted. */
 export function normalizeConfig(value: unknown): LineDrawingConfig {
-  const rows = value && typeof value === "object" && Array.isArray((value as LineDrawingConfig).lines) ? (value as LineDrawingConfig).lines : [];
+  const raw = (value && typeof value === "object" ? value : {}) as Partial<Record<keyof LineDrawingConfig, unknown>>;
+  const strategy = LINE_STRATEGY_IDS.includes(raw.strategy as LineStrategyId) ? (raw.strategy as LineStrategyId) : null;
+  const currentDay = typeof raw.currentDay === "string" && DAY.test(raw.currentDay) ? raw.currentDay : "";
+  let previousDay = typeof raw.previousDay === "string" && DAY.test(raw.previousDay) ? raw.previousDay : "";
+  if (previousDay && currentDay && previousDay >= currentDay) previousDay = "";
+  const rows = Array.isArray(raw.lines) ? raw.lines : [];
   const seen = new Set<string>();
-  return { lines: rows.slice(0, MAX_LINES_PER_DRAWING).map((row, index) => cleanLine(row, index, seen)).filter((row): row is LevelLine => row != null) };
+  const lines = rows.slice(0, MAX_LINES_PER_DRAWING).map((row, index) => cleanLine(row, index, seen)).filter((row): row is LevelLine => row != null);
+  return { strategy, currentDay, previousDay, lines };
 }
 
 export function normalizeTimeframe(value: unknown): ChartSpan | "all" {
@@ -156,70 +228,138 @@ export function appliesTo(drawing: Pick<LineDrawing, "symbol" | "timeframe">, sy
   return (drawing.symbol === "*" || drawing.symbol === symbol.toUpperCase()) && (drawing.timeframe === "all" || drawing.timeframe === span);
 }
 
-/** True when any line of these drawings needs the session's market data (anything but custom prices). */
-export function needsMarketData(drawings: LineDrawing[]) {
-  return drawings.some((drawing) => drawing.config.lines.some((line) => line.visible && line.kind !== "custom"));
+/** True when any visible line needs the day's 1-minute candles (hourly, 13:15 and channel levels). */
+export function needsTape(drawing: Pick<LineDrawing, "config">) {
+  return drawing.config.lines.some((line) => line.visible && LEVELS[line.kind].needs === "tape");
+}
+
+/**
+ * The session data one strategy row needs: its current day (its own date, else the replayed date, else live / Auto),
+ * its previous day (its own, else Auto), and whether the day's candles are needed. Rows asking for the same thing
+ * share one request (`key`).
+ */
+export function dayRequest(drawing: LineDrawing, symbol: string, replayDate: string | null) {
+  const date = drawing.config.currentDay || replayDate || null;
+  const previous = drawing.config.previousDay && (!date || drawing.config.previousDay < date) ? drawing.config.previousDay : null;
+  const tape = needsTape(drawing);
+  return { key: `${symbol.toUpperCase()}|${date ?? "live"}|${previous ?? "auto"}|${tape ? 1 : 0}`, symbol: symbol.toUpperCase(), date, previous, tape };
 }
 
 export function formatLevel(value: number) {
   return value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-type Resolved = { value: number; start: number | null };
+/** One session's data: the levels (S1Data, same as the Strategy) and, when asked for, its 1-minute candles. */
+export type LineDay = { data: S1Data | null; tape: Candle[] | null };
 
-/** The price of one level from the session's data (same S1Data / s1Levels the Strategy uses); null when unknown or not yet revealed. */
-export function levelValue(line: LevelLine, data: S1Data | null, cursor: number | null): Resolved | null {
-  if (line.kind === "custom") return line.price && line.price > 0 ? { value: line.price, start: data?.sessionOpen ?? null } : null;
-  if (!data || !data.previous) return null;
-  const levels = s1Levels(data.previous, data.open, data.firstMinute);
-  if (!levels) return null;
-  const show = s1Reveal(data, levels, cursor);
-  const prevStart = data.anchors?.previous ?? data.sessionOpen;
+/** A resolved level: flat from `start` at `value`, or a sloped segment to `end` (the channel). */
+export type Resolved = { value: number; start: number | null; end?: { time: number; price: number } };
+
+/**
+ * Every level of one session, as known at `cursor` (replay clock) or `now` (live): nothing is shown before it existed.
+ * Hours are complete hours only (hourlyCandles), the 13:15 candle once it has closed, the channel once it has formed.
+ */
+export function resolveLevels(day: LineDay | null, cursor: number | null, now: number): Partial<Record<LevelKind, Resolved>> {
+  const out: Partial<Record<LevelKind, Resolved>> = {};
+  const data = day?.data;
+  if (!data) return out;
+  const clock = cursor ?? now;
   const p = data.previous;
-  switch (line.kind) {
-    case "pdh": return { value: p.high, start: prevStart };
-    case "pdl": return { value: p.low, start: prevStart };
-    case "pdc": return { value: p.close, start: prevStart };
-    case "pdm": return { value: (p.high + p.low) / 2, start: prevStart };
-    case "open": return data.open != null && show.openBox ? { value: data.open, start: data.sessionOpen } : null;
-    case "or_high": return levels.openingRange && show.openingRange ? { value: levels.openingRange.high, start: levels.openingRange.time } : null;
-    case "or_low": return levels.openingRange && show.openingRange ? { value: levels.openingRange.low, start: levels.openingRange.time } : null;
-    case "boxA_top": return { value: levels.closeBox.top, start: prevStart };
-    case "boxA_mid": return { value: levels.closeBox.mid, start: prevStart };
-    case "boxA_bottom": return { value: levels.closeBox.bottom, start: prevStart };
-    case "boxB_top": return levels.openBox && show.openBox ? { value: levels.openBox.top, start: data.sessionOpen } : null;
-    case "boxB_mid": return levels.openBox && show.openBox ? { value: levels.openBox.mid, start: data.sessionOpen } : null;
-    case "boxB_bottom": return levels.openBox && show.openBox ? { value: levels.openBox.bottom, start: data.sessionOpen } : null;
-    default: return null;
+  const prevStart = data.anchors?.previous ?? data.sessionOpen;
+  if (p) {
+    out.pdh = { value: p.high, start: prevStart };
+    out.pdl = { value: p.low, start: prevStart };
+    out.pdc = { value: p.close, start: prevStart };
+    out.pdm = { value: (p.high + p.low) / 2, start: prevStart };
+    const levels = s1Levels(p, data.open, data.firstMinute);
+    if (levels) {
+      const show = s1Reveal(data, levels, cursor);
+      if (data.open != null && show.openBox) out.open = { value: data.open, start: data.sessionOpen };
+      if (levels.openingRange && show.openingRange) {
+        out.or_high = { value: levels.openingRange.high, start: levels.openingRange.time };
+        out.or_low = { value: levels.openingRange.low, start: levels.openingRange.time };
+      }
+      out.boxA_top = { value: levels.closeBox.top, start: prevStart };
+      out.boxA_mid = { value: levels.closeBox.mid, start: prevStart };
+      out.boxA_bottom = { value: levels.closeBox.bottom, start: prevStart };
+      if (levels.openBox && show.openBox) {
+        out.boxB_top = { value: levels.openBox.top, start: data.sessionOpen };
+        out.boxB_mid = { value: levels.openBox.mid, start: data.sessionOpen };
+        out.boxB_bottom = { value: levels.openBox.bottom, start: data.sessionOpen };
+      }
+    }
+  } else if (data.firstMinute && (cursor == null || cursor >= data.firstMinute.time + 60)) {
+    // No previous session: the 09:15 candle is still known.
+    out.or_high = { value: data.firstMinute.high, start: data.firstMinute.time };
+    out.or_low = { value: data.firstMinute.low, start: data.firstMinute.time };
   }
+  const open = data.sessionOpen;
+  const tape = (day.tape ?? []).filter((bar) => bar.time >= open && bar.time < data.sessionClose && bar.time + 60 <= clock);
+  if (!tape.length) return out;
+  const hours = hourlyCandles(tape, open, clock).filter((hour) => hour.complete && hour.end - hour.start === 3_600);
+  const h1 = hours.find((hour) => hour.start === open);
+  const h2 = hours.find((hour) => hour.start === open + 3_600);
+  if (h1) {
+    out.h1_high = { value: h1.high, start: h1.start };
+    out.h1_low = { value: h1.low, start: h1.start };
+    out.h1_close = { value: h1.close, start: h1.start };
+    out.h1_mid = { value: (h1.high + h1.low) / 2, start: h1.start };
+  }
+  if (h2) {
+    out.h2_high = { value: h2.high, start: h2.start };
+    out.h2_low = { value: h2.low, start: h2.start };
+  }
+  const m1315 = tape.find((bar) => bar.time === open + 4 * 3_600);
+  if (m1315) {
+    out.m1315_high = { value: m1315.high, start: m1315.time };
+    out.m1315_low = { value: m1315.low, start: m1315.time };
+  }
+  const { state } = channelSignal(tape, open, CHANNEL_SETTINGS_DEFAULTS, Math.min(clock, data.sessionClose));
+  const from = state.pattern?.points[0]?.time;
+  if (from != null && state.upper && state.lower) {
+    const to = data.sessionClose;
+    for (const [kind, line] of [["ch_upper", state.upper], ["ch_lower", state.lower]] as const) {
+      out[kind] = { value: round(channelPriceAt(line, from, open)), start: from, end: { time: to, price: round(channelPriceAt(line, to, open)) } };
+    }
+  }
+  return out;
 }
+
+const round = (value: number) => Math.round(value * 100) / 100;
 
 function caption(color: string): DrawingTextStyle {
   return { size: 11, bold: true, italic: false, color, align: "left", valign: "top", visible: true };
 }
 
+/** How the chart finds each strategy row's session data, replay clock and "now" (seconds). */
+export type DayLookup = (drawing: LineDrawing) => { day: LineDay | null; cursor: number | null; now: number };
+
 /**
- * The chart objects for every enabled drawing that applies to this chart. Lines with the same price (to the paisa)
- * and the same style become one object whose label lists every level's name, so nothing is drawn twice; each line
- * keeps its own settings in its drawing. A level whose data is missing (or not yet reached in replay) is skipped.
+ * The chart objects for every enabled strategy that applies to this chart. Lines with the same price (to the paisa)
+ * and the same style become one object whose label lists every level's name, so nothing is drawn twice. A level whose
+ * data is missing (or not reached yet, live or in replay) is skipped.
  */
-export function buildLineOverlays(drawings: LineDrawing[], ctx: { symbol: string; span: string; data: S1Data | null; cursor: number | null }): Drawing[] {
-  type Item = { id: string; line: LevelLine; value: number; start: number | null; label: string };
+export function buildLineOverlays(drawings: LineDrawing[], ctx: { symbol: string; span: string; dayFor: DayLookup }): Drawing[] {
+  type Item = { id: string; line: LevelLine; resolved: Resolved; label: string; sessionClose: number | null; sessionOpen: number | null };
   const items: Item[] = [];
-  const data = ctx.data && ctx.data.symbol.toUpperCase() === ctx.symbol.toUpperCase() ? ctx.data : null;
   for (const drawing of drawings) {
-    if (!drawing.enabled || !appliesTo(drawing, ctx.symbol, ctx.span)) continue;
+    if (!drawing.enabled || !drawing.config.strategy || !appliesTo(drawing, ctx.symbol, ctx.span)) continue;
+    const { day, cursor, now } = ctx.dayFor(drawing);
+    const data = day?.data && day.data.symbol.toUpperCase() === ctx.symbol.toUpperCase() ? day.data : null;
+    const levels = resolveLevels(data ? { data, tape: day?.tape ?? null } : null, cursor, now);
     for (const line of drawing.config.lines) {
       if (!line.visible) continue;
-      const resolved = levelValue(line, data, ctx.cursor);
+      const resolved = levels[line.kind];
       if (!resolved || !Number.isFinite(resolved.value) || resolved.value <= 0) continue;
-      const label = [line.showName ? line.name : "", line.showPrice ? formatLevel(resolved.value) : ""].filter(Boolean).join(" ");
-      items.push({ id: `${LINES_PREFIX}${drawing.id}:${line.id}`, line, value: resolved.value, start: resolved.start, label });
+      const label = [line.showName ? line.name : "", line.showPrice && !resolved.end ? formatLevel(resolved.value) : ""].filter(Boolean).join(" ");
+      items.push({ id: `${LINES_PREFIX}${drawing.id}:${line.id}`, line, resolved, label, sessionClose: data?.sessionClose ?? null, sessionOpen: data?.sessionOpen ?? null });
     }
   }
   const groups = new Map<string, Item[]>();
   for (const item of items) {
-    const key = `${Math.round(item.value * 100)}|${item.line.color}|${item.line.width}|${item.line.dash}|${item.line.extend}`;
+    const { resolved, line } = item;
+    const where = resolved.end ? `${resolved.start}:${Math.round(resolved.value * 100)}>${resolved.end.time}:${Math.round(resolved.end.price * 100)}` : `${Math.round(resolved.value * 100)}`;
+    const key = `${where}|${line.color}|${line.width}|${line.dash}|${resolved.end ? "slope" : line.extend}`;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
@@ -227,15 +367,18 @@ export function buildLineOverlays(drawings: LineDrawing[], ctx: { symbol: string
   const out: Drawing[] = [];
   for (const group of groups.values()) {
     const head = group[0];
+    const { resolved, line } = head;
     const labels = [...new Set(group.map((item) => item.label).filter(Boolean))];
     const text = labels.join(" · ") || undefined;
-    const base = { id: head.id, color: head.line.color, width: head.line.width, dash: head.line.dash, text, textStyle: caption(head.line.color), locked: true } as const;
-    if (head.line.extend === "full" || head.start == null) {
-      out.push({ ...base, kind: "hline", points: [{ time: head.start ?? data?.sessionOpen ?? 0, price: head.value }] });
-    } else if (head.line.extend === "session" && data) {
-      out.push({ ...base, kind: "trend", points: [{ time: Math.max(head.start, data.sessionOpen), price: head.value }, { time: data.sessionClose, price: head.value }] });
+    const base = { id: head.id, color: line.color, width: line.width, dash: line.dash, text, textStyle: caption(line.color), locked: true } as const;
+    if (resolved.end && resolved.start != null) {
+      out.push({ ...base, kind: "trend", points: [{ time: resolved.start, price: resolved.value }, { time: resolved.end.time, price: resolved.end.price }] });
+    } else if (line.extend === "full" || resolved.start == null) {
+      out.push({ ...base, kind: "hline", points: [{ time: resolved.start ?? head.sessionOpen ?? 0, price: resolved.value }] });
+    } else if (line.extend === "session" && head.sessionOpen != null && head.sessionClose != null) {
+      out.push({ ...base, kind: "trend", points: [{ time: Math.max(resolved.start, head.sessionOpen), price: resolved.value }, { time: head.sessionClose, price: resolved.value }] });
     } else {
-      out.push({ ...base, kind: "hray", points: [{ time: head.start, price: head.value }] });
+      out.push({ ...base, kind: "hray", points: [{ time: resolved.start, price: resolved.value }] });
     }
   }
   return out;

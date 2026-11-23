@@ -53,5 +53,10 @@ export function useLineDrawings() {
     }
   }, [reload]);
 
-  return { drawings, loaded, busy, error, run };
+  /** Changes a drawing on screen only (the caller saves it with run); used while edits are being collected. */
+  const patch = useCallback((id: string, change: Partial<LineDrawing>) => {
+    setDrawings((list) => list.map((item) => (item.id === id ? { ...item, ...change } : item)));
+  }, []);
+
+  return { drawings, loaded, busy, error, run, patch };
 }

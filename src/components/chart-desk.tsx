@@ -19,7 +19,8 @@ import { STRATEGY_PREFIX, strategyView } from "@/components/strategy-overlay";
 import { StrategyPanel } from "@/components/strategy-panel";
 import { LineDrawPanel } from "@/components/line-draw/line-draw-panel";
 import { useLineDrawings } from "@/components/line-draw/use-line-drawings";
-import { appliesTo, buildLineOverlays, needsMarketData, type LineDrawing } from "@/lib/chart/line-drawings";
+import { useLineDays } from "@/components/line-draw/use-line-days";
+import { appliesTo, buildLineOverlays, dayRequest, type LineDrawing } from "@/lib/chart/line-drawings";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
@@ -352,8 +353,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
   const lineDraw = useLineDrawings();
   const [lineOpen, setLineOpen] = useState(false);
   const [lineLeft, setLineLeft] = useState<number | null>(null);
-  const [linePreview, setLinePreview] = useState<LineDrawing | null>(null);
-  const [levels, setLevels] = useState<{ key: string; data: S1Data | null; error: string } | null>(null);
   const lineButtonRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     const area = chartAreaRef.current;
@@ -1303,44 +1302,31 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     [strategyOn, s1Current, replay.active, replay.cursor, replay.date, strategy],
   );
   const strategyOverlay = strategyResult?.drawings ?? NO_OVERLAY;
-  // Line Strategy Draw: the saved drawings for this chart (the one being edited replaces / joins them as a preview).
-  // Stock and index charts only; their levels come from the same session data the Strategy uses.
-  const lineSet = useMemo(() => {
-    if (optionView) return [] as LineDrawing[];
-    const saved = linePreview ? lineDraw.drawings.filter((item) => item.id !== linePreview.id) : lineDraw.drawings;
-    return [...saved, ...(linePreview ? [linePreview] : [])].filter((item) => item.enabled && appliesTo(item, symbol, timeframe));
-  }, [optionView, linePreview, lineDraw.drawings, symbol, timeframe]);
-  const levelSession = replay.active && replay.date ? replay.date : "live";
-  const levelKey = !optionView && needsMarketData(lineSet) ? `${symbol}|${levelSession}` : null;
-  const levelData = levels && levels.key === levelKey ? levels.data : null;
-  useEffect(() => {
-    if (!levelKey) return;
-    let stop = false;
-    const [levelSymbol, session] = levelKey.split("|");
-    const load = () => {
-      api<S1Data>(`/api/market/levels?symbol=${encodeURIComponent(levelSymbol)}${session === "live" ? "" : `&date=${encodeURIComponent(session)}`}`)
-        .then((data) => { if (!stop) setLevels({ key: levelKey, data, error: "" }); })
-        .catch((reason: unknown) => {
-          if (!stop) setLevels((current) => ({ key: levelKey, data: current?.key === levelKey ? current.data : null, error: reason instanceof Error ? reason.message : "Levels could not be loaded." }));
-        });
-    };
-    load();
-    // Live: refresh each minute so the open and 09:15 levels appear once they exist (the server caches).
-    const timer = session === "live" ? window.setInterval(load, 60_000) : null;
-    return () => {
-      stop = true;
-      if (timer) window.clearInterval(timer);
-    };
-  }, [levelKey]);
-  const lineCursor = replay.active && levelData?.date === replay.date ? (replay.cursor ?? 0) : null;
-  const lineOverlay = useMemo(
-    () => (lineSet.length ? buildLineOverlays(lineSet, { symbol, span: timeframe, data: levelData, cursor: lineCursor }) : NO_OVERLAY),
-    [lineSet, symbol, timeframe, levelData, lineCursor],
+  // Line Strategy Draw: the strategies switched on for this chart, each with its own current / previous day.
+  // Stock and index charts only; their levels come from the same session data and helpers the strategies use.
+  const lineSet = useMemo(
+    () => (optionView ? ([] as LineDrawing[]) : lineDraw.drawings.filter((item) => item.config.strategy && item.enabled && appliesTo(item, symbol, timeframe))),
+    [optionView, lineDraw.drawings, symbol, timeframe],
   );
-  const lineNote = optionView
-    ? "Line drawings show on the stock or index chart, not on an option contract."
-    : levels?.key === levelKey && levels.error ? levels.error
-    : levelData && levelData.status !== "ready" && levelData.message ? levelData.message : "";
+  const lineReplayDate = replay.active && replay.date ? replay.date : null;
+  // Every saved strategy row (also those not shown) so the panel can show each one's dates and prices.
+  const lineRequests = useMemo(
+    () => (optionView ? [] : lineDraw.drawings.filter((item) => item.config.strategy && item.enabled).map((item) => dayRequest(item, symbol, lineReplayDate))),
+    [optionView, lineDraw.drawings, symbol, lineReplayDate],
+  );
+  const lineDays = useLineDays(lineRequests);
+  const lineDayInfo = useCallback((drawing: LineDrawing) => {
+    const entry = lineDays[dayRequest(drawing, symbol, lineReplayDate).key];
+    const data = entry?.day?.data ?? null;
+    // The replay clock limits only the replayed session; another chosen day shows everything it has.
+    const cursor = replay.active && data?.date === replay.date ? (replay.cursor ?? 0) : null;
+    return { day: entry?.day ?? null, cursor, now: entry?.at ?? 0, error: entry?.error ?? "" };
+  }, [lineDays, symbol, lineReplayDate, replay.active, replay.date, replay.cursor]);
+  const lineOverlay = useMemo(
+    () => (lineSet.length ? buildLineOverlays(lineSet, { symbol, span: timeframe, dayFor: lineDayInfo }) : NO_OVERLAY),
+    [lineSet, symbol, timeframe, lineDayInfo],
+  );
+  const lineNote = optionView ? "Strategy lines show on the stock or index chart, not on an option contract." : "";
   const chartOverlays = useMemo(
     () => (algoDrawings.length || autoDrawings.length || lineOverlay.length ? [...strategyOverlay, ...lineOverlay, ...autoDrawings, ...algoDrawings] : strategyOverlay),
     [strategyOverlay, lineOverlay, autoDrawings, algoDrawings],
@@ -1497,7 +1483,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             aria-label="Strategy"
             title={strategyAllowed ? "Automatic Trading Strategy" : "Automatic Trading Strategy (Premium)"}
             className={cx("inline-flex h-8 shrink-0 items-center gap-1.5 rounded-input px-2.5 text-data font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]", strategyOn ? "bg-primary-soft text-primary hover:brightness-110" : "border border-border text-text-2 hover:bg-elevated hover:text-text")}
-            onClick={() => { setLineOpen(false); setLinePreview(null); if (strategyAllowed) setStrategyOpen((value) => !value); else setUpgradeFor("strategy"); }}
+            onClick={() => { setLineOpen(false); if (strategyAllowed) setStrategyOpen((value) => !value); else setUpgradeFor("strategy"); }}
           >
             {strategyAllowed ? null : <Crown className="h-3.5 w-3.5 text-gold" aria-hidden />}
             Strategy
@@ -1680,16 +1666,17 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
               <LineDrawPanel
                 drawings={lineDraw.drawings}
                 run={lineDraw.run}
+                patch={lineDraw.patch}
                 busy={lineDraw.busy}
                 error={lineDraw.error}
-                onClose={() => { setLineOpen(false); setLinePreview(null); }}
+                onClose={() => setLineOpen(false)}
                 left={lineLeft}
                 symbol={symbol}
                 span={timeframe}
-                data={levelData}
-                cursor={lineCursor}
                 dataNote={lineNote}
-                onPreview={setLinePreview}
+                today={kolkataParts(new Date()).dateKey}
+                replayDate={lineReplayDate}
+                dayInfo={lineDayInfo}
               />
             ) : null}
             {chainOpen ? (
