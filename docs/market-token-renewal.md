@@ -37,3 +37,22 @@ Dhan tokens last 24 hours. While a token is still active, `GET https://api.dhan.
 4. **Check the scheduler:** check that it runs with `journalctl -u traded-token-renewal.service -n 20`. The Admin page shows the last check and the last renewal.
 
 **If the token has already expired,** Dhan can't renew it. Paste a new one; renewal continues from there.
+
+## Token from Neural Core (Hariharan account)
+
+The Hariharan account's token is renewed every evening by Neural Core's copy engine. Dhan lets **only one system renew a token**: a renewal kills the old one. So TradeD takes the token from Neural Core and never renews it itself.
+
+- **What TradeD calls:** `GET <NEURAL_TOKEN_URL>`, i.e. `https://52-87-230-150.sslip.io/integrations/traded/market-token`.
+- **How it's signed:** HMAC-signed with `NEURAL_TOKEN_SECRET`, the same `X-NC-*` scheme Neural Core uses for its own backend calls.
+- **Caching:** the answer is cached for 5 minutes. After a failure, TradeD waits 60 seconds before asking again and falls back to the saved token meanwhile.
+- **Renewal is off in TradeD:** while `NEURAL_TOKEN_URL` and `NEURAL_TOKEN_SECRET` are set, `/api/market/token-renewal` never renews. The Admin page shows "From Neural Core (account)".
+
+**Neural Core backend settings** (in `/etc/neural-core/backend.env`):
+
+| Setting | Value |
+|---|---|
+| `TRADED_TOKEN_SECRET` | The same value as TradeD's `NEURAL_TOKEN_SECRET` |
+| `TRADED_TOKEN_PRIVATE_IP` | `172.31.83.51` |
+| `TRADED_TOKEN_ELASTIC_IP` | `54.162.5.61` |
+
+Only the account matching **both** IPs is ever handed over.

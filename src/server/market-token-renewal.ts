@@ -4,6 +4,7 @@ import { DHAN_API, classifyBrokerResponse, tokenExpiry } from "@/lib/dhan/client
 import { renewDue, renewedToken } from "@/lib/dhan/token-renewal";
 import { redactString } from "@/lib/security/redact";
 import { getDhanClientId } from "@/server/settings";
+import { neuralTokenConfigured } from "@/server/neural-token";
 
 /**
  * Automatic renewal of the market-data (charts) Dhan token, the same way Neural Core's copy engine renews its
@@ -70,6 +71,8 @@ async function currentToken(): Promise<{ token: string; source: "saved" | "serve
 }
 
 export async function renewMarketTokenIfDue(now: Date = new Date(), fetchImpl: typeof fetch = fetch): Promise<RenewalOutcome> {
+  // Neural Core owns this token and renews it; a renewal here would expire Neural Core's copy, so never renew.
+  if (neuralTokenConfigured()) return { status: "skipped", message: "The token comes from Neural Core, which renews it; TradeD never renews it." };
   const state = await readState();
   const current = await currentToken();
   if (!current) return { status: "skipped", message: "No market-data token is set." };

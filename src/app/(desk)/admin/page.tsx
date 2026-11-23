@@ -13,6 +13,7 @@ type Status = {
   expiresAt: string | null;
   expired: boolean;
   updatedAt: string | null;
+  neural?: { configured: boolean; account: string | null; error: string };
   renewal?: {
     lastCheckAt: string | null;
     lastAttemptAt: string | null;
@@ -24,7 +25,8 @@ type Status = {
 };
 
 /** One line on the automatic token renewal (scheduler calls /api/market/token-renewal; see token-renewal.ts). */
-function renewalText(renewal: Status["renewal"]) {
+function renewalText(renewal: Status["renewal"], neural?: Status["neural"]) {
+  if (neural?.configured) return neural.error ? `Neural Core did not give a token: ${neural.error}. Using the saved token meanwhile.` : "Done by Neural Core: it renews this account's token every evening; TradeD only reads it.";
   if (!renewal?.lastCheckAt) return "Not running yet: the renewal scheduler has not called the app.";
   const checked = Date.now() - Date.parse(renewal.lastCheckAt) > 30 * 60_000 ? ` Last check ${istTime(renewal.lastCheckAt)} - the scheduler may be stopped.` : "";
   if (renewal.stopped || renewal.lastResult === "failed") return `Last renewal failed${renewal.lastAttemptAt ? ` (${istTime(renewal.lastAttemptAt)})` : ""}: ${renewal.lastMessage ?? "unknown error"}.${checked}`;
@@ -77,10 +79,10 @@ export default function AdminPage() {
         >
           <dl className="grid gap-x-6 gap-y-3 text-data sm:grid-cols-2 lg:grid-cols-4">
             <div><dt className="text-muted">Client id</dt><dd className="mt-0.5 font-medium text-text">{status?.clientTail ? `ending ${status.clientTail} (${status.clientSource})` : "Not set"}</dd></div>
-            <div><dt className="text-muted">Access token</dt><dd className="mt-0.5 font-medium text-text">{status?.tokenSource === "missing" ? "Not set" : status?.tokenSource === "saved" ? "Saved in this dashboard" : status ? "Server environment" : "—"}</dd></div>
+            <div><dt className="text-muted">Access token</dt><dd className="mt-0.5 font-medium text-text">{status?.tokenSource === "neural" ? `From Neural Core${status.neural?.account ? ` (${status.neural.account})` : ""}` : status?.tokenSource === "missing" ? "Not set" : status?.tokenSource === "saved" ? "Saved in this dashboard" : status ? "Server environment" : "—"}</dd></div>
             <div><dt className="text-muted">Expiry</dt><dd className={`mt-0.5 font-medium ${status?.expired ? "text-loss" : "text-text"}`}>{status?.expiresAt ? istTime(status.expiresAt) : "Not available"}{status?.expired ? " · expired" : ""}</dd></div>
             <div><dt className="text-muted">Last saved</dt><dd className="mt-0.5 font-medium text-text">{status?.updatedAt ? istTime(status.updatedAt) : "—"}</dd></div>
-            <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Automatic renewal</dt><dd className={`mt-0.5 font-medium ${status?.renewal?.lastResult === "failed" || status?.renewal?.stopped ? "text-loss" : "text-text"}`}>{status ? renewalText(status.renewal) : "—"}</dd></div>
+            <div className="sm:col-span-2 lg:col-span-4"><dt className="text-muted">Automatic renewal</dt><dd className={`mt-0.5 font-medium ${(status?.neural?.configured && status.neural.error) || (!status?.neural?.configured && (status?.renewal?.lastResult === "failed" || status?.renewal?.stopped)) ? "text-loss" : "text-text"}`}>{status ? renewalText(status.renewal, status.neural) : "—"}</dd></div>
           </dl>
           <div className="mt-5 grid gap-3 border-t border-border-soft pt-5 md:grid-cols-2">
             <label className="flex flex-col gap-1.5 text-data font-medium text-text-2">Client id
