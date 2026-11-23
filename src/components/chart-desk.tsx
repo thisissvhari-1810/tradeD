@@ -20,7 +20,8 @@ import { StrategyPanel } from "@/components/strategy-panel";
 import { LineDrawPanel } from "@/components/line-draw/line-draw-panel";
 import { useLineDrawings } from "@/components/line-draw/use-line-drawings";
 import { useLineDays } from "@/components/line-draw/use-line-days";
-import { appliesTo, buildLineOverlays, dayRequest, type LineDrawing } from "@/lib/chart/line-drawings";
+import { appliesTo, buildLineOverlays, dayRequest, marksEntry, strategyDef, type LineDrawing } from "@/lib/chart/line-drawings";
+import { entryAt, entryText, sessionEntry, type LineEntry } from "@/lib/chart/line-entries";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
 import { AlgoTradeDrawer } from "@/components/algo/algo-trade-drawer";
@@ -918,11 +919,6 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     setAutoTrend(next);
     saveAutoTrendSettings(next);
   }, []);
-  const algoMarkers = useMemo<ChartMarker[]>(() => [
-    ...autoMarkers,
-    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted, { profit: desk.appearance.tokens.profit, loss: desk.appearance.tokens.loss, warning: desk.appearance.tokens.warning }).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
-    ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
-  ], [autoMarkers, algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor]);
   // The trade marker under the pointer: a one-line tooltip (the chart itself carries no text).
   const [markerTip, setMarkerTip] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   // The trade shown in the detail view, and a strategy line highlighted from it.
@@ -1326,6 +1322,25 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     () => (lineSet.length ? buildLineOverlays(lineSet, { symbol, span: timeframe, dayFor: lineDayInfo }) : NO_OVERLAY),
     [lineSet, symbol, timeframe, lineDayInfo],
   );
+  // Each strategy's entry point (trade 1) as a chart marker: ▲ under the candle for a CALL (CE), ▼ above it for a PUT (PE).
+  const lineEntries = useMemo(() => lineSet.flatMap((item): Array<{ id: string; name: string; short: string; entry: LineEntry }> => {
+    if (!item.config.entry || !marksEntry(item.config.strategy)) return [];
+    const info = lineDayInfo(item);
+    const data = info.day?.data;
+    if (!data || data.symbol.toUpperCase() !== symbol.toUpperCase()) return [];
+    const { entry } = entryAt(sessionEntry(item.config.strategy!, info.day), info.cursor ?? info.now);
+    const def = strategyDef(item.config.strategy);
+    return entry ? [{ id: `lines-entry:${item.id}`, name: def?.name ?? item.name, short: def?.short ?? item.name, entry }] : [];
+  }), [lineSet, lineDayInfo, symbol]);
+  const algoMarkers = useMemo<ChartMarker[]>(() => [
+    ...autoMarkers,
+    ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted, { profit: desk.appearance.tokens.profit, loss: desk.appearance.tokens.loss, warning: desk.appearance.tokens.warning }).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),
+    ...algoChartMarkers(algoTrades, desk.appearance.tokens, selectedTrade),
+    ...lineEntries.map(({ id, short, entry }): ChartMarker => ({
+      id, time: entry.time, position: entry.option === "CE" ? "belowBar" : "aboveBar", shape: entry.option === "CE" ? "arrowUp" : "arrowDown",
+      color: entry.option === "CE" ? desk.appearance.tokens.profit : desk.appearance.tokens.loss, text: `${short} ${entry.option}`, size: 1.4,
+    })),
+  ], [autoMarkers, algoAnalysis, algoTrades, desk.appearance.tokens, selectedTrade, replay.active, replay.cursor, lineEntries]);
   const lineNote = optionView ? "Strategy lines show on the stock or index chart, not on an option contract." : "";
   const chartOverlays = useMemo(
     () => (algoDrawings.length || autoDrawings.length || lineOverlay.length ? [...strategyOverlay, ...lineOverlay, ...autoDrawings, ...algoDrawings] : strategyOverlay),
@@ -1628,6 +1643,7 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
             {markerTip ? (
               <div role="tooltip" className="pointer-events-none absolute z-30 max-w-[16rem] rounded-md border border-border bg-panel/95 px-2 py-1 text-[0.75rem] text-text shadow-e2" style={{ left: Math.min(markerTip.x + 12, (chartAreaRef.current?.clientWidth ?? 600) - 260), top: Math.max(4, markerTip.y - 34) }}>
                 {algoTrades.filter((marker) => markerTip.ids.includes(marker.id)).map((marker) => <p key={marker.id} className={cx("num whitespace-nowrap", marker.kind === "entry" ? (marker.side === "CALL" ? "text-profit" : "text-loss") : (marker.pnl ?? 0) > 0 ? "text-profit" : (marker.pnl ?? 0) < 0 ? "text-loss" : "text-muted")}>{marker.tip}</p>)}
+                {lineEntries.filter((item) => markerTip.ids.includes(item.id)).map((item) => <p key={item.id} className={cx("num", item.entry.option === "CE" ? "text-profit" : "text-loss")}><span className="font-semibold">{item.name}</span>: {entryText(item.entry)}</p>)}
               </div>
             ) : null}
             {shown.length > 0 ? <FavouritesBar tool={tool} onTool={setTool} /> : null}

@@ -19,6 +19,25 @@ The panel lists every strategy that has lines on the index chart, each with its 
 - **Current day:** a date, or Auto (the latest session, or the replayed day in replay).
 - **Previous day:** a date before the current day, or Auto (the session before it).
 
+**Entry point:** when a strategy is on, the chart marks where it buys (trade 1) on the chosen day: ▲ under the candle for an ATM CALL (CE), ▼ above it for an ATM PUT (PE). Hovering the marker shows the strategy, the time and NIFTY's price. The panel's Entry point section shows the same, or why there was no trade (for example "first-hour range ≥ 108.8"). The marker can be switched off per strategy. Logic: `src/lib/chart/line-entries.ts`.
+
+| Strategy | Entry rule used |
+|---|---|
+| Hourly Zone 5%, Trend Channel | The app's own `hourlySignal` / `channelSignal` (default settings), run minute by minute like the algo runner |
+| Second Hour, 13:15 Minute, Breakout 9:15 | The research rules (PROJECT_NEXUS), ported one-to-one; 13:15 uses India VIX's 1-minute candles |
+| Mathi Strategy | Not marked. Its entries depend on its option-premium exits and the regime filter, so the Algo's own trade markers show them |
+
+**Checked on 5 years of real NIFTY data (23 Nov 2026):** trade 1 matched the research / app backtest on every traded day:
+
+| Strategy | Matched |
+|---|---|
+| Breakout 9:15 | 1,135 / 1,135 |
+| Second Hour | 404 / 404 |
+| 13:15 Minute (without VIX) | 193 / 193 |
+| Trend Channel | 1,229 / 1,229 |
+
+**Only trade 1 is marked.** A second trade depends on when trade 1 exits on the option.
+
 **Per line:** show / hide, name, colour, thickness, style (solid / dashed / dotted), show name, show price, and extension (right, session only, or across the chart).
 
 Settings save to the user's account automatically.

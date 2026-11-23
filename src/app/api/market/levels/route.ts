@@ -10,7 +10,8 @@ export const maxDuration = 30;
  * levels; the automatic Strategy overlay and algo remain Premium (/api/market/s1).
  *   ?date=YYYY-MM-DD      the current day (default: the latest session)
  *   ?previous=YYYY-MM-DD  the previous day (default: the session before the current day)
- *   ?tape=1               also the current day's 1-minute candles (hourly, 13:15 and channel lines)
+ *   ?tape=1               also the current day's 1-minute candles (hourly, 13:15 and channel lines, entry points)
+ *   ?vix=1                with tape: also India VIX's 1-minute candles of that day (Mathi 13:15 Minute's VIX rules)
  */
 export const GET = query(async (request) => {
   await requireUser();
@@ -21,6 +22,9 @@ export const GET = query(async (request) => {
   const data = await getS1Data(symbol, date || null, previous || null);
   if (url.searchParams.get("tape") !== "1" || data.status === "unavailable" || data.status === "closed") return Response.json(data);
   // The day the levels are for (before 09:15 that can be the last session): its own candles only.
-  const tape = await getReplay(symbol, data.date).then((replay) => replay.tape).catch(() => []);
-  return Response.json({ ...data, tape });
+  const [tape, vix] = await Promise.all([
+    getReplay(symbol, data.date).then((replay) => replay.tape).catch(() => []),
+    url.searchParams.get("vix") === "1" ? getReplay("INDIAVIX", data.date).then((replay) => replay.tape).catch(() => []) : Promise.resolve(undefined),
+  ]);
+  return Response.json({ ...data, tape, ...(vix ? { vix } : {}) });
 });

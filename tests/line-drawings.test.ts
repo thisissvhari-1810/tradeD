@@ -180,8 +180,8 @@ describe("config validation", () => {
     expect(config.lines.map((line) => line.kind)).toEqual(["pdh", "h2_high"]);
     expect(config.lines[0]).toMatchObject({ name: "High", color: "#089981", width: 1, dash: "solid" });
     expect(new Set(config.lines.map((line) => line.id)).size).toBe(2);
-    expect(normalizeConfig({ strategy: "nope", currentDay: "20-11-2026" })).toEqual({ strategy: null, currentDay: "", previousDay: "", lines: [] });
-    expect(normalizeConfig(null)).toEqual({ strategy: null, currentDay: "", previousDay: "", lines: [] });
+    expect(normalizeConfig({ strategy: "nope", currentDay: "20-11-2026" })).toEqual({ strategy: null, currentDay: "", previousDay: "", entry: true, lines: [] });
+    expect(normalizeConfig(null)).toEqual({ strategy: null, currentDay: "", previousDay: "", entry: true, lines: [] });
     expect(normalizeTimeframe("5m")).toBe("5m");
     expect(normalizeTimeframe("7m")).toBe("all");
     expect(normalizeSymbol(" banknifty ")).toBe("BANKNIFTY");

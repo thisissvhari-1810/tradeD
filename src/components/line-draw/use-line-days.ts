@@ -6,7 +6,7 @@ import type { Candle } from "@/lib/algo/lines";
 import type { LineDay } from "@/lib/chart/line-drawings";
 import type { S1Data } from "@/lib/trading/s1";
 
-export type DayRequest = { key: string; symbol: string; date: string | null; previous: string | null; tape: boolean };
+export type DayRequest = { key: string; symbol: string; date: string | null; previous: string | null; tape: boolean; vix?: boolean };
 export type DayEntry = { day: LineDay | null; error: string; at: number };
 
 /**
@@ -31,9 +31,10 @@ export function useLineDays(requests: DayRequest[]) {
       if (request.date) params.set("date", request.date);
       if (request.previous) params.set("previous", request.previous);
       if (request.tape) params.set("tape", "1");
-      api<S1Data & { tape?: Candle[] }>(`/api/market/levels?${params}`)
-        .then(({ tape, ...data }) => {
-          if (!stop) setEntries((current) => ({ ...current, [request.key]: { day: { data, tape: tape ?? null }, error: "", at: Math.floor(Date.now() / 1000) } }));
+      if (request.vix) params.set("vix", "1");
+      api<S1Data & { tape?: Candle[]; vix?: Candle[] }>(`/api/market/levels?${params}`)
+        .then(({ tape, vix, ...data }) => {
+          if (!stop) setEntries((current) => ({ ...current, [request.key]: { day: { data, tape: tape ?? null, vix: vix ?? null }, error: "", at: Math.floor(Date.now() / 1000) } }));
         })
         .catch((reason: unknown) => {
           if (!stop) {

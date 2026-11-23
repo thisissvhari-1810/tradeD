@@ -54,8 +54,8 @@ export type LevelLine = {
 
 export type LineStrategyId = "mathi" | "hourly_zone" | "second_hour" | "breakout_0915" | "minute_1315" | "trend_channel";
 
-/** `currentDay` / `previousDay`: YYYY-MM-DD, or "" for Auto. */
-export type LineDrawingConfig = { strategy: LineStrategyId | null; currentDay: string; previousDay: string; lines: LevelLine[] };
+/** `currentDay` / `previousDay`: YYYY-MM-DD, or "" for Auto. `entry`: mark the strategy's entry point on the chart. */
+export type LineDrawingConfig = { strategy: LineStrategyId | null; currentDay: string; previousDay: string; entry: boolean; lines: LevelLine[] };
 
 /** A saved strategy row as the API returns it. `symbol` "*" = every symbol; `timeframe` "all" = every timeframe. */
 export type LineDrawing = {
@@ -118,9 +118,10 @@ const SHORT_NAMES: Record<LevelKind, string> = {
 const PREVIOUS: Array<{ kind: LevelKind; on?: boolean; name?: string }> = [{ kind: "pdh" }, { kind: "pdl" }, { kind: "pdc" }];
 
 /** Our strategies whose levels sit on the index chart, with the lines each one draws (`on` = shown by default). */
-export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; about: string; lines: Array<{ kind: LevelKind; on?: boolean; name?: string }> }> = [
+export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; short: string; about: string; lines: Array<{ kind: LevelKind; on?: boolean; name?: string }> }> = [
   {
     id: "mathi",
+    short: "Mathi",
     name: "Mathi Strategy",
     about: "Previous-day box (A), today's-open box (B), 09:15 high / low",
     lines: [
@@ -131,6 +132,7 @@ export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; about: s
   },
   {
     id: "hourly_zone",
+    short: "Zone",
     name: "Mathi Hourly Zone Strategy — 5%",
     about: "09:15 hour reference (its close), high / low and the 10:15 hour",
     lines: [
@@ -140,24 +142,28 @@ export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; about: s
   },
   {
     id: "second_hour",
+    short: "2nd Hr",
     name: "Mathi Second Hour (Hourly Breakout)",
     about: "10:15–11:15 candle: high = CALL level, low = PUT level",
     lines: [{ kind: "h2_high", on: true, name: "CALL level (H2 high)" }, { kind: "h2_low", on: true, name: "PUT level (H2 low)" }, ...PREVIOUS],
   },
   {
     id: "breakout_0915",
+    short: "9:15",
     name: "Mathi Breakout – 9:15",
     about: "09:15 1-minute candle high / low",
     lines: [{ kind: "or_high", on: true, name: "CALL above 9:15 High" }, { kind: "or_low", on: true, name: "PUT below 9:15 Low" }, { kind: "open" }, ...PREVIOUS],
   },
   {
     id: "minute_1315",
+    short: "13:15",
     name: "Mathi 13:15 Minute",
     about: "13:15 1-minute candle high / low",
     lines: [{ kind: "m1315_high", on: true, name: "CALL above 13:15 High" }, { kind: "m1315_low", on: true, name: "PUT below 13:15 Low" }, ...PREVIOUS],
   },
   {
     id: "trend_channel",
+    short: "Channel",
     name: "Mathi Trend Channel",
     about: "3-minute channel: primary trendline and its parallel clone",
     lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, ...PREVIOUS],
@@ -177,7 +183,7 @@ export function newLine(kind: LevelKind, patch: Partial<LevelLine> = {}): LevelL
 /** A strategy's starting config: its lines with their defaults, both days on Auto. */
 export function defaultConfig(id: LineStrategyId): LineDrawingConfig {
   const def = strategyDef(id)!;
-  return { strategy: id, currentDay: "", previousDay: "", lines: def.lines.map((item) => newLine(item.kind, { visible: Boolean(item.on), ...(item.name ? { name: item.name } : {}) })) };
+  return { strategy: id, currentDay: "", previousDay: "", entry: true, lines: def.lines.map((item) => newLine(item.kind, { visible: Boolean(item.on), ...(item.name ? { name: item.name } : {}) })) };
 }
 
 function cleanLine(value: unknown, index: number, seen: Set<string>): LevelLine | null {
@@ -211,7 +217,7 @@ export function normalizeConfig(value: unknown): LineDrawingConfig {
   const rows = Array.isArray(raw.lines) ? raw.lines : [];
   const seen = new Set<string>();
   const lines = rows.slice(0, MAX_LINES_PER_DRAWING).map((row, index) => cleanLine(row, index, seen)).filter((row): row is LevelLine => row != null);
-  return { strategy, currentDay, previousDay, lines };
+  return { strategy, currentDay, previousDay, entry: raw.entry !== false, lines };
 }
 
 export function normalizeTimeframe(value: unknown): ChartSpan | "all" {
@@ -228,9 +234,12 @@ export function appliesTo(drawing: Pick<LineDrawing, "symbol" | "timeframe">, sy
   return (drawing.symbol === "*" || drawing.symbol === symbol.toUpperCase()) && (drawing.timeframe === "all" || drawing.timeframe === span);
 }
 
-/** True when any visible line needs the day's 1-minute candles (hourly, 13:15 and channel levels). */
+/** Strategies whose entry point is computed from the day's candles (Mathi Strategy's entries come from the Algo). */
+export const marksEntry = (strategy: LineStrategyId | null) => strategy != null && strategy !== "mathi";
+
+/** True when any visible line, or the entry point, needs the day's 1-minute candles. */
 export function needsTape(drawing: Pick<LineDrawing, "config">) {
-  return drawing.config.lines.some((line) => line.visible && LEVELS[line.kind].needs === "tape");
+  return (drawing.config.entry && marksEntry(drawing.config.strategy)) || drawing.config.lines.some((line) => line.visible && LEVELS[line.kind].needs === "tape");
 }
 
 /**
@@ -242,7 +251,9 @@ export function dayRequest(drawing: LineDrawing, symbol: string, replayDate: str
   const date = drawing.config.currentDay || replayDate || null;
   const previous = drawing.config.previousDay && (!date || drawing.config.previousDay < date) ? drawing.config.previousDay : null;
   const tape = needsTape(drawing);
-  return { key: `${symbol.toUpperCase()}|${date ?? "live"}|${previous ?? "auto"}|${tape ? 1 : 0}`, symbol: symbol.toUpperCase(), date, previous, tape };
+  // India VIX candles: only the 13:15 Minute entry rules use them.
+  const vix = tape && drawing.config.entry && drawing.config.strategy === "minute_1315";
+  return { key: `${symbol.toUpperCase()}|${date ?? "live"}|${previous ?? "auto"}|${tape ? 1 : 0}${vix ? "v" : ""}`, symbol: symbol.toUpperCase(), date, previous, tape, vix };
 }
 
 export function formatLevel(value: number) {
@@ -250,7 +261,7 @@ export function formatLevel(value: number) {
 }
 
 /** One session's data: the levels (S1Data, same as the Strategy) and, when asked for, its 1-minute candles. */
-export type LineDay = { data: S1Data | null; tape: Candle[] | null };
+export type LineDay = { data: S1Data | null; tape: Candle[] | null; vix?: Candle[] | null };
 
 /** A resolved level: flat from `start` at `value`, or a sloped segment to `end` (the channel). */
 export type Resolved = { value: number; start: number | null; end?: { time: number; price: number } };

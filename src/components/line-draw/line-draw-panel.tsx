@@ -10,6 +10,7 @@ import {
   formatLevel,
   LEVELS,
   LINE_STRATEGIES,
+  marksEntry,
   resolveLevels,
   type LevelLine,
   type LineDay,
@@ -18,6 +19,7 @@ import {
   type LineExtend,
   type LineStrategyId,
 } from "@/lib/chart/line-drawings";
+import { entryAt, entryText, sessionEntry } from "@/lib/chart/line-entries";
 import type { LineDrawingAction } from "@/server/chart-lines";
 
 const EXTENDS: Array<{ id: LineExtend; label: string }> = [
@@ -131,7 +133,7 @@ export function LineDrawPanel({ drawings, run, patch, busy, error, onClose, left
           );
         })}
       </ul>
-      <p className="border-t border-border px-3 py-1.5 text-micro text-muted">Lines only: switching a strategy here never starts or stops its algo.</p>
+      <p className="border-t border-border px-3 py-1.5 text-micro text-muted">Lines and entry points only: switching a strategy here never starts or stops its algo or places an order.</p>
     </section>
   );
 }
@@ -177,6 +179,8 @@ function StrategyBody({ row, info, today, replayDate, onChange }: { row: LineDra
       ) : null}
       {note ? <p className="text-micro text-warning">{note}</p> : null}
 
+      <EntrySection row={row} info={info} onShow={(entry) => set({ entry })} />
+
       <div>
         <p className="eyebrow mb-1">Lines</p>
         <div className="divide-y divide-border-soft rounded-md border border-border">
@@ -209,6 +213,33 @@ function StrategyBody({ row, info, today, replayDate, onChange }: { row: LineDra
             );
           })}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** The strategy's entry point (trade 1) for the chosen day, as known at the replay clock / now, and its chart switch. */
+function EntrySection({ row, info, onShow }: { row: LineDrawing; info: DayInfo; onShow: (entry: boolean) => void }) {
+  const strategy = row.config.strategy;
+  if (!strategy) return null;
+  const result = entryAt(sessionEntry(strategy, info.day), info.cursor ?? info.now);
+  const entry = result.entry;
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-2">
+        <p className="eyebrow flex-1">Entry point</p>
+        {marksEntry(strategy) ? <Switch label="Show the entry point on the chart" checked={row.config.entry} onChange={onShow} /> : null}
+      </div>
+      <div className="rounded-md border border-border-soft bg-sunken/50 px-2 py-1.5 text-micro">
+        {entry ? (
+          <>
+            <p className={cx("num font-semibold", entry.option === "CE" ? "text-profit" : "text-loss")}>{entry.option === "CE" ? "▲" : "▼"} {entryText(entry)}</p>
+            <p className="mt-0.5 text-muted">{entry.note}</p>
+          </>
+        ) : (
+          <p className="text-muted">{result.status || result.watching || (info.day ? "No entry yet." : "Loading…")}</p>
+        )}
+        {marksEntry(strategy) ? <p className="mt-1 text-muted">Trade 1 only. A second trade depends on when trade 1 exits on the option.</p> : null}
       </div>
     </div>
   );
