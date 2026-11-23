@@ -4,7 +4,8 @@
  * Pure and read-only: it never places, changes or cancels an order and never changes a strategy. Each strategy's
  * entry uses that strategy's own rules:
  *  - Mathi Hourly Zone Strategy — 5% and Mathi Trend Channel: the app's own signal functions (hourlySignal,
- *    channelSignal) with their default settings, evaluated minute by minute exactly like the algo runner does.
+ *    channelSignal) with their default settings, evaluated minute by minute like the algo runner does. The channel
+ *    here runs on 1-minute candles (user, 23 Nov 2026); the algo's own Trend Channel stays on 3-minute candles.
  *  - Mathi Second Hour, Mathi 13:15 Minute and Mathi Breakout – 9:15: the research rules (PROJECT_NEXUS), ported
  *    one-to-one (Plan F candidate / confirmation, the first-hour 108.8-point filter, flip tiny, VIX rules A and B).
  *  - Mathi Strategy: not marked here. Its entries depend on its option-premium exits and the regime filter (the last
@@ -15,9 +16,9 @@
  */
 import type { Candle } from "@/lib/algo/lines";
 import { HOURLY_SETTINGS_DEFAULTS, hourlySignal } from "@/lib/algo/hourly-zone";
-import { CHANNEL_SETTINGS_DEFAULTS, channelSignal } from "@/lib/algo/trend-channel";
+import { channelSignal } from "@/lib/algo/trend-channel";
 import type { S1Data } from "@/lib/trading/s1";
-import type { LineDay, LineStrategyId } from "./line-drawings";
+import { LINE_CHANNEL_SETTINGS, type LineDay, type LineStrategyId } from "./line-drawings";
 
 export type Side = "CALL" | "PUT";
 
@@ -201,14 +202,14 @@ function firstAppSignal(tape: Candle[], data: S1Data, strategy: "hourly_zone" | 
     const upTo = candles.slice(0, index + 1);
     const signal = strategy === "hourly_zone"
       ? hourlySignal(upTo, data.sessionOpen, HOURLY_SETTINGS_DEFAULTS).signal
-      : channelSignal(upTo, data.sessionOpen, CHANNEL_SETTINGS_DEFAULTS, candle.time + 60, prevClose).signal;
+      : channelSignal(upTo, data.sessionOpen, LINE_CHANNEL_SETTINGS, candle.time + 60, prevClose).signal;
     if (signal) {
       const note = signal.reason.length > 220 ? `${signal.reason.slice(0, 217)}…` : signal.reason;
       return { entry: { time: candle.time, at: candle.time + 60, price: round(candle.close), side: signal.direction, option: signal.direction === "CALL" ? "CE" : "PE", flip: false, level: round(signal.level), note }, status: "", decidedAt: candle.time + 60, watching: "" };
     }
   }
   const complete = candles.length && candles.at(-1)!.time + 60 >= data.sessionClose - 60;
-  return { entry: null, status: complete ? "No trade this session." : "", decidedAt: complete ? data.sessionClose : null, watching: strategy === "hourly_zone" ? "Watching from 11:15 (default settings)." : "Watching the 3-minute channel (default settings)." };
+  return { entry: null, status: complete ? "No trade this session." : "", decidedAt: complete ? data.sessionClose : null, watching: strategy === "hourly_zone" ? "Watching from 11:15 (default settings)." : "Watching the 1-minute channel (default settings)." };
 }
 
 /** The whole session's trade-1 entry for one strategy (computed once per session's data; filter by the clock with entryAt). */

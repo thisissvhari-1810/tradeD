@@ -20,6 +20,8 @@ import { hourlyCandles } from "@/lib/algo/hourly-zone";
 import { CHANNEL_SETTINGS_DEFAULTS, channelPriceAt, channelSignal } from "@/lib/algo/trend-channel";
 
 export const LINES_PREFIX = "lines:";
+/** Line Strategy Draw's Mathi Trend Channel: the strategy's own rules on 1-minute candles (the algo keeps 3-minute). */
+export const LINE_CHANNEL_SETTINGS = { ...CHANNEL_SETTINGS_DEFAULTS, barSeconds: 60 };
 export const MAX_LINE_DRAWINGS = 50;
 export const MAX_LINES_PER_DRAWING = 24;
 
@@ -165,7 +167,7 @@ export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; short: s
     id: "trend_channel",
     short: "Channel",
     name: "Mathi Trend Channel",
-    about: "3-minute channel: primary trendline and its parallel clone",
+    about: "1-minute channel: primary trendline and its parallel clone",
     lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, ...PREVIOUS],
   },
 ];
@@ -325,12 +327,12 @@ export function resolveLevels(day: LineDay | null, cursor: number | null, now: n
     out.m1315_high = { value: m1315.high, start: m1315.time };
     out.m1315_low = { value: m1315.low, start: m1315.time };
   }
-  const { state } = channelSignal(tape, open, CHANNEL_SETTINGS_DEFAULTS, Math.min(clock, data.sessionClose));
+  const { state } = channelSignal(tape, open, LINE_CHANNEL_SETTINGS, Math.min(clock, data.sessionClose));
   const from = state.pattern?.points[0]?.time;
   if (from != null && state.upper && state.lower) {
     const to = data.sessionClose;
     for (const [kind, line] of [["ch_upper", state.upper], ["ch_lower", state.lower]] as const) {
-      out[kind] = { value: round(channelPriceAt(line, from, open)), start: from, end: { time: to, price: round(channelPriceAt(line, to, open)) } };
+      out[kind] = { value: round(channelPriceAt(line, from, open, 60)), start: from, end: { time: to, price: round(channelPriceAt(line, to, open, 60)) } };
     }
   }
   return out;

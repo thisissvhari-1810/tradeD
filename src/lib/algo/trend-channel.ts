@@ -28,6 +28,9 @@ import type { Direction, StrategySignal } from "./patterns";
  */
 
 export type ChannelSettings = {
+  /** Candle size in seconds. Unset = 180 (3-minute, the strategy and its algo). 60 = 1-minute: Line Strategy Draw only;
+   * never saved with the algo's settings (config.ts does not read it). Swing, retest and momentum counts stay in candles. */
+  barSeconds?: number;
   /** Candles before a swing that it must stand above (high) or below (low): the chart trendline engine's default. */
   left: number;
   /** Candles after a swing that may not exceed it; the swing is confirmed when the last of them closes. */
@@ -149,18 +152,18 @@ const fmt = (value: number) => value.toFixed(2);
 
 /** A channel line's price at x (3-minute candles from 09:15), or at a time. */
 export const channelPrice = (line: Pick<ChannelLine, "slope" | "intercept">, x: number) => line.intercept + line.slope * x;
-export const channelPriceAt = (line: Pick<ChannelLine, "slope" | "intercept">, time: number, sessionOpen: number) => channelPrice(line, (time - sessionOpen) / BAR_SECONDS);
+export const channelPriceAt = (line: Pick<ChannelLine, "slope" | "intercept">, time: number, sessionOpen: number, barSeconds = BAR_SECONDS) => channelPrice(line, (time - sessionOpen) / barSeconds);
 
 /**
  * 3-minute candles of one session from its 1-minute candles (09:15, 09:18, … 15:27). A candle is complete once its last
  * minute has closed, or a later minute has (a minute missing from the feed). The forming candle is returned last with
  * completedAt 0.
  */
-export function threeMinuteBars(candles: Candle[], sessionOpen: number): ChannelBar[] {
+export function threeMinuteBars(candles: Candle[], sessionOpen: number, barSeconds = BAR_SECONDS): ChannelBar[] {
   const groups = new Map<number, Candle[]>();
   const sorted = [...candles].filter((candle) => candle.time >= sessionOpen && candle.time < sessionOpen + SESSION_MINUTES * 60).sort((a, b) => a.time - b.time);
   for (const candle of sorted) {
-    const x = Math.floor((candle.time - sessionOpen) / BAR_SECONDS);
+    const x = Math.floor((candle.time - sessionOpen) / barSeconds);
     const list = groups.get(x) ?? [];
     list.push(candle);
     groups.set(x, list);
@@ -168,8 +171,8 @@ export function threeMinuteBars(candles: Candle[], sessionOpen: number): Channel
   const bars: ChannelBar[] = [];
   const ordered = [...groups.entries()].sort((a, b) => a[0] - b[0]);
   for (const [at, [x, minutes]] of ordered.entries()) {
-    const time = sessionOpen + x * BAR_SECONDS;
-    const end = time + BAR_SECONDS;
+    const time = sessionOpen + x * barSeconds;
+    const end = time + barSeconds;
     // Its own last minute, or (that minute missing) the next minute the feed has.
     const own = minutes.at(-1)!;
     const closing = own.time >= end - 60 ? own : ordered[at + 1]?.[1][0];
@@ -224,12 +227,13 @@ export function horizontalZones(swings: ChannelSwing[], percent: number): Array<
 export function channelSignal(candles: Candle[], sessionOpen: number, settings: ChannelSettings, asOf?: number, prevClose: number | null = null): { state: ChannelState; signal: StrategySignal | null; decided: ChannelSetup | null; latest: ChannelSetup[] } {
   const s = { ...CHANNEL_SETTINGS_DEFAULTS, ...settings };
   const until = asOf ?? (candles.length ? Math.max(...candles.map((candle) => candle.time)) + 60 : 0);
-  const all = threeMinuteBars(candles.filter((candle) => candle.time + 60 <= until), sessionOpen).filter((bar) => bar.completedAt > 0);
+  const size = s.barSeconds === 60 ? 60 : BAR_SECONDS;
+  const all = threeMinuteBars(candles.filter((candle) => candle.time + 60 <= until), sessionOpen, size).filter((bar) => bar.completedAt > 0);
   const c1 = all[0]?.x === 0 ? all[0] : null;
   const empty: ChannelState = { asOf: until, bars: all.length, c1: c1 ? { time: c1.time, open: c1.open, high: c1.high, low: c1.low, close: c1.close } : null, swings: [], pattern: null, upper: null, lower: null, width: null, zones: [], setups: [], position: null, now: null, status: "" };
   // C1 is skipped: never a swing, never a candle the others are compared with.
   const first = c1 ? 1 : 0;
-  const raw = all.length > first ? findSwings(all, first, first, s.left, s.right, BAR_SECONDS).filter((swing) => swing.confirmedAt != null) : [];
+  const raw = all.length > first ? findSwings(all, first, first, s.left, s.right, size).filter((swing) => swing.confirmedAt != null) : [];
   // The average range of the candles after C1 up to each one (the cutoff as known at a swing's confirmation).
   const ranges: number[] = [];
   let sum = 0;

@@ -13,7 +13,7 @@ The panel lists every strategy that has lines on the index chart, each with its 
 | Mathi Second Hour (Hourly Breakout) | CALL level = 10:15–11:15 high, PUT level = its low | PDH / PDL / PDC |
 | Mathi Breakout – 9:15 | 09:15 1-minute candle high / low | Open, PDH / PDL / PDC |
 | Mathi 13:15 Minute | 13:15 1-minute candle high / low | PDH / PDL / PDC |
-| Mathi Trend Channel | Channel upper and lower lines (sloped, 3-minute swings) | PDH / PDL / PDC |
+| Mathi Trend Channel | Channel upper and lower lines (sloped, 1-minute candles; the algo itself stays on 3-minute) | PDH / PDL / PDC |
 
 **When a strategy is on, it asks for:**
 - **Current day:** a date, or Auto (the latest session, or the replayed day in replay).
@@ -34,7 +34,7 @@ The panel lists every strategy that has lines on the index chart, each with its 
 | Breakout 9:15 | 1,135 / 1,135 |
 | Second Hour | 404 / 404 |
 | 13:15 Minute (without VIX) | 193 / 193 |
-| Trend Channel | 1,229 / 1,229 |
+| Trend Channel (3-minute; the panel now uses 1-minute, which has no backtest) | 1,229 / 1,229 |
 
 **Only trade 1 is marked.** A second trade depends on when trade 1 exits on the option.
 

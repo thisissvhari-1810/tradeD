@@ -126,6 +126,15 @@ describe("buildLineOverlays", () => {
     expect(out[0].text).toContain("A Mid");
   });
 
+  it("runs the channel on 1-minute candles here, while the algo's own setting stays 3-minute", async () => {
+    const { LINE_CHANNEL_SETTINGS } = await import("@/lib/chart/line-drawings");
+    const { CHANNEL_SETTINGS_DEFAULTS, threeMinuteBars } = await import("@/lib/algo/trend-channel");
+    expect(LINE_CHANNEL_SETTINGS.barSeconds).toBe(60);
+    expect(CHANNEL_SETTINGS_DEFAULTS.barSeconds).toBeUndefined();
+    expect(threeMinuteBars(tape.slice(0, 9), OPEN, 60)).toHaveLength(9);
+    expect(threeMinuteBars(tape.slice(0, 9), OPEN)).toHaveLength(3);
+  });
+
   it("draws the channel as a sloped segment to the close", () => {
     const zig: Candle[] = Array.from({ length: 375 }, (_, i) => {
       const mid = 24180 + 40 * Math.sin(i / 9) + i * 0.3;
