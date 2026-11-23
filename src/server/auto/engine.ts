@@ -158,6 +158,13 @@ export async function autoTick(now = new Date()) {
       await beat({ status: "PREPARING", message: "Wallets ready; monitoring starts at 09:15." });
       return { status: "PREPARING" };
     }
+    // A day already closed for lack of market data (holiday or feed outage) needs nothing more.
+    const openDays = await prisma.autoDay.count({ where: { date, status: { not: "CLOSED" } } });
+    const openTrades = await prisma.autoTrade.count({ where: { date, status: { in: ["OPEN", "EXITING"] } } });
+    if (!openDays && !openTrades) {
+      await beat({ status: "DAY_CLOSED", message: `Session ${date} is closed.` });
+      return { status: "DAY_CLOSED" };
+    }
     const nowSec = Math.floor(now.getTime() / 1000);
     const tape = await sessionMinuteTape("NIFTY", date).catch((error: unknown) => {
       events.push({ level: "ERROR", kind: "DATA", message: `NIFTY candles could not be loaded: ${error instanceof Error ? error.message : "unknown"}` });
@@ -167,7 +174,15 @@ export async function autoTick(now = new Date()) {
     const last = tape.filter((bar) => bar.time + 60 <= nowSec).at(-1);
     dataAge = last ? nowSec - (last.time + 60) : null;
     stale = minute < SQ && (dataAge == null || dataAge > config.dataStaleSec);
-    if (stale) events.push({ level: "WARN", kind: "DATA", message: `NIFTY data is stale (${dataAge == null ? "no candles" : `last candle closed ${dataAge} s ago`}): new entries are suspended; open positions are still managed.` });
+    // No NIFTY candle at all by 09:30: an exchange holiday missing from the holiday list, or a feed outage. Close the
+    // day once (nothing can have traded) instead of checking every 30 s.
+    if (!n.size && minute >= 570 && !openTrades) {
+      await prisma.autoDay.updateMany({ where: { date, status: { not: "CLOSED" } }, data: { status: "CLOSED", note: "No market data today (exchange holiday or feed outage): nothing traded.", closedAt: now } });
+      events.push({ level: "WARN", kind: "DATA", message: `No NIFTY candles for ${date} by 09:30: the day was closed without trading (holiday or feed outage).` });
+      if (!(await prisma.autoReport.findUnique({ where: { date } }))) await prisma.autoReport.create({ data: { date, report: (await buildReport(date)) as object } });
+      return { status: "NO_SESSION", date };
+    }
+    if (stale && minute % 5 === 0) events.push({ level: "WARN", kind: "DATA", message: `NIFTY data is stale (${dataAge == null ? "no candles" : `last candle closed ${dataAge} s ago`}): new entries are suspended; open positions are still managed.` });
     const prevClose = await getS1Data("NIFTY", date).then((data) => data.previous?.close ?? null).catch(() => null);
     const ctx: Ctx = {
       date, now, nowSec, minute, open: session.open, close: session.close, n, lastBarAge: dataAge, stale, prevClose, holidays, config,

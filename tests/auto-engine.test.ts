@@ -55,6 +55,7 @@ function model(name: string) {
     create: async (a: { data: Row }) => create(a),
     createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates?: boolean }) => { let count = 0; for (const d of data) { if (conflict(name, d)) { if (!skipDuplicates) throw p2002(); continue; } create({ data: d }); count += 1; } return { count }; },
     findFirst: async (a?: { where?: Record<string, unknown> }) => findFirst(a),
+    count: async ({ where }: { where?: Record<string, unknown> } = {}) => table(name).filter((row) => matches(row, where)).length,
     findUnique: async ({ where }: { where: Record<string, unknown> }) => findFirst({ where }),
     findUniqueOrThrow: async ({ where }: { where: Record<string, unknown> }) => { const r = findFirst({ where }); if (!r) throw new Error("not found"); return r; },
     findMany: async ({ where, orderBy, take }: { where?: Record<string, unknown>; orderBy?: Record<string, string> | Record<string, string>[]; take?: number } = {}) => {
@@ -243,4 +244,17 @@ describe("automated paper engine — real NIFTY sessions", () => {
     expect(skipped.length).toBeGreaterThan(0);
     expect(String(skipped[0].reason)).toMatch(/after its candle closed/);
   }, 120_000);
+});
+
+describe("automated paper engine — a day without market data", () => {
+  beforeEach(() => { for (const k of Object.keys(db)) delete db[k]; holidays = []; chainOk = true; seq = 0; });
+  it("closes the day once at 09:30 when no NIFTY candle exists (holiday missing from the list) and then stays quiet", async () => {
+    await runDay("2026-11-24", "09:00", "10:00", 30);
+    const days = rows("autoDay");
+    expect(days).toHaveLength(8);
+    expect(days.every((d) => d.status === "CLOSED" && String(d.note).startsWith("No market data"))).toBe(true);
+    expect(rows("autoTrade")).toHaveLength(0);
+    expect(rows("autoReport")).toHaveLength(1);
+    expect(rows("autoEvent").filter((e) => String(e.message).startsWith("No NIFTY candles"))).toHaveLength(1);
+  }, 60_000);
 });
