@@ -40,5 +40,5 @@ Light-theme text colours meet WCAG AA (4.5:1) on white.
 - Respect `prefers-reduced-motion` (durations drop to 0).
 
 ## Navigation
-- Rail groups: Trade (Home, Chart, Options, Accounts) · Portfolio (Positions, Orders, Portfolio, Money) · Discover (Markets, Alerts, Prediction) · Admin.
+- Rail groups: Trade (Home, Chart, Options, Accounts) · Portfolio (Positions, Orders, Portfolio, Money) · Discover (Markets, Alerts) · Admin.
 - Translucent top bar (`backdrop-blur-xl`).

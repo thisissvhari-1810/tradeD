@@ -48,8 +48,8 @@ describe("premium entitlement (from the subscription record only)", () => {
   it("only active Premium unlocks capabilities", () => {
     expect(canUse(premiumFrom("STUDENT", [row("YEARLY", -1, 30)], now), "strategy")).toBe(true);
     expect(canUse(FREE, "strategy")).toBe(false);
-    expect(canUse(premiumFrom("STUDENT", [row("MONTHLY", -40, -10)], now), "analytics")).toBe(false);
-    expect(canUse(undefined, "analytics")).toBe(false);
+    expect(canUse(premiumFrom("STUDENT", [row("MONTHLY", -40, -10)], now), "strategy")).toBe(false);
+    expect(canUse(undefined, "strategy")).toBe(false);
   });
 });
 
@@ -58,15 +58,13 @@ describe("server gates", () => {
 
   it("refuse a free account with 403 and allow an active one", () => {
     expect(() => requirePremium(user(FREE), "strategy")).toThrow(/Premium/);
-    try { requirePremium(user(FREE), "analytics"); } catch (error) { expect((error as { status: number }).status).toBe(403); }
+    try { requirePremium(user(FREE), "strategy"); } catch (error) { expect((error as { status: number }).status).toBe(403); }
     expect(() => requirePremium(user({ status: "active", plan: "YEARLY", endsAt: null, via: "subscription" }), "strategy")).not.toThrow();
   });
 
-  it("the Strategy and Prediction APIs and the Prediction page check Premium on the server", () => {
+  it("the Strategy API checks Premium on the server", () => {
     const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
     expect(read("src/app/api/market/s1/route.ts")).toMatch(/requirePremium\(await requireUser\(\), "strategy"\)/);
-    expect(read("src/app/api/market/forecast/route.ts")).toMatch(/requirePremium\(user, "analytics"\)/);
-    expect(read("src/app/(desk)/prediction/page.tsx")).toMatch(/canUse\(user\.premium, "analytics"\)/);
   });
 
   it("Premium can be granted only by a Super Admin route, never from the browser's own claim", () => {

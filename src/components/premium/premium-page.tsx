@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useId, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowRight, Check, ChevronDown, Crown, GitBranch, History, LayoutGrid, LineChart, Minus, ShieldCheck, Sparkles, X } from "lucide-react";
+import { ArrowDown, ArrowRight, Check, ChevronDown, Crown, GitBranch, History, LayoutGrid, Minus, ShieldCheck, Sparkles, X } from "lucide-react";
 import { cx } from "@/components/ui";
 import { premiumOrigin } from "@/components/premium/premium-upgrade-button";
 import { usePremium } from "@/components/premium/use-premium";
@@ -114,7 +114,7 @@ function Hero({ feature, active }: { feature: string | null; active: boolean }) 
       <h1 className="mt-5 max-w-3xl text-[clamp(1.75rem,5.5vw,3.25rem)] font-semibold leading-[1.08] tracking-[-0.03em]">
         Trade smarter. Learn deeper. <span className="bg-gradient-to-r from-gold-strong to-gold bg-clip-text text-transparent">Unlock more.</span>
       </h1>
-      <p className="mt-4 max-w-xl text-dense text-premium-muted sm:text-body">Unlock the tools, insights and practice features available with TradeD Premium: the automatic Strategy overlay on your charts and the Prediction screen.</p>
+      <p className="mt-4 max-w-xl text-dense text-premium-muted sm:text-body">Unlock the tools, insights and practice features available with TradeD Premium: the automatic Strategy overlay on your charts.</p>
       {feature && !active ? <p className="mt-4 rounded-pill border border-gold/40 bg-premium-raised px-3 py-1.5 text-data">{feature} is part of Premium.</p> : null}
       <div className="mt-6 flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
         <button type="button" className="inline-flex h-12 items-center justify-center gap-2 rounded-input bg-gold-strong px-6 text-dense font-semibold shadow-e2 transition hover:brightness-105 active:scale-[0.98] motion-reduce:active:scale-100" style={{ color: "var(--on-gold)" }} onClick={() => scrollToId("td-plans")}>
@@ -179,14 +179,6 @@ const PREVIEWS: Record<string, ReactNode> = {
       <MiniCandles x0={14} step={14.5} flip={62} />
     </svg>
   ),
-  analytics: (
-    <svg viewBox="0 0 160 64" className="h-full w-full" aria-hidden>
-      <polygon points="96,30 156,10 156,52" fill="color-mix(in srgb, var(--gold-strong) 16%, transparent)" />
-      <polyline points="6,48 22,44 36,46 50,36 64,38 80,28 96,30" fill="none" stroke="var(--premium-text)" strokeWidth="1.6" strokeLinejoin="round" />
-      <polyline points="96,30 116,26 136,24 156,20" fill="none" stroke="var(--gold-strong)" strokeWidth="1.6" strokeDasharray="4 3" />
-      <line x1="96" x2="96" y1="6" y2="58" stroke="var(--premium-border)" strokeDasharray="2 2" />
-    </svg>
-  ),
   charting: (
     <svg viewBox="0 0 160 64" className="h-full w-full" aria-hidden>
       <MiniCandles x0={12} step={14} flip={60} />
@@ -219,7 +211,6 @@ const PREVIEWS: Record<string, ReactNode> = {
 
 const SHOWCASE: Array<{ key: string; icon: ReactNode; title: string; body: string; premium: boolean }> = [
   { key: "strategy", icon: <LayoutGrid className="h-4 w-4" />, title: PREMIUM_CAPABILITIES.strategy.label, body: "Previous-day and 9:15 opening-range boxes and lines, drawn for you on every chart.", premium: true },
-  { key: "analytics", icon: <LineChart className="h-4 w-4" />, title: PREMIUM_CAPABILITIES.analytics.label, body: "Forecast ranges and analytics for any stock or index, to study possible paths.", premium: true },
   { key: "charting", icon: <Sparkles className="h-4 w-4" />, title: "Advanced charting", body: "Timeframes from 1 minute to 5 years, indicators and 50+ drawing tools.", premium: false },
   { key: "replay", icon: <History className="h-4 w-4" />, title: "Historical replay", body: "Replay a past session minute by minute and practise trading it.", premium: false },
   { key: "options", icon: <GitBranch className="h-4 w-4" />, title: "Option chain", body: "Calls and puts side by side by strike and expiry, with paper orders.", premium: false },
@@ -338,7 +329,6 @@ function Comparison() {
 
 const BENEFITS: Array<{ icon: ReactNode; title: string; body: string; href: string; action: string }> = [
   { icon: <LayoutGrid className="h-5 w-5" />, title: "Opening-range levels, automatically", body: "Strategy draws the previous-day box and the 9:15 high and low the moment you open a chart, so you study the setup instead of drawing it.", href: "/chart", action: "Open a chart" },
-  { icon: <LineChart className="h-5 w-5" />, title: "Forecasts to study, not signals", body: "Prediction shows possible price ranges across timeframes, so you can compare them with what actually happened.", href: "/prediction", action: "Open Prediction" },
   { icon: <ShieldCheck className="h-5 w-5" />, title: "Nothing you have today is taken away", body: "Charts, drawings, paper trading, replay, the option chain and your history stay available, Premium or not.", href: "/", action: "Back to Home" },
 ];
 
@@ -361,8 +351,8 @@ function Benefits() {
 }
 
 const FAQS: Array<{ q: string; a: ReactNode }> = [
-  { q: "What is included in Premium?", a: "The Strategy overlay on the chart and the Prediction (analytics) screen. Everything else in TradeD stays available without Premium." },
-  { q: "Is Premium useful for beginners?", a: "Yes, if you practise opening-range setups: the Strategy overlay draws the previous-day and 9:15 levels for you. Treat Prediction as a study aid, not a trading signal." },
+  { q: "What is included in Premium?", a: "The Strategy overlay on the chart. Everything else in TradeD stays available without Premium." },
+  { q: "Is Premium useful for beginners?", a: "Yes, if you practise opening-range setups: the Strategy overlay draws the previous-day and 9:15 levels for you." },
   { q: "Which plan is the best value?", a: "1 Year: ₹83.25 a month, 44% less than paying monthly for 12 months. Monthly suits a short trial; 6 Months sits in between." },
   { q: "How does activation work?", a: "Online payment isn’t available yet. For now your TradeD administrator activates Premium on your account; it takes effect at once (refresh the page if a feature still shows a crown)." },
   { q: "What if I paid but Premium isn’t active?", a: "TradeD does not take payments yet, so no payment can be made through this page. If you arranged payment with your administrator, ask them to activate your plan." },

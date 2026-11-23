@@ -12,7 +12,7 @@ export const FEATURES = [
   { key: "brokerConnection", column: "featBrokerConnection", label: "Broker Connection", detail: "Connect a Dhan account through Dhan's sign-in." },
   { key: "portfolio", column: "featPortfolio", label: "Portfolio Access", detail: "View wallet balance, positions and holdings." },
   { key: "orderHistory", column: "featOrderHistory", label: "Order History", detail: "View orders and trade history." },
-  { key: "analytics", column: "featAnalytics", label: "Analytics Access", detail: "Prediction and analytics screens." },
+  { key: "analytics", column: "featAnalytics", label: "Analytics Access", detail: "Analytics screens (none at the moment; Prediction was removed on 23 Nov 2026)." },
 ] as const;
 
 export type FeatureKey = (typeof FEATURES)[number]["key"];

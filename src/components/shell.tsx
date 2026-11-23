@@ -6,7 +6,7 @@ import type { Premium } from "@/lib/premium/entitlements";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, GraduationCap, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, TrendingUp, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, Bell, CandlestickChart, ClipboardList, Crown, Eye, FlaskConical, GitBranch, GraduationCap, House, Layers, LineChart, LayoutGrid, Moon, PieChart, Search, Settings, ShieldCheck, Smartphone, Star, Sun, UsersRound, Wallet, X, type LucideIcon } from "lucide-react";
 import { api } from "@/components/api";
 import { AppearancePanel } from "@/components/appearance-panel";
 import { GlobalSearch } from "@/components/global-search";
@@ -94,8 +94,6 @@ const NAV: NavItem[] = [
   { href: "/markets", label: "Markets", icon: LineChart, rail: false },
   { href: "/alerts", label: "Alerts", icon: Bell, rail: false },
   { href: "/backtests", label: "Backtests", title: "Mathi Strategy index backtests", icon: FlaskConical, rail: false },
-  { href: "/prediction", label: "Prediction", icon: TrendingUp, feature: "analytics" },
-  { href: "/fib-h0h4", label: "H0–H4 Fib", title: "5-Minute H0–H4 Fibonacci Breakout (paper)", icon: Activity },
 ];
 
 /** The phone's bottom bar: five destinations; everything else is in the header's menu. */
@@ -161,7 +159,7 @@ export function Shell({ children }: { children: ReactNode }) {
     const symbol = next.toUpperCase();
     setSymbol(symbol);
     rememberRecent(symbol);
-    if (path.startsWith("/terminal") || path.startsWith("/chart") || path.startsWith("/positions") || path.startsWith("/prediction")) return;
+    if (path.startsWith("/terminal") || path.startsWith("/chart") || path.startsWith("/positions")) return;
     router.push(`/chart?symbol=${encodeURIComponent(symbol)}`);
   }, [path, router]);
 
@@ -341,7 +339,7 @@ export function Shell({ children }: { children: ReactNode }) {
               const current = active(href);
               return (
                 <Fragment key={href}>
-                  {href === "/holdings" || href === "/prediction" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
+                  {href === "/holdings" || href === "/admin" ? <div className="mx-4 my-2 h-px bg-border-soft [@media(max-height:820px)]:my-1" aria-hidden /> : null}
                   <Link
                     href={href}
                     aria-current={current ? "page" : undefined}
@@ -475,7 +473,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 <Crown className="h-5 w-5 shrink-0" aria-hidden />
                 {user?.premium?.status === "active"
                   ? <span className="min-w-0 flex-1"><span className="block text-dense font-semibold">Premium</span><span className="block text-micro opacity-80">Active on this account · see plans and status</span></span>
-                  : <span className="min-w-0 flex-1"><span className="block text-dense font-semibold">Go Premium</span><span className="block text-micro opacity-80">Strategy overlay and Prediction, from ₹83.25/month</span></span>}
+                  : <span className="min-w-0 flex-1"><span className="block text-dense font-semibold">Go Premium</span><span className="block text-micro opacity-80">Strategy overlay, from ₹83.25/month</span></span>}
               </Link>
               <p className="eyebrow mb-2 px-1">All pages</p>
               <div className="grid grid-cols-4 gap-1.5">

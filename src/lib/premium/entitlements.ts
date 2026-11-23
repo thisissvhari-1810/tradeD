@@ -5,7 +5,6 @@ import type { PremiumPlanId } from "@/lib/premium/plans";
  * ad-hoc "isPremium" flag, so the list of Premium features lives here only.
  */
 export const PREMIUM_CAPABILITIES = {
-  analytics: { label: "Analytics & Prediction", detail: "The Prediction screen: forecasts and analytics for any stock or index." },
   strategy: { label: "Strategy overlay", detail: "Automatic previous-day and 9:15 opening-range boxes and lines on the chart." },
 } as const;
 

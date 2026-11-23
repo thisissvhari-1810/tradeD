@@ -176,7 +176,7 @@ describe("server-side enforcement is wired into every protected route", () => {
   });
 
   it("checks the matching permission on practice routes and guards admin routes by role", () => {
-    const expectations: Array<[string, string]> = [["portfolio/route.ts", "portfolio"], ["trades/route.ts", "orderHistory"], ["demo/option/route.ts", "demoTrading"], ["demo/option-replay/route.ts", "replay"], ["demo/replay/route.ts", "replay"], ["market/forecast/route.ts", "analytics"]];
+    const expectations: Array<[string, string]> = [["portfolio/route.ts", "portfolio"], ["trades/route.ts", "orderHistory"], ["demo/option/route.ts", "demoTrading"], ["demo/option-replay/route.ts", "replay"], ["demo/replay/route.ts", "replay"]];
     for (const [file, feature] of expectations) expect(readFileSync(`src/app/api/${file}`, "utf8"), file).toContain(`requireFeature(user, "${feature}")`);
     for (const file of ["super-admin/users/route.ts", "super-admin/users/[id]/route.ts", "super-admin/summary/route.ts", "super-admin/audit/route.ts"]) {
       const source = readFileSync(`src/app/api/${file}`, "utf8");

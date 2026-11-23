@@ -63,7 +63,7 @@ The panel lists every strategy that has lines on the index chart, each with its 
 
 Settings save to the user's account automatically.
 
-**Not listed:** the H0–H4 Fib, 1-Hour Fib Breakout and ATM CE+PE hedge strategies. Their levels come from option premiums, not the index.
+**Not listed:** the 1-Hour Fib Breakout and ATM CE+PE hedge strategies. Their levels come from option premiums, not the index.
 
 ## Architecture
 
