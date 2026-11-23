@@ -20,7 +20,7 @@ import { StrategyPanel } from "@/components/strategy-panel";
 import { LineDrawPanel } from "@/components/line-draw/line-draw-panel";
 import { useLineDrawings } from "@/components/line-draw/use-line-drawings";
 import { useLineDays } from "@/components/line-draw/use-line-days";
-import { appliesTo, buildLineOverlays, dayRequest, marksEntry, strategyDef, type LineDrawing } from "@/lib/chart/line-drawings";
+import { appliesTo, buildLineOverlays, channelSeconds, dayRequest, marksEntry, strategyDef, type LineDrawing } from "@/lib/chart/line-drawings";
 import { entryAt, entryText, sessionEntry, type LineEntry } from "@/lib/chart/line-entries";
 import { useChartAlgo } from "@/components/algo/use-chart-algo";
 import { AlgoCompleteDialog, AlgoEndDialog, AlgoReplayPanel, AlgoStartDialog } from "@/components/algo/algo-replay-panel";
@@ -1328,10 +1328,10 @@ export function ChartDesk({ variant }: { variant: "chart" | "positions" }) {
     const info = lineDayInfo(item);
     const data = info.day?.data;
     if (!data || data.symbol.toUpperCase() !== symbol.toUpperCase()) return [];
-    const { entry } = entryAt(sessionEntry(item.config.strategy!, info.day), info.cursor ?? info.now);
+    const { entry } = entryAt(sessionEntry(item.config.strategy!, info.day, channelSeconds(timeframe)), info.cursor ?? info.now);
     const def = strategyDef(item.config.strategy);
     return entry ? [{ id: `lines-entry:${item.id}`, name: def?.name ?? item.name, short: def?.short ?? item.name, entry }] : [];
-  }), [lineSet, lineDayInfo, symbol]);
+  }), [lineSet, lineDayInfo, symbol, timeframe]);
   const algoMarkers = useMemo<ChartMarker[]>(() => [
     ...autoMarkers,
     ...algoPivotMarkers(algoAnalysis, desk.appearance.tokens.muted, { profit: desk.appearance.tokens.profit, loss: desk.appearance.tokens.loss, warning: desk.appearance.tokens.warning }).filter((marker) => !replay.active || replay.cursor == null || marker.time < replay.cursor),

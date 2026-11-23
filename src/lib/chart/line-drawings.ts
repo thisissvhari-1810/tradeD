@@ -13,7 +13,7 @@
  *  - the same id is produced on every render, so switching one strategy on or off changes only its own objects.
  */
 import type { Drawing, DrawingTextStyle, LineDash } from "@/components/drawing-model";
-import { CHART_SPANS, type ChartSpan } from "@/lib/market/spans";
+import { CHART_SPANS, INTRADAY_SECONDS, type ChartSpan } from "@/lib/market/spans";
 import { s1Levels, s1Reveal, type S1Data } from "@/lib/trading/s1";
 import type { Candle } from "@/lib/algo/lines";
 import { hourlyCandles } from "@/lib/algo/hourly-zone";
@@ -285,7 +285,10 @@ export type Resolved = { value: number; start: number | null; end?: { time: numb
  * Every level of one session, as known at `cursor` (replay clock) or `now` (live): nothing is shown before it existed.
  * Hours are complete hours only (hourlyCandles), the 13:15 candle once it has closed, the channel once it has formed.
  */
-export function resolveLevels(day: LineDay | null, cursor: number | null, now: number): Partial<Record<LevelKind, Resolved>> {
+/** The candle size the Trend Channel reads on a chart of `span`: the chart's own intraday candles; 1-minute on daily and longer. */
+export const channelSeconds = (span: string) => INTRADAY_SECONDS[span as ChartSpan] ?? 60;
+
+export function resolveLevels(day: LineDay | null, cursor: number | null, now: number, barSeconds = 60): Partial<Record<LevelKind, Resolved>> {
   const out: Partial<Record<LevelKind, Resolved>> = {};
   const data = day?.data;
   if (!data) return out;
@@ -340,7 +343,7 @@ export function resolveLevels(day: LineDay | null, cursor: number | null, now: n
     out.m1315_high = { value: m1315.high, start: m1315.time };
     out.m1315_low = { value: m1315.low, start: m1315.time };
   }
-  const trend = minuteTrendLines(tape, open, data.sessionClose, clock);
+  const trend = minuteTrendLines(tape, open, data.sessionClose, clock, barSeconds);
   const highs = trend.points.filter((point) => point.kind === "HIGH");
   const lows = trend.points.filter((point) => point.kind === "LOW");
   if (highs[0]) out.fb_high = { value: highs[0].price, start: highs[0].time };
@@ -375,7 +378,7 @@ export function buildLineOverlays(drawings: LineDrawing[], ctx: { symbol: string
     if (!drawing.enabled || !drawing.config.strategy || !appliesTo(drawing, ctx.symbol, ctx.span)) continue;
     const { day, cursor, now } = ctx.dayFor(drawing);
     const data = day?.data && day.data.symbol.toUpperCase() === ctx.symbol.toUpperCase() ? day.data : null;
-    const levels = resolveLevels(data ? { data, tape: day?.tape ?? null } : null, cursor, now);
+    const levels = resolveLevels(data ? { data, tape: day?.tape ?? null } : null, cursor, now, channelSeconds(ctx.span));
     for (const line of drawing.config.lines) {
       if (!line.visible) continue;
       const resolved = levels[line.kind];

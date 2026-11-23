@@ -84,3 +84,22 @@ describe("Mathi Trend Channel, 1-minute (the user's examples)", () => {
     expect(state.signal).toMatchObject({ side: "PUT", fallback: true, entry: { time: 1_795_060_000 + 104 * 60 } });
   });
 });
+
+describe("Mathi Trend Channel on the chart's own candles", () => {
+  it("reads 5-minute candles on a 5-minute chart (23 Nov: 1st High on the 09:15 candle, 1st Low on the 09:35 candle)", () => {
+    // The full day (real candles, 23 Nov) gives 1st High 25,979.65 > 1st Low 25,567.30 > 2nd High 25,705.60 (09:40 candle).
+    const { open, close, tape, at } = day("2026-11-23", NOV23);
+    const state = minuteTrendLines(tape, open, close, close + 300, 300);
+    expect(state.points.map((point) => [point.kind, point.time, point.price])).toEqual([
+      ["HIGH", at("09:15"), 25979.65],
+      ["LOW", at("09:35"), 25567.3],
+    ]);
+    // Only completed 5-minute candles count.
+    expect(minuteTrendLines(tape, open, close, at("09:29"), 300).points).toHaveLength(0);
+  });
+
+  it("has no 11:00 daily rule on candles bigger than 5 minutes", () => {
+    const flat: Candle[] = Array.from({ length: 375 }, (_, i) => ({ time: 1_795_060_000 + i * 60, open: 25000 - i * 0.1, high: 25000.5 - i * 0.1, low: 24999.5 - i * 0.1, close: 25000 - i * 0.1 }));
+    expect(minuteTrendLines(flat, 1_795_060_000, 1_795_060_000 + 375 * 60, 1_795_060_000 + 376 * 60, 900).signal).toBeNull();
+  });
+});

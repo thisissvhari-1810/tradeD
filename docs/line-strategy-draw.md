@@ -37,7 +37,7 @@ The panel lists every strategy that has lines on the index chart, each with its 
 | 13:15 Minute (without VIX) | 193 / 193 |
 | Trend Channel (the Algo's 3-minute channel; the panel's 1-minute trend lines have no backtest) | 1,229 / 1,229 |
 
-**Mathi Trend Channel (1-minute, as the user draws it; checked on 19 and 23 Nov 2026):**
+**Mathi Trend Channel (as the user draws it; checked on 19 and 23 Nov 2026).** It reads the chart's own candles: 1m, 3m, 5m, 15m, 30m, 1h, 2h or 4h (daily and longer charts use 1-minute). Every count below is in those candles. On candles bigger than 5 minutes there is no 11:00 rule; breakouts are watched until 15:00.
 
 **Patterns:**
 - **2 highs + 1 low:** 1st High → 1st Low → 2nd High. The primary line goes through the two highs and its parallel copy through the low (23 Nov: 25,979.65 → 25,567.30 → 25,716.80).

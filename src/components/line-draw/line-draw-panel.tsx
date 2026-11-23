@@ -6,6 +6,7 @@ import { cx } from "@/components/ui";
 import { Color, DateRow, Dash, dayBefore, Row, Switch, Width } from "@/components/strategy-panel";
 import {
   appliesTo,
+  channelSeconds,
   defaultConfig,
   formatLevel,
   LEVELS,
@@ -128,7 +129,7 @@ export function LineDrawPanel({ drawings, run, patch, busy, error, onClose, left
                 </button>
                 {on ? <span className="text-micro text-muted" aria-hidden>{expanded ? "▾" : "▸"}</span> : null}
               </div>
-              {expanded && row ? <StrategyBody row={row} info={dayInfo(row)} today={today} replayDate={replayDate} onChange={(config) => change(row, config)} /> : null}
+              {expanded && row ? <StrategyBody row={row} info={dayInfo(row)} today={today} replayDate={replayDate} barSeconds={channelSeconds(span)} onChange={(config) => change(row, config)} /> : null}
             </li>
           );
         })}
@@ -138,13 +139,13 @@ export function LineDrawPanel({ drawings, run, patch, busy, error, onClose, left
   );
 }
 
-function StrategyBody({ row, info, today, replayDate, onChange }: { row: LineDrawing; info: DayInfo; today: string; replayDate: string | null; onChange: (config: LineDrawingConfig) => void }) {
+function StrategyBody({ row, info, today, replayDate, barSeconds, onChange }: { row: LineDrawing; info: DayInfo; today: string; replayDate: string | null; barSeconds: number; onChange: (config: LineDrawingConfig) => void }) {
   const config = row.config;
   const set = (patch: Partial<LineDrawingConfig>) => onChange({ ...config, ...patch });
   const setLine = (index: number, patch: Partial<LevelLine>) => set({ lines: config.lines.map((line, at) => (at === index ? { ...line, ...patch } : line)) });
   const data = info.day?.data ?? null;
   const autoCurrent = replayDate || data?.date || today;
-  const values = resolveLevels(info.day, info.cursor, info.now);
+  const values = resolveLevels(info.day, info.cursor, info.now, barSeconds);
   const note = info.error || (data && data.status !== "ready" && data.message ? data.message : "");
   const waiting = (line: LevelLine) => (info.day ? (LEVELS[line.kind].needs === "tape" ? "not yet" : "waiting") : "loading");
 
@@ -179,7 +180,7 @@ function StrategyBody({ row, info, today, replayDate, onChange }: { row: LineDra
       ) : null}
       {note ? <p className="text-micro text-warning">{note}</p> : null}
 
-      <EntrySection row={row} info={info} onShow={(entry) => set({ entry })} />
+      <EntrySection row={row} info={info} barSeconds={barSeconds} onShow={(entry) => set({ entry })} />
 
       <div>
         <p className="eyebrow mb-1">Lines</p>
@@ -219,10 +220,10 @@ function StrategyBody({ row, info, today, replayDate, onChange }: { row: LineDra
 }
 
 /** The strategy's entry point (trade 1) for the chosen day, as known at the replay clock / now, and its chart switch. */
-function EntrySection({ row, info, onShow }: { row: LineDrawing; info: DayInfo; onShow: (entry: boolean) => void }) {
+function EntrySection({ row, info, barSeconds, onShow }: { row: LineDrawing; info: DayInfo; barSeconds: number; onShow: (entry: boolean) => void }) {
   const strategy = row.config.strategy;
   if (!strategy) return null;
-  const result = entryAt(sessionEntry(strategy, info.day), info.cursor ?? info.now);
+  const result = entryAt(sessionEntry(strategy, info.day, barSeconds), info.cursor ?? info.now);
   const entry = result.entry;
   return (
     <div>

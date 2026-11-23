@@ -1,5 +1,7 @@
 /**
- * Mathi Trend Channel for Line Strategy Draw: the 1-minute channel the user draws (examples 19 and 23 Nov 2026).
+ * Mathi Trend Channel for Line Strategy Draw: the channel the user draws (examples 19 and 23 Nov 2026, 1-minute), on the
+ * chart's own candles: a 5-minute chart reads 5-minute candles, 15-minute 15-minute, and so on (user, 23 Nov 2026).
+ * Every count below is in those candles; the 09:15 one-minute candle always counts by its body.
  *
  * Three swing points make the channel:
  *  - 2 highs + 1 low (1st High → 1st Low → 2nd High): the primary line runs through the two highs, its exact parallel
@@ -37,6 +39,7 @@ const FIRST_BLOCK = 3;
 const RIGHT = 3;
 const DEPTH_ATR = 2;
 const FALLBACK_MINUTES = 105; // 11:00 IST = 09:15 + 105 minutes
+const LATE_CUTOFF_MINUTES = 345; // 15:00 IST: last entry on candles bigger than 5 minutes (no 11:00 rule there)
 
 export const priceOn = (line: Pick<TrendLine, "a" | "slope">, time: number) => line.a.price + line.slope * (time - line.a.time);
 const r2 = (value: number) => Math.round(value * 100) / 100;
@@ -56,18 +59,34 @@ function channelOf(points: TPoint[]): Pick<TrendState, "pattern" | "upper" | "lo
   return { pattern: highs ? "A" : "B", upper: highs ? primary : clone, lower: highs ? clone : primary };
 }
 
-/** The channel and the entry as known once every candle up to `clockAt` (unix seconds) has closed. */
-export function minuteTrendLines(candles: Candle[], sessionOpen: number, sessionClose: number, clockAt: number): TrendState {
-  const bars = candles.filter((bar) => bar.time >= sessionOpen && bar.time < sessionClose && bar.time + 60 <= clockAt).sort((a, b) => a.time - b.time);
+/**
+ * The session's candles of `seconds` (60 = 1-minute, 300 = 5-minute, …) on the 09:15 grid, built from 1-minute candles.
+ * The 09:15 one-minute candle counts by its body (its opening-print wick is ignored).
+ */
+export function sessionBars(candles: Candle[], sessionOpen: number, sessionClose: number, seconds: number): Candle[] {
+  const out = new Map<number, Candle>();
+  for (const candle of [...candles].filter((bar) => bar.time >= sessionOpen && bar.time < sessionClose).sort((a, b) => a.time - b.time)) {
+    const bar = candle.time === sessionOpen ? { ...candle, high: Math.max(candle.open, candle.close), low: Math.min(candle.open, candle.close) } : candle;
+    const start = sessionOpen + Math.floor((bar.time - sessionOpen) / seconds) * seconds;
+    const into = out.get(start);
+    if (!into) out.set(start, { time: start, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
+    else Object.assign(into, { high: Math.max(into.high, bar.high), low: Math.min(into.low, bar.low), close: bar.close });
+  }
+  return [...out.values()];
+}
+
+/** The channel and the entry on `barSeconds` candles, as known once every candle up to `clockAt` (unix seconds) has closed. */
+export function minuteTrendLines(candles: Candle[], sessionOpen: number, sessionClose: number, clockAt: number, barSeconds = 60): TrendState {
+  const minutes = candles.filter((bar) => bar.time + 60 <= clockAt);
+  const bars = sessionBars(minutes, sessionOpen, sessionClose, barSeconds).filter((bar) => bar.time + barSeconds <= clockAt);
   const state: TrendState = { points: [], pattern: null, upper: null, lower: null, signal: null };
-  const blockEnd = sessionOpen + FIRST_BLOCK * 60;
+  const blockEnd = sessionOpen + FIRST_BLOCK * barSeconds;
   const block = bars.filter((bar) => bar.time < blockEnd);
   if (clockAt < blockEnd || !block.length) return state;
 
-  // 1. The block's high and low (the 09:15 candle by its body), in the order they happened.
-  const span = block.map((bar) => (bar.time === sessionOpen ? { ...bar, high: Math.max(bar.open, bar.close), low: Math.min(bar.open, bar.close) } : bar));
-  const top = span.reduce((best, bar) => (bar.high > best.high ? bar : best));
-  const bottom = span.reduce((best, bar) => (bar.low < best.low ? bar : best));
+  // 1. The block's high and low, in the order they happened.
+  const top = block.reduce((best, bar) => (bar.high > best.high ? bar : best));
+  const bottom = block.reduce((best, bar) => (bar.low < best.low ? bar : best));
   const highFirst = top.time < bottom.time || (top.time === bottom.time && top.close < top.open);
   const first: TPoint = highFirst ? { time: top.time, price: top.high, kind: "HIGH" } : { time: bottom.time, price: bottom.low, kind: "LOW" };
   let candidate: TPoint = highFirst ? { time: bottom.time, price: bottom.low, kind: "LOW" } : { time: top.time, price: top.high, kind: "HIGH" };
@@ -77,7 +96,10 @@ export function minuteTrendLines(candles: Candle[], sessionOpen: number, session
   let sumRange = 0;
   let counted = 0;
   let pending: { side: "CALL" | "PUT"; bar: Candle; line: TrendLine } | null = null;
-  const fallbackAt = sessionOpen + FALLBACK_MINUTES * 60;
+  // 1- to 5-minute candles: entries until 11:00, then the daily rule. Bigger candles need hours to form a channel, so
+  // they watch for a breakout until 15:00 and have no 11:00 rule.
+  const dailyRule = barSeconds <= 300;
+  const fallbackAt = sessionOpen + (dailyRule ? FALLBACK_MINUTES : LATE_CUTOFF_MINUTES) * 60;
 
   for (let i = 0; i < bars.length; i += 1) {
     const bar = bars[i];
@@ -133,7 +155,7 @@ export function minuteTrendLines(candles: Candle[], sessionOpen: number, session
       }
     }
 
-    if (!state.signal && bar.time + 60 >= fallbackAt && bar.time < fallbackAt) {
+    if (dailyRule && !state.signal && bar.time + barSeconds >= fallbackAt && bar.time < fallbackAt) {
       const open = bars[0].open;
       const side = bar.close >= open ? "CALL" : "PUT";
       state.signal = { side, breakout: null, entry: bar, level: null, fallback: true, reason: `No channel entry by 11:00: the daily rule follows the day's direction (${clock(bar.time)} close ${fmt(bar.close)} ${side === "CALL" ? "above" : "below"} the 09:15 open ${fmt(open)}).` };

@@ -211,23 +211,24 @@ function firstAppSignal(tape: Candle[], data: S1Data): EntryResult {
   return { entry: null, status: complete ? "No trade this session." : "", decidedAt: complete ? data.sessionClose : null, watching: "Watching from 11:15 (default settings)." };
 }
 
-function trendChannel(tape: Candle[], data: S1Data): EntryResult {
-  const { signal } = minuteTrendLines(tape, data.sessionOpen, data.sessionClose, data.sessionClose + 60);
-  const watching = "Watching the 1-minute channel until 11:00.";
+function trendChannel(tape: Candle[], data: S1Data, barSeconds: number): EntryResult {
+  const { signal } = minuteTrendLines(tape, data.sessionOpen, data.sessionClose, data.sessionClose + barSeconds, barSeconds);
+  const size = barSeconds >= 3600 ? `${barSeconds / 3600}-hour` : `${barSeconds / 60}-minute`;
+  const watching = `Watching the ${size} channel until ${barSeconds <= 300 ? "11:00" : "15:00"}.`;
   if (!signal) return { entry: null, status: "", decidedAt: null, watching };
   const { entry: bar, side } = signal;
-  return { entry: { time: bar.time, at: bar.time + 60, price: round(bar.close), side, option: side === "CALL" ? "CE" : "PE", flip: false, level: signal.level, note: signal.reason }, status: "", decidedAt: bar.time + 60, watching };
+  return { entry: { time: bar.time, at: bar.time + barSeconds, price: round(bar.close), side, option: side === "CALL" ? "CE" : "PE", flip: false, level: signal.level, note: `${size} candles. ${signal.reason}` }, status: "", decidedAt: bar.time + barSeconds, watching };
 }
 
 /** The whole session's trade-1 entry for one strategy (computed once per session's data; filter by the clock with entryAt). */
-export function strategyEntry(strategy: LineStrategyId, data: S1Data | null, tape: Candle[] | null, vix: Candle[] | null = null): EntryResult {
+export function strategyEntry(strategy: LineStrategyId, data: S1Data | null, tape: Candle[] | null, vix: Candle[] | null = null, barSeconds = 60): EntryResult {
   if (strategy === "mathi") return { entry: null, status: "", decidedAt: null, watching: "Its entries depend on the +3% option exit and the regime filter, so the Algo marks them (Algo trade)." };
   if (!data || !tape?.length) return { entry: null, status: "", decidedAt: null, watching: data ? "Waiting for the session's candles." : "" };
   const bars = byMinute(tape, data);
   if (strategy === "second_hour") return secondHour(bars, data);
   if (strategy === "minute_1315") return minute1315(bars, data, vix);
   if (strategy === "breakout_0915") return breakout0915(bars, data);
-  if (strategy === "trend_channel") return trendChannel(tape, data);
+  if (strategy === "trend_channel") return trendChannel(tape, data, barSeconds);
   return firstAppSignal(tape, data);
 }
 
@@ -243,14 +244,19 @@ export function entryText(entry: LineEntry) {
   return `BUY ATM ${entry.option === "CE" ? "CALL (CE)" : "PUT (PE)"} at the ${istClock(entry.time)} candle close · NIFTY ${fmt(entry.price)}`;
 }
 
-const cache = new WeakMap<LineDay, Map<LineStrategyId, EntryResult>>();
+const cache = new WeakMap<LineDay, Map<string, EntryResult>>();
 
-/** strategyEntry for one loaded session, computed once per strategy (the session object changes when it reloads). */
-export function sessionEntry(strategy: LineStrategyId, day: LineDay | null): EntryResult {
-  if (!day) return strategyEntry(strategy, null, null);
+/**
+ * strategyEntry for one loaded session, computed once per strategy and candle size (the session object changes when
+ * it reloads). `barSeconds`: the chart's candles; only the Trend Channel uses it.
+ */
+export function sessionEntry(strategy: LineStrategyId, day: LineDay | null, barSeconds = 60): EntryResult {
+  const size = strategy === "trend_channel" ? barSeconds : 60;
+  if (!day) return strategyEntry(strategy, null, null, null, size);
   let byStrategy = cache.get(day);
   if (!byStrategy) cache.set(day, (byStrategy = new Map()));
-  let result = byStrategy.get(strategy);
-  if (!result) byStrategy.set(strategy, (result = strategyEntry(strategy, day.data, day.tape, day.vix ?? null)));
+  const key = `${strategy}|${size}`;
+  let result = byStrategy.get(key);
+  if (!result) byStrategy.set(key, (result = strategyEntry(strategy, day.data, day.tape, day.vix ?? null, size)));
   return result;
 }
