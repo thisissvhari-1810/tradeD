@@ -3,9 +3,11 @@
  *
  * Pure and read-only: it never places, changes or cancels an order and never changes a strategy. Each strategy's
  * entry uses that strategy's own rules:
- *  - Mathi Hourly Zone Strategy — 5% and Mathi Trend Channel: the app's own signal functions (hourlySignal,
- *    channelSignal) with their default settings, evaluated minute by minute like the algo runner does. The channel
- *    here runs on 1-minute candles (user, 23 Nov 2026); the algo's own Trend Channel stays on 3-minute candles.
+ *  - Mathi Hourly Zone Strategy — 5%: the app's own hourlySignal (default settings), evaluated minute by minute like
+ *    the algo runner does.
+ *  - Mathi Trend Channel: the 1-minute trend lines the user draws (trendlines.ts, 23 Nov 2026): a close beyond a line,
+ *    then a candle beyond the breakout candle, else the 11:00 daily rule. The algo's own Trend Channel (3-minute
+ *    channel) is unchanged.
  *  - Mathi Second Hour, Mathi 13:15 Minute and Mathi Breakout – 9:15: the research rules (PROJECT_NEXUS), ported
  *    one-to-one (Plan F candidate / confirmation, the first-hour 108.8-point filter, flip tiny, VIX rules A and B).
  *  - Mathi Strategy: not marked here. Its entries depend on its option-premium exits and the regime filter (the last
@@ -16,9 +18,9 @@
  */
 import type { Candle } from "@/lib/algo/lines";
 import { HOURLY_SETTINGS_DEFAULTS, hourlySignal } from "@/lib/algo/hourly-zone";
-import { channelSignal } from "@/lib/algo/trend-channel";
+import { minuteTrendLines } from "./trendlines";
 import type { S1Data } from "@/lib/trading/s1";
-import { LINE_CHANNEL_SETTINGS, type LineDay, type LineStrategyId } from "./line-drawings";
+import type { LineDay, LineStrategyId } from "./line-drawings";
 
 export type Side = "CALL" | "PUT";
 
@@ -192,24 +194,29 @@ function breakout0915(bars: Map<number, Candle>, data: S1Data): EntryResult {
 }
 
 /** The app's own signal functions, called on each completed minute in turn like the algo runner; the first signal. */
-function firstAppSignal(tape: Candle[], data: S1Data, strategy: "hourly_zone" | "trend_channel"): EntryResult {
+function firstAppSignal(tape: Candle[], data: S1Data): EntryResult {
   const candles = tape.filter((bar) => bar.time >= data.sessionOpen && bar.time < data.sessionClose).sort((a, b) => a.time - b.time);
-  const prevClose = data.previous?.close ?? null;
-  const start = data.sessionOpen + (strategy === "hourly_zone" ? 7_200 - 60 : 0);
+  const start = data.sessionOpen + 7_200 - 60;
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
     if (candle.time < start) continue;
     const upTo = candles.slice(0, index + 1);
-    const signal = strategy === "hourly_zone"
-      ? hourlySignal(upTo, data.sessionOpen, HOURLY_SETTINGS_DEFAULTS).signal
-      : channelSignal(upTo, data.sessionOpen, LINE_CHANNEL_SETTINGS, candle.time + 60, prevClose).signal;
+    const signal = hourlySignal(upTo, data.sessionOpen, HOURLY_SETTINGS_DEFAULTS).signal;
     if (signal) {
       const note = signal.reason.length > 220 ? `${signal.reason.slice(0, 217)}…` : signal.reason;
       return { entry: { time: candle.time, at: candle.time + 60, price: round(candle.close), side: signal.direction, option: signal.direction === "CALL" ? "CE" : "PE", flip: false, level: round(signal.level), note }, status: "", decidedAt: candle.time + 60, watching: "" };
     }
   }
   const complete = candles.length && candles.at(-1)!.time + 60 >= data.sessionClose - 60;
-  return { entry: null, status: complete ? "No trade this session." : "", decidedAt: complete ? data.sessionClose : null, watching: strategy === "hourly_zone" ? "Watching from 11:15 (default settings)." : "Watching the 1-minute channel (default settings)." };
+  return { entry: null, status: complete ? "No trade this session." : "", decidedAt: complete ? data.sessionClose : null, watching: "Watching from 11:15 (default settings)." };
+}
+
+function trendChannel(tape: Candle[], data: S1Data): EntryResult {
+  const { signal } = minuteTrendLines(tape, data.sessionOpen, data.sessionClose, data.sessionClose + 60);
+  const watching = "Watching the 1-minute trend lines until 11:00.";
+  if (!signal) return { entry: null, status: "", decidedAt: null, watching };
+  const { entry: bar, side } = signal;
+  return { entry: { time: bar.time, at: bar.time + 60, price: round(bar.close), side, option: side === "CALL" ? "CE" : "PE", flip: false, level: signal.level, note: signal.reason }, status: "", decidedAt: bar.time + 60, watching };
 }
 
 /** The whole session's trade-1 entry for one strategy (computed once per session's data; filter by the clock with entryAt). */
@@ -220,7 +227,8 @@ export function strategyEntry(strategy: LineStrategyId, data: S1Data | null, tap
   if (strategy === "second_hour") return secondHour(bars, data);
   if (strategy === "minute_1315") return minute1315(bars, data, vix);
   if (strategy === "breakout_0915") return breakout0915(bars, data);
-  return firstAppSignal(tape, data, strategy);
+  if (strategy === "trend_channel") return trendChannel(tape, data);
+  return firstAppSignal(tape, data);
 }
 
 /** The result as known at `clock` (replay cursor or now): nothing after it. */

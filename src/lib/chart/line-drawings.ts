@@ -6,7 +6,7 @@
  * the API and the panel), and buildLineOverlays(), which turns the enabled strategies plus each one's session data
  * into read-only chart drawings. It never changes how any strategy computes or trades: every level comes from the same
  * helpers the strategies use (S1 boxes from s1Levels, hourly candles from hourlyCandles, the channel from
- * channelSignal).
+ * the channel from minuteTrendLines).
  *
  * Every chart object it makes has an id `lines:<drawingId>:<lineId>`, so:
  *  - the chart draws it read-only and never saves it with the user's own drawings (like `strategy:` overlays);
@@ -17,11 +17,9 @@ import { CHART_SPANS, type ChartSpan } from "@/lib/market/spans";
 import { s1Levels, s1Reveal, type S1Data } from "@/lib/trading/s1";
 import type { Candle } from "@/lib/algo/lines";
 import { hourlyCandles } from "@/lib/algo/hourly-zone";
-import { CHANNEL_SETTINGS_DEFAULTS, channelPriceAt, channelSignal } from "@/lib/algo/trend-channel";
+import { minuteTrendLines, priceOn } from "./trendlines";
 
 export const LINES_PREFIX = "lines:";
-/** Line Strategy Draw's Mathi Trend Channel: the strategy's own rules on 1-minute candles (the algo keeps 3-minute). */
-export const LINE_CHANNEL_SETTINGS = { ...CHANNEL_SETTINGS_DEFAULTS, barSeconds: 60 };
 export const MAX_LINE_DRAWINGS = 50;
 export const MAX_LINES_PER_DRAWING = 24;
 
@@ -34,7 +32,8 @@ export type LevelKind =
   | "h1_high" | "h1_low" | "h1_close" | "h1_mid"
   | "h2_high" | "h2_low"
   | "m1315_high" | "m1315_low"
-  | "ch_upper" | "ch_lower";
+  | "ch_upper" | "ch_lower"
+  | "fb_high" | "fb_low";
 
 export type LineExtend = "right" | "session" | "full";
 
@@ -98,6 +97,8 @@ export const LEVELS: Record<LevelKind, { label: string; needs: Needs }> = {
   m1315_low: { label: "13:15 candle low", needs: "tape" },
   ch_upper: { label: "Channel upper line", needs: "tape" },
   ch_lower: { label: "Channel lower line", needs: "tape" },
+  fb_high: { label: "1st High (09:15–09:17 high)", needs: "tape" },
+  fb_low: { label: "1st Low (09:15–09:17 low)", needs: "tape" },
 };
 export const LEVEL_KINDS = Object.keys(LEVELS) as LevelKind[];
 
@@ -107,13 +108,13 @@ const DEFAULT_COLORS: Record<LevelKind, string> = {
   pdh: "#089981", pdl: "#F23645", pdc: "#2962FF", pdm: "#787B86", open: "#F0B90B", or_high: "#15803D", or_low: "#15803D",
   boxA_top: "#7E22CE", boxA_mid: "#7E22CE", boxA_bottom: "#7E22CE", boxB_top: "#C2410C", boxB_mid: "#C2410C", boxB_bottom: "#C2410C",
   h1_high: "#089981", h1_low: "#F23645", h1_close: "#2962FF", h1_mid: "#787B86", h2_high: "#15803D", h2_low: "#DC2626",
-  m1315_high: "#15803D", m1315_low: "#DC2626", ch_upper: "#0EA5E9", ch_lower: "#0EA5E9",
+  m1315_high: "#15803D", m1315_low: "#DC2626", ch_upper: "#F472B6", ch_lower: "#F472B6", fb_high: "#E5E7EB", fb_low: "#E5E7EB",
 };
 const SHORT_NAMES: Record<LevelKind, string> = {
   pdh: "PDH", pdl: "PDL", pdc: "PDC", pdm: "PD Mid", open: "Open", or_high: "9:15 High", or_low: "9:15 Low",
   boxA_top: "A Top", boxA_mid: "A Mid", boxA_bottom: "A Bottom", boxB_top: "B Top", boxB_mid: "B Mid", boxB_bottom: "B Bottom",
   h1_high: "H1 High", h1_low: "H1 Low", h1_close: "H1 Close", h1_mid: "H1 Mid", h2_high: "H2 High", h2_low: "H2 Low",
-  m1315_high: "13:15 High", m1315_low: "13:15 Low", ch_upper: "Channel Upper", ch_lower: "Channel Lower",
+  m1315_high: "13:15 High", m1315_low: "13:15 Low", ch_upper: "Upper trend line", ch_lower: "Lower trend line", fb_high: "1st High", fb_low: "1st Low",
 };
 
 /** Previous-day lines every strategy offers (off unless the strategy itself uses them). */
@@ -167,8 +168,8 @@ export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; short: s
     id: "trend_channel",
     short: "Channel",
     name: "Mathi Trend Channel",
-    about: "1-minute channel: primary trendline and its parallel clone",
-    lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, ...PREVIOUS],
+    about: "1-minute trend lines from the first 3 minutes' high / low through the swing highs / lows",
+    lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, { kind: "fb_high", on: true }, { kind: "fb_low", on: true }, ...PREVIOUS],
   },
 ];
 export const LINE_STRATEGY_IDS = LINE_STRATEGIES.map((item) => item.id);
@@ -219,6 +220,13 @@ export function normalizeConfig(value: unknown): LineDrawingConfig {
   const rows = Array.isArray(raw.lines) ? raw.lines : [];
   const seen = new Set<string>();
   const lines = rows.slice(0, MAX_LINES_PER_DRAWING).map((row, index) => cleanLine(row, index, seen)).filter((row): row is LevelLine => row != null);
+  // Lines a strategy gained after this row was saved are added with their defaults.
+  for (const item of strategyDef(strategy)?.lines ?? []) {
+    if (lines.length < MAX_LINES_PER_DRAWING && !lines.some((line) => line.kind === item.kind) && !seen.has(item.kind)) {
+      seen.add(item.kind);
+      lines.push(newLine(item.kind, { visible: Boolean(item.on), ...(item.name ? { name: item.name } : {}) }));
+    }
+  }
   return { strategy, currentDay, previousDay, entry: raw.entry !== false, lines };
 }
 
@@ -327,13 +335,12 @@ export function resolveLevels(day: LineDay | null, cursor: number | null, now: n
     out.m1315_high = { value: m1315.high, start: m1315.time };
     out.m1315_low = { value: m1315.low, start: m1315.time };
   }
-  const { state } = channelSignal(tape, open, LINE_CHANNEL_SETTINGS, Math.min(clock, data.sessionClose));
-  const from = state.pattern?.points[0]?.time;
-  if (from != null && state.upper && state.lower) {
-    const to = data.sessionClose;
-    for (const [kind, line] of [["ch_upper", state.upper], ["ch_lower", state.lower]] as const) {
-      out[kind] = { value: round(channelPriceAt(line, from, open, 60)), start: from, end: { time: to, price: round(channelPriceAt(line, to, open, 60)) } };
-    }
+  const trend = minuteTrendLines(tape, open, data.sessionClose, clock);
+  if (trend.firstHigh) out.fb_high = { value: trend.firstHigh.price, start: trend.firstHigh.time };
+  if (trend.firstLow) out.fb_low = { value: trend.firstLow.price, start: trend.firstLow.time };
+  const to = data.sessionClose;
+  for (const [kind, line] of [["ch_upper", trend.upper], ["ch_lower", trend.lower]] as const) {
+    if (line) out[kind] = { value: round(line.a.price), start: line.a.time, end: { time: to, price: round(priceOn(line, to)) } };
   }
   return out;
 }

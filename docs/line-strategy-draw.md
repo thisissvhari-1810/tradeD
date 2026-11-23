@@ -13,7 +13,7 @@ The panel lists every strategy that has lines on the index chart, each with its 
 | Mathi Second Hour (Hourly Breakout) | CALL level = 10:15–11:15 high, PUT level = its low | PDH / PDL / PDC |
 | Mathi Breakout – 9:15 | 09:15 1-minute candle high / low | Open, PDH / PDL / PDC |
 | Mathi 13:15 Minute | 13:15 1-minute candle high / low | PDH / PDL / PDC |
-| Mathi Trend Channel | Channel upper and lower lines (sloped, 1-minute candles; the algo itself stays on 3-minute) | PDH / PDL / PDC |
+| Mathi Trend Channel | 1-minute upper and lower trend lines, 1st High / 1st Low (first 3 minutes) | PDH / PDL / PDC |
 
 **When a strategy is on, it asks for:**
 - **Current day:** a date, or Auto (the latest session, or the replayed day in replay).
@@ -23,7 +23,8 @@ The panel lists every strategy that has lines on the index chart, each with its 
 
 | Strategy | Entry rule used |
 |---|---|
-| Hourly Zone 5%, Trend Channel | The app's own `hourlySignal` / `channelSignal` (default settings), run minute by minute like the algo runner |
+| Hourly Zone 5% | The app's own `hourlySignal` (default settings), run minute by minute like the algo runner |
+| Trend Channel | The 1-minute trend lines below (`src/lib/chart/trendlines.ts`) |
 | Second Hour, 13:15 Minute, Breakout 9:15 | The research rules (PROJECT_NEXUS), ported one-to-one; 13:15 uses India VIX's 1-minute candles |
 | Mathi Strategy | Not marked. Its entries depend on its option-premium exits and the regime filter, so the Algo's own trade markers show them |
 
@@ -34,7 +35,17 @@ The panel lists every strategy that has lines on the index chart, each with its 
 | Breakout 9:15 | 1,135 / 1,135 |
 | Second Hour | 404 / 404 |
 | 13:15 Minute (without VIX) | 193 / 193 |
-| Trend Channel (3-minute; the panel now uses 1-minute, which has no backtest) | 1,229 / 1,229 |
+| Trend Channel (the Algo's 3-minute channel; the panel's 1-minute trend lines have no backtest) | 1,229 / 1,229 |
+
+**Mathi Trend Channel lines (1-minute, drawn like the user's 19 Nov 2026 chart):**
+- **1st High / 1st Low:** the high and low of 09:15–09:17. The 09:15 candle counts by its body; its opening wick is ignored.
+- **Upper line:** from 1st High through the later swing high that keeps every swing high in between under the line.
+- **Lower line:** from 1st Low through the later swing low that keeps every swing low in between above the line.
+- **Swing:** a candle whose high (or low) is the extreme of the 2 candles on each side.
+- **Breakout:** a close beyond a line and beyond the latest swing high / low. The next candle must go past the breakout candle's high / low and close beyond the line; the buy is at that close.
+- **No breakout by 11:00:** the 11:00 day-direction rule applies.
+- **Lines freeze** where they broke, and both stop at the entry.
+- **The Algo's own Trend Channel** (3-minute channel) is unchanged.
 
 **Only trade 1 is marked.** A second trade depends on when trade 1 exits on the option.
 

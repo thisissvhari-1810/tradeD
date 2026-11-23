@@ -126,15 +126,6 @@ describe("buildLineOverlays", () => {
     expect(out[0].text).toContain("A Mid");
   });
 
-  it("runs the channel on 1-minute candles here, while the algo's own setting stays 3-minute", async () => {
-    const { LINE_CHANNEL_SETTINGS } = await import("@/lib/chart/line-drawings");
-    const { CHANNEL_SETTINGS_DEFAULTS, threeMinuteBars } = await import("@/lib/algo/trend-channel");
-    expect(LINE_CHANNEL_SETTINGS.barSeconds).toBe(60);
-    expect(CHANNEL_SETTINGS_DEFAULTS.barSeconds).toBeUndefined();
-    expect(threeMinuteBars(tape.slice(0, 9), OPEN, 60)).toHaveLength(9);
-    expect(threeMinuteBars(tape.slice(0, 9), OPEN)).toHaveLength(3);
-  });
-
   it("draws the channel as a sloped segment to the close", () => {
     const zig: Candle[] = Array.from({ length: 375 }, (_, i) => {
       const mid = 24180 + 40 * Math.sin(i / 9) + i * 0.3;
@@ -186,9 +177,10 @@ describe("config validation", () => {
     expect(config.strategy).toBe("mathi");
     expect(config.currentDay).toBe("2026-11-20");
     expect(config.previousDay).toBe(""); // must be before the current day
-    expect(config.lines.map((line) => line.kind)).toEqual(["pdh", "h2_high"]);
+    expect(config.lines.map((line) => line.kind).slice(0, 2)).toEqual(["pdh", "h2_high"]);
+    expect(config.lines.map((line) => line.kind)).toContain("boxA_top"); // the strategy's missing default lines are added
     expect(config.lines[0]).toMatchObject({ name: "High", color: "#089981", width: 1, dash: "solid" });
-    expect(new Set(config.lines.map((line) => line.id)).size).toBe(2);
+    expect(new Set(config.lines.map((line) => line.id)).size).toBe(config.lines.length);
     expect(normalizeConfig({ strategy: "nope", currentDay: "20-11-2026" })).toEqual({ strategy: null, currentDay: "", previousDay: "", entry: true, lines: [] });
     expect(normalizeConfig(null)).toEqual({ strategy: null, currentDay: "", previousDay: "", entry: true, lines: [] });
     expect(normalizeTimeframe("5m")).toBe("5m");
