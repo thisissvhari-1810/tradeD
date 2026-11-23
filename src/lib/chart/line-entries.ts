@@ -5,9 +5,9 @@
  * entry uses that strategy's own rules:
  *  - Mathi Hourly Zone Strategy — 5%: the app's own hourlySignal (default settings), evaluated minute by minute like
  *    the algo runner does.
- *  - Mathi Trend Channel: the 1-minute trend lines the user draws (trendlines.ts, 23 Nov 2026): a close beyond a line,
- *    then a candle beyond the breakout candle, else the 11:00 daily rule. The algo's own Trend Channel (3-minute
- *    channel) is unchanged.
+ *  - Mathi Trend Channel: the 1-minute channel the user draws (trendlines.ts: 2 highs + 1 low or 2 lows + 1 high from
+ *    the open): a close beyond a channel line, then a candle beyond the breakout candle, else the 11:00 daily rule. The
+ *    algo's own Trend Channel (3-minute channel) is unchanged.
  *  - Mathi Second Hour, Mathi 13:15 Minute and Mathi Breakout – 9:15: the research rules (PROJECT_NEXUS), ported
  *    one-to-one (Plan F candidate / confirmation, the first-hour 108.8-point filter, flip tiny, VIX rules A and B).
  *  - Mathi Strategy: not marked here. Its entries depend on its option-premium exits and the regime filter (the last
@@ -213,7 +213,7 @@ function firstAppSignal(tape: Candle[], data: S1Data): EntryResult {
 
 function trendChannel(tape: Candle[], data: S1Data): EntryResult {
   const { signal } = minuteTrendLines(tape, data.sessionOpen, data.sessionClose, data.sessionClose + 60);
-  const watching = "Watching the 1-minute trend lines until 11:00.";
+  const watching = "Watching the 1-minute channel until 11:00.";
   if (!signal) return { entry: null, status: "", decidedAt: null, watching };
   const { entry: bar, side } = signal;
   return { entry: { time: bar.time, at: bar.time + 60, price: round(bar.close), side, option: side === "CALL" ? "CE" : "PE", flip: false, level: signal.level, note: signal.reason }, status: "", decidedAt: bar.time + 60, watching };

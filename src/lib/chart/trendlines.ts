@@ -1,121 +1,143 @@
 /**
- * Mathi Trend Channel for Line Strategy Draw: 1-minute trend lines drawn the way the user draws them on the chart
- * (19 Nov 2026 example).
+ * Mathi Trend Channel for Line Strategy Draw: the 1-minute channel the user draws (examples 19 and 23 Nov 2026).
  *
- * The first block is the first 3 one-minute candles (09:15–09:17); its high is "1st High" and its low "1st Low".
- * The 09:15 candle counts with its body only (its opening-print wick is ignored), as in the user's drawing: 1st Low
- * 25,186.75 sat at the 09:15 body while its wick reached about 25,150.
- *  - Upper (resistance) line: from 1st High to a later swing high. It takes the swing high that gives the steepest
- *    line still lying on or above every swing high in between (the upper hull), so it touches the highs instead of
- *    floating above them.
- *  - Lower (support) line: from 1st Low to a later swing low, mirrored (on or below every swing low in between).
- * A swing high is a candle whose high is the highest of the 2 candles before and after it (confirmed when the 2nd
- * candle after it has closed); a swing low is the mirror. Lines only use swings confirmed by then.
- *
- * Breakout: the first completed candle that closes beyond a line (after the line's second point) AND beyond the latest
- * swing high (CALL) / swing low (PUT) — a drift through a still-steep line is not a breakout. The line is frozen there. Entry: the next candle trades beyond the breakout candle's high (CALL) / low (PUT) and closes beyond the line,
- * and the buy is at that candle's close. With no entry by 11:00, the strategy's daily rule buys in the day's direction
- * (the 10:59 close against the 09:15 open), as Mathi Trend Channel does. Pure and read-only: it never places an order.
+ * Three swing points make the channel:
+ *  - 2 highs + 1 low (1st High → 1st Low → 2nd High): the primary line runs through the two highs, its exact parallel
+ *    clone through the low.
+ *  - 2 lows + 1 high (1st Low → 1st High → 2nd Low): the primary line through the two lows, the clone through the high.
+ * The points:
+ *  1. The first block (09:15–09:17; the 09:15 candle by its body, its opening wick ignored) gives the first two points:
+ *     its high and its low, in the order they happened.
+ *  2. The later of the two keeps moving while price keeps going that way, and is fixed once 3 candles after it have not
+ *     gone beyond it (23 Nov: the block low 25,877.75 at 09:17 moved down to 25,567.30 at 09:35).
+ *  3. The third point is the next swing the other way: fixed once 3 candles after it have not gone beyond it, and only
+ *     if it moved at least 2 × the average 1-minute range from the second point (small pullbacks don't count).
+ * Breakout (after the third point is fixed): a candle closes beyond a channel line. Entry: the next candle trades beyond
+ * the breakout candle's high (CALL) / low (PUT) and closes beyond the line; the buy is at its close. If it doesn't, that
+ * candle can itself be the next breakout. With no entry by 11:00, the strategy's daily rule buys in the day's direction
+ * (the 10:59 close against the 09:15 open), as Mathi Trend Channel does. Lines stop moving once fixed. Pure and
+ * read-only: it never places an order. The algo's own Trend Channel (3-minute channel) is separate and unchanged.
  */
 import type { Candle } from "@/lib/algo/lines";
 
-export type TPoint = { time: number; price: number };
-/** A line from `a` through `b`; `slope` in points per second. `brokenAt`: the candle that closed beyond it (frozen). */
-export type TrendLine = { a: TPoint; b: TPoint; slope: number; brokenAt: number | null };
+export type TPoint = { time: number; price: number; kind: "HIGH" | "LOW" };
+/** A line from `a`; `slope` in points per second. */
+export type TrendLine = { a: { time: number; price: number }; slope: number; role: "PRIMARY" | "CLONE"; side: "UPPER" | "LOWER" };
 export type TrendSignal = { side: "CALL" | "PUT"; breakout: Candle | null; entry: Candle; level: number | null; reason: string; fallback: boolean };
-export type TrendState = { firstHigh: TPoint | null; firstLow: TPoint | null; upper: TrendLine | null; lower: TrendLine | null; signal: TrendSignal | null };
+export type TrendState = {
+  /** The swing points found so far (1 to 3), in time order. */
+  points: TPoint[];
+  pattern: "A" | "B" | null;
+  upper: TrendLine | null;
+  lower: TrendLine | null;
+  signal: TrendSignal | null;
+};
 
 const FIRST_BLOCK = 3;
-const SWING = 2;
+const RIGHT = 3;
+const DEPTH_ATR = 2;
 const FALLBACK_MINUTES = 105; // 11:00 IST = 09:15 + 105 minutes
 
 export const priceOn = (line: Pick<TrendLine, "a" | "slope">, time: number) => line.a.price + line.slope * (time - line.a.time);
 const r2 = (value: number) => Math.round(value * 100) / 100;
 const clock = (time: number) => new Date((time + 19_800) * 1000).toISOString().slice(11, 16);
 const fmt = (value: number) => value.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const beyond = (kind: "HIGH" | "LOW", a: number, b: number) => (kind === "HIGH" ? a > b : a < b);
+const extreme = (bar: Candle, kind: "HIGH" | "LOW") => (kind === "HIGH" ? bar.high : bar.low);
 
-/** The hull line from `anchor` through the swing that keeps every other swing on one side (upper: max slope; lower: min). */
-function hullLine(anchor: TPoint, swings: TPoint[], upper: boolean): TrendLine | null {
-  let best: TrendLine | null = null;
-  for (const point of swings) {
-    if (point.time <= anchor.time) continue;
-    const slope = (point.price - anchor.price) / (point.time - anchor.time);
-    if (!best || (upper ? slope > best.slope : slope < best.slope)) best = { a: anchor, b: point, slope, brokenAt: null };
-  }
-  return best;
+/** The channel from three points: the two of one kind make the primary line, the clone goes through the third. */
+function channelOf(points: TPoint[]): Pick<TrendState, "pattern" | "upper" | "lower"> {
+  const [p0, p1, p2] = points;
+  if (p0.kind !== p2.kind) return { pattern: null, upper: null, lower: null };
+  const slope = (p2.price - p0.price) / (p2.time - p0.time);
+  const highs = p0.kind === "HIGH";
+  const primary: TrendLine = { a: { time: p0.time, price: p0.price }, slope, role: "PRIMARY", side: highs ? "UPPER" : "LOWER" };
+  const clone: TrendLine = { a: { time: p1.time, price: p1.price }, slope, role: "CLONE", side: highs ? "LOWER" : "UPPER" };
+  return { pattern: highs ? "A" : "B", upper: highs ? primary : clone, lower: highs ? clone : primary };
 }
 
-/** The lines and the entry as known once every candle up to `clock` (unix seconds) has closed. */
+/** The channel and the entry as known once every candle up to `clockAt` (unix seconds) has closed. */
 export function minuteTrendLines(candles: Candle[], sessionOpen: number, sessionClose: number, clockAt: number): TrendState {
   const bars = candles.filter((bar) => bar.time >= sessionOpen && bar.time < sessionClose && bar.time + 60 <= clockAt).sort((a, b) => a.time - b.time);
-  const empty: TrendState = { firstHigh: null, firstLow: null, upper: null, lower: null, signal: null };
-  const block = bars.filter((bar) => bar.time < sessionOpen + FIRST_BLOCK * 60);
-  if (clockAt < sessionOpen + FIRST_BLOCK * 60 || !block.length) return empty;
-  // The 09:15 candle by its body; 09:16 and 09:17 by their full range.
-  const span = block.map((bar) => (bar.time === sessionOpen ? { time: bar.time, high: Math.max(bar.open, bar.close), low: Math.min(bar.open, bar.close) } : bar));
+  const state: TrendState = { points: [], pattern: null, upper: null, lower: null, signal: null };
+  const blockEnd = sessionOpen + FIRST_BLOCK * 60;
+  const block = bars.filter((bar) => bar.time < blockEnd);
+  if (clockAt < blockEnd || !block.length) return state;
+
+  // 1. The block's high and low (the 09:15 candle by its body), in the order they happened.
+  const span = block.map((bar) => (bar.time === sessionOpen ? { ...bar, high: Math.max(bar.open, bar.close), low: Math.min(bar.open, bar.close) } : bar));
   const top = span.reduce((best, bar) => (bar.high > best.high ? bar : best));
   const bottom = span.reduce((best, bar) => (bar.low < best.low ? bar : best));
-  const firstHigh = { time: top.time, price: top.high };
-  const firstLow = { time: bottom.time, price: bottom.low };
-  const highs: TPoint[] = [];
-  const lows: TPoint[] = [];
-  let upper: TrendLine | null = null;
-  let lower: TrendLine | null = null;
-  let frozenUpper: TrendLine | null = null;
-  let frozenLower: TrendLine | null = null;
+  const highFirst = top.time < bottom.time || (top.time === bottom.time && top.close < top.open);
+  const first: TPoint = highFirst ? { time: top.time, price: top.high, kind: "HIGH" } : { time: bottom.time, price: bottom.low, kind: "LOW" };
+  let candidate: TPoint = highFirst ? { time: bottom.time, price: bottom.low, kind: "LOW" } : { time: top.time, price: top.high, kind: "HIGH" };
+  state.points = [first];
+  let quiet = block.filter((bar) => bar.time > candidate.time).length;
+
+  let sumRange = 0;
+  let counted = 0;
   let pending: { side: "CALL" | "PUT"; bar: Candle; line: TrendLine } | null = null;
-  let signal: TrendSignal | null = null;
   const fallbackAt = sessionOpen + FALLBACK_MINUTES * 60;
 
   for (let i = 0; i < bars.length; i += 1) {
     const bar = bars[i];
-    if (!signal && bar.time >= sessionOpen + FIRST_BLOCK * 60) {
-      upper = frozenUpper ?? hullLine(firstHigh, highs, true);
-      lower = frozenLower ?? hullLine(firstLow, lows, false);
+    if (i > 0 && bar.time > sessionOpen) {
+      sumRange += Math.max(bar.high - bar.low, Math.abs(bar.high - bars[i - 1].close), Math.abs(bar.low - bars[i - 1].close));
+      counted += 1;
+    }
+    if (bar.time < blockEnd || state.signal) continue;
+
+    if (state.upper && state.lower) {
+      // Breakout and entry once the channel exists.
       if (pending) {
-        const line = pending.line;
         const call = pending.side === "CALL";
-        const level = priceOn(line, bar.time);
-        const beyond = call ? bar.high > pending.bar.high && bar.close > level : bar.low < pending.bar.low && bar.close < level;
-        if (beyond && bar.time < fallbackAt) {
-          signal = {
+        const level = priceOn(pending.line, bar.time);
+        const ok = call ? bar.high > pending.bar.high && bar.close > level : bar.low < pending.bar.low && bar.close < level;
+        if (ok && bar.time < fallbackAt) {
+          const [p0, p1, p2] = state.points;
+          state.signal = {
             side: pending.side, breakout: pending.bar, entry: bar, level: r2(level), fallback: false,
-            reason: `${call ? "Upper" : "Lower"} trend line (${clock(line.a.time)} ${fmt(line.a.price)} → ${clock(line.b.time)} ${fmt(line.b.price)}) broken by the ${clock(pending.bar.time)} close ${fmt(pending.bar.close)}; the ${clock(bar.time)} candle went ${call ? "above its high" : "below its low"} and closed ${fmt(bar.close)}.`,
+            reason: `Pattern ${state.pattern} (${[p0, p1, p2].map((p, n) => `${n === 2 ? "2nd" : "1st"} ${p.kind === "HIGH" ? "High" : "Low"} ${fmt(p.price)} at ${clock(p.time)}`).join(", ")}): the ${clock(pending.bar.time)} candle closed ${fmt(pending.bar.close)} ${call ? "above the upper" : "below the lower"} line; the ${clock(bar.time)} candle went ${call ? "above its high" : "below its low"} and closed ${fmt(bar.close)}.`,
           };
+          continue;
         }
         pending = null;
       }
-      if (!signal && bar.time < fallbackAt) {
-        const lastHigh = highs.at(-1)?.price ?? firstHigh.price;
-        const lastLow = lows.at(-1)?.price ?? firstLow.price;
-        if (upper && !frozenUpper && bar.time > upper.b.time && bar.close > priceOn(upper, bar.time) && bar.close > lastHigh) {
-          frozenUpper = upper = { ...upper, brokenAt: bar.time };
-          pending = { side: "CALL", bar, line: upper };
-        } else if (lower && !frozenLower && bar.time > lower.b.time && bar.close < priceOn(lower, bar.time) && bar.close < lastLow) {
-          frozenLower = lower = { ...lower, brokenAt: bar.time };
-          pending = { side: "PUT", bar, line: lower };
+      if (bar.time < fallbackAt) {
+        if (bar.close > priceOn(state.upper, bar.time)) pending = { side: "CALL", bar, line: state.upper };
+        else if (bar.close < priceOn(state.lower, bar.time)) pending = { side: "PUT", bar, line: state.lower };
+      }
+    } else {
+      // 2–3. Move the candidate while price goes beyond it; fix it after 3 quiet candles (the 3rd point needs depth).
+      if (beyond(candidate.kind, extreme(bar, candidate.kind), candidate.price)) {
+        candidate = { time: bar.time, price: extreme(bar, candidate.kind), kind: candidate.kind };
+        quiet = 0;
+      } else {
+        quiet += 1;
+      }
+      if (quiet >= RIGHT) {
+        const last = state.points.at(-1)!;
+        const atr = counted ? sumRange / counted : 0;
+        const deep = state.points.length === 1 || Math.abs(candidate.price - last.price) >= DEPTH_ATR * atr;
+        if (deep) {
+          const fixed = candidate;
+          state.points.push(fixed);
+          if (state.points.length === 3) Object.assign(state, channelOf(state.points));
+          // The next candidate: the other way, from the candles after this point.
+          const kind = fixed.kind === "HIGH" ? "LOW" : "HIGH";
+          const after = bars.slice(0, i + 1).filter((item) => item.time > fixed.time);
+          const best = after.reduce<Candle | null>((pick, item) => (!pick || beyond(kind, extreme(item, kind), extreme(pick, kind)) ? item : pick), null);
+          candidate = best ? { time: best.time, price: extreme(best, kind), kind } : { time: bar.time, price: extreme(bar, kind), kind };
+          quiet = best ? after.filter((item) => item.time > best.time).length : 0;
         }
       }
-      if (!signal && bar.time + 60 >= fallbackAt && bar.time < fallbackAt) {
-        const open = bars[0].open;
-        const side = bar.close >= open ? "CALL" : "PUT";
-        signal = { side, breakout: null, entry: bar, level: null, fallback: true, reason: `No trend-line entry by 11:00: the daily rule follows the day's direction (${clock(bar.time)} close ${fmt(bar.close)} ${side === "CALL" ? "above" : "below"} the 09:15 open ${fmt(open)}).` };
-      }
     }
-    // The swing whose 2nd candle after it just closed is confirmed now (used from the next candle on).
-    const j = i - SWING;
-    if (j >= SWING) {
-      const pivot = bars[j];
-      const around = [...bars.slice(j - SWING, j), ...bars.slice(j + 1, j + 1 + SWING)];
-      if (pivot.time > firstHigh.time && bars.slice(j - SWING, j).every((bar) => bar.high <= pivot.high) && bars.slice(j + 1, j + 1 + SWING).every((bar) => bar.high < pivot.high) && around.length === SWING * 2) highs.push({ time: pivot.time, price: pivot.high });
-      if (pivot.time > firstLow.time && bars.slice(j - SWING, j).every((bar) => bar.low >= pivot.low) && bars.slice(j + 1, j + 1 + SWING).every((bar) => bar.low > pivot.low) && around.length === SWING * 2) lows.push({ time: pivot.time, price: pivot.low });
+
+    if (!state.signal && bar.time + 60 >= fallbackAt && bar.time < fallbackAt) {
+      const open = bars[0].open;
+      const side = bar.close >= open ? "CALL" : "PUT";
+      state.signal = { side, breakout: null, entry: bar, level: null, fallback: true, reason: `No channel entry by 11:00: the daily rule follows the day's direction (${clock(bar.time)} close ${fmt(bar.close)} ${side === "CALL" ? "above" : "below"} the 09:15 open ${fmt(open)}).` };
     }
   }
-  // After the last candle: the lines as they stand now (frozen ones stay where they broke). Once the entry is taken both
-  // lines stay as they were at the entry, so the chart shows the lines the trade came from.
-  if (!signal) {
-    upper = frozenUpper ?? hullLine(firstHigh, highs, true);
-    lower = frozenLower ?? hullLine(firstLow, lows, false);
-  }
-  return { firstHigh, firstLow, upper, lower, signal };
+  return state;
 }

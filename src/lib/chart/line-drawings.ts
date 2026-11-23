@@ -33,7 +33,7 @@ export type LevelKind =
   | "h2_high" | "h2_low"
   | "m1315_high" | "m1315_low"
   | "ch_upper" | "ch_lower"
-  | "fb_high" | "fb_low";
+  | "fb_high" | "fb_low" | "p2_high" | "p2_low";
 
 export type LineExtend = "right" | "session" | "full";
 
@@ -97,8 +97,10 @@ export const LEVELS: Record<LevelKind, { label: string; needs: Needs }> = {
   m1315_low: { label: "13:15 candle low", needs: "tape" },
   ch_upper: { label: "Channel upper line", needs: "tape" },
   ch_lower: { label: "Channel lower line", needs: "tape" },
-  fb_high: { label: "1st High (09:15–09:17 high)", needs: "tape" },
-  fb_low: { label: "1st Low (09:15–09:17 low)", needs: "tape" },
+  fb_high: { label: "1st High (channel swing)", needs: "tape" },
+  fb_low: { label: "1st Low (channel swing)", needs: "tape" },
+  p2_high: { label: "2nd High (2 highs + 1 low)", needs: "tape" },
+  p2_low: { label: "2nd Low (2 lows + 1 high)", needs: "tape" },
 };
 export const LEVEL_KINDS = Object.keys(LEVELS) as LevelKind[];
 
@@ -108,13 +110,13 @@ const DEFAULT_COLORS: Record<LevelKind, string> = {
   pdh: "#089981", pdl: "#F23645", pdc: "#2962FF", pdm: "#787B86", open: "#F0B90B", or_high: "#15803D", or_low: "#15803D",
   boxA_top: "#7E22CE", boxA_mid: "#7E22CE", boxA_bottom: "#7E22CE", boxB_top: "#C2410C", boxB_mid: "#C2410C", boxB_bottom: "#C2410C",
   h1_high: "#089981", h1_low: "#F23645", h1_close: "#2962FF", h1_mid: "#787B86", h2_high: "#15803D", h2_low: "#DC2626",
-  m1315_high: "#15803D", m1315_low: "#DC2626", ch_upper: "#F472B6", ch_lower: "#F472B6", fb_high: "#E5E7EB", fb_low: "#E5E7EB",
+  m1315_high: "#15803D", m1315_low: "#DC2626", ch_upper: "#F472B6", ch_lower: "#F472B6", fb_high: "#E5E7EB", fb_low: "#E5E7EB", p2_high: "#A78BFA", p2_low: "#A78BFA",
 };
 const SHORT_NAMES: Record<LevelKind, string> = {
   pdh: "PDH", pdl: "PDL", pdc: "PDC", pdm: "PD Mid", open: "Open", or_high: "9:15 High", or_low: "9:15 Low",
   boxA_top: "A Top", boxA_mid: "A Mid", boxA_bottom: "A Bottom", boxB_top: "B Top", boxB_mid: "B Mid", boxB_bottom: "B Bottom",
   h1_high: "H1 High", h1_low: "H1 Low", h1_close: "H1 Close", h1_mid: "H1 Mid", h2_high: "H2 High", h2_low: "H2 Low",
-  m1315_high: "13:15 High", m1315_low: "13:15 Low", ch_upper: "Upper trend line", ch_lower: "Lower trend line", fb_high: "1st High", fb_low: "1st Low",
+  m1315_high: "13:15 High", m1315_low: "13:15 Low", ch_upper: "Channel upper", ch_lower: "Channel lower", fb_high: "1st High", fb_low: "1st Low", p2_high: "2nd High", p2_low: "2nd Low",
 };
 
 /** Previous-day lines every strategy offers (off unless the strategy itself uses them). */
@@ -168,8 +170,11 @@ export const LINE_STRATEGIES: Array<{ id: LineStrategyId; name: string; short: s
     id: "trend_channel",
     short: "Channel",
     name: "Mathi Trend Channel",
-    about: "1-minute trend lines from the first 3 minutes' high / low through the swing highs / lows",
-    lines: [{ kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, { kind: "fb_high", on: true }, { kind: "fb_low", on: true }, ...PREVIOUS],
+    about: "1-minute channel: 2 highs + 1 low or 2 lows + 1 high from the open, primary line and its parallel",
+    lines: [
+      { kind: "ch_upper", on: true }, { kind: "ch_lower", on: true }, { kind: "fb_high", on: true }, { kind: "fb_low", on: true },
+      { kind: "p2_high", on: true }, { kind: "p2_low", on: true }, ...PREVIOUS,
+    ],
   },
 ];
 export const LINE_STRATEGY_IDS = LINE_STRATEGIES.map((item) => item.id);
@@ -336,8 +341,12 @@ export function resolveLevels(day: LineDay | null, cursor: number | null, now: n
     out.m1315_low = { value: m1315.low, start: m1315.time };
   }
   const trend = minuteTrendLines(tape, open, data.sessionClose, clock);
-  if (trend.firstHigh) out.fb_high = { value: trend.firstHigh.price, start: trend.firstHigh.time };
-  if (trend.firstLow) out.fb_low = { value: trend.firstLow.price, start: trend.firstLow.time };
+  const highs = trend.points.filter((point) => point.kind === "HIGH");
+  const lows = trend.points.filter((point) => point.kind === "LOW");
+  if (highs[0]) out.fb_high = { value: highs[0].price, start: highs[0].time };
+  if (lows[0]) out.fb_low = { value: lows[0].price, start: lows[0].time };
+  if (highs[1]) out.p2_high = { value: highs[1].price, start: highs[1].time };
+  if (lows[1]) out.p2_low = { value: lows[1].price, start: lows[1].time };
   const to = data.sessionClose;
   for (const [kind, line] of [["ch_upper", trend.upper], ["ch_lower", trend.lower]] as const) {
     if (line) out[kind] = { value: round(line.a.price), start: line.a.time, end: { time: to, price: round(priceOn(line, to)) } };
